@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: whoami-lab-local
+  namespace: demo
+spec:
+  secretName: whoami-lab-local-tls
+  dnsNames:
+    - whoami.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer
