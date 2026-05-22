@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: nginx-demo
+  namespace: nginx-demo
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - nginx-demo.lab.local
+      secretName: nginx-demo-lab-local-tls
+  rules:
+    - host: nginx-demo.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: nginx-demo
+                port:
+                  number: 80
