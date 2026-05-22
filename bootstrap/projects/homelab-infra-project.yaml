@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: homelab-infra
+  namespace: argocd
+spec:
+  description: Homelab shared infrastructure resources
+
+  sourceRepos:
+    - https://github.com/agilewicz78/homelab-gitops.git
+
+  destinations:
+    - namespace: tools
+      server: https://kubernetes.default.svc
+    - namespace: '*'
+      server: https://kubernetes.default.svc
+
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
+
+  orphanedResources:
+    warn: true
