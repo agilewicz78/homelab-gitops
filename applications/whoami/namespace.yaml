@@ -2,3 +2,9 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: demo
+  labels:
+    managed-by: argocd
+    homelab/type: application
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted

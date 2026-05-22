@@ -4,7 +4,7 @@ metadata:
   name: nginx-demo
   namespace: nginx-demo
 spec:
-  replicas: 2
+  replicas: 3
   selector:
     matchLabels:
       app: nginx-demo
@@ -18,3 +18,15 @@ spec:
           image: nginx:1.27-alpine
           ports:
             - containerPort: 80
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
