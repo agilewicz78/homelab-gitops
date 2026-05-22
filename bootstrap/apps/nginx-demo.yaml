@@ -4,12 +4,12 @@ metadata:
   name: nginx-demo
   namespace: argocd
 spec:
-  project: default
+  project: homelab-apps
 
   source:
     repoURL: https://github.com/agilewicz78/homelab-gitops.git
     targetRevision: main
-    path: apps/nginx-demo
+    path: applications/nginx-demo
 
   destination:
     server: https://kubernetes.default.svc
