@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: homepage-lab-local
+  namespace: homepage
+spec:
+  secretName: homepage-lab-local-tls
+  dnsNames:
+    - homepage.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer
