@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: portal
+  namespace: argocd
+spec:
+  project: homelab-apps
+
+  source:
+    repoURL: https://github.com/agilewicz78/homelab-gitops.git
+    targetRevision: main
+    path: applications/portal
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: portal
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

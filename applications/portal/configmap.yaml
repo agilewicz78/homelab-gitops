@@ -1,0 +1,251 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: portal-content
+  namespace: portal
+data:
+  index.html: |
+    <!doctype html>
+    <html lang="pl">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Homelab k3s Portal</title>
+      <style>
+        :root {
+          --bg: #0f172a;
+          --card: #111827;
+          --card-hover: #1f2937;
+          --text: #f8fafc;
+          --muted: #94a3b8;
+          --accent: #38bdf8;
+          --good: #22c55e;
+          --border: rgba(148, 163, 184, 0.2);
+        }
+
+        * {
+          box-sizing: border-box;
+        }
+
+        body {
+          margin: 0;
+          min-height: 100vh;
+          font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          background:
+            radial-gradient(circle at top left, rgba(56, 189, 248, 0.16), transparent 35%),
+            radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.12), transparent 35%),
+            var(--bg);
+          color: var(--text);
+        }
+
+        .page {
+          width: min(1200px, 92vw);
+          margin: 0 auto;
+          padding: 48px 0;
+        }
+
+        header {
+          display: flex;
+          justify-content: space-between;
+          gap: 24px;
+          align-items: center;
+          margin-bottom: 36px;
+        }
+
+        .title h1 {
+          font-size: clamp(32px, 5vw, 56px);
+          line-height: 1;
+          margin: 0 0 12px 0;
+          letter-spacing: -0.04em;
+        }
+
+        .title p {
+          margin: 0;
+          color: var(--muted);
+          font-size: 18px;
+        }
+
+        .badge {
+          border: 1px solid var(--border);
+          background: rgba(15, 23, 42, 0.6);
+          padding: 12px 16px;
+          border-radius: 999px;
+          color: var(--muted);
+          white-space: nowrap;
+        }
+
+        .badge span {
+          color: var(--good);
+          font-weight: 700;
+        }
+
+        .grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+          gap: 18px;
+        }
+
+        .card {
+          display: block;
+          text-decoration: none;
+          color: var(--text);
+          background: linear-gradient(180deg, rgba(17, 24, 39, 0.95), rgba(15, 23, 42, 0.95));
+          border: 1px solid var(--border);
+          border-radius: 22px;
+          padding: 22px;
+          min-height: 160px;
+          transition: transform 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+          box-shadow: 0 20px 40px rgba(0, 0, 0, 0.24);
+        }
+
+        .card:hover {
+          transform: translateY(-4px);
+          border-color: rgba(56, 189, 248, 0.6);
+          background: var(--card-hover);
+        }
+
+        .icon {
+          width: 42px;
+          height: 42px;
+          display: grid;
+          place-items: center;
+          border-radius: 14px;
+          background: rgba(56, 189, 248, 0.12);
+          color: var(--accent);
+          margin-bottom: 18px;
+          font-size: 22px;
+        }
+
+        .card h2 {
+          margin: 0 0 8px 0;
+          font-size: 21px;
+          letter-spacing: -0.02em;
+        }
+
+        .card p {
+          margin: 0;
+          color: var(--muted);
+          line-height: 1.5;
+          font-size: 14px;
+        }
+
+        .section-title {
+          margin: 36px 0 16px 0;
+          color: var(--muted);
+          font-size: 14px;
+          text-transform: uppercase;
+          letter-spacing: 0.14em;
+        }
+
+        footer {
+          margin-top: 36px;
+          color: var(--muted);
+          font-size: 14px;
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          flex-wrap: wrap;
+          border-top: 1px solid var(--border);
+          padding-top: 20px;
+        }
+
+        code {
+          color: #bae6fd;
+          background: rgba(56, 189, 248, 0.1);
+          border: 1px solid rgba(56, 189, 248, 0.16);
+          padding: 2px 6px;
+          border-radius: 8px;
+        }
+
+        @media (max-width: 720px) {
+          header {
+            align-items: flex-start;
+            flex-direction: column;
+          }
+
+          .badge {
+            white-space: normal;
+          }
+        }
+      </style>
+    </head>
+    <body>
+      <main class="page">
+        <header>
+          <div class="title">
+            <h1>Homelab k3s Portal</h1>
+            <p>Centralny punkt wejścia do usług klastra k3s.</p>
+          </div>
+          <div class="badge">Status platformy: <span>online</span></div>
+        </header>
+
+        <div class="section-title">Zarządzanie klastrem</div>
+        <section class="grid">
+          <a class="card" href="https://rancher.lab.local">
+            <div class="icon">🐄</div>
+            <h2>Rancher</h2>
+            <p>Panel zarządzania klastrem, workloadami, namespace’ami i RBAC.</p>
+          </a>
+
+          <a class="card" href="https://argocd.lab.local">
+            <div class="icon">🚀</div>
+            <h2>Argo CD</h2>
+            <p>GitOps, app-of-apps, synchronizacja aplikacji z repozytorium GitHub.</p>
+          </a>
+
+          <a class="card" href="https://grafana.lab.local">
+            <div class="icon">📊</div>
+            <h2>Grafana</h2>
+            <p>Dashboardy monitoringu klastra, node’ów, podów i aplikacji.</p>
+          </a>
+
+          <a class="card" href="https://longhorn.lab.local">
+            <div class="icon">💾</div>
+            <h2>Longhorn</h2>
+            <p>Storage, PVC, repliki wolumenów, snapshoty i backupy.</p>
+          </a>
+        </section>
+
+        <div class="section-title">Backupy i registry</div>
+        <section class="grid">
+          <a class="card" href="http://192.168.239.143:9001">
+            <div class="icon">🪣</div>
+            <h2>MinIO</h2>
+            <p>S3-compatible backup target dla Longhorna. Konsola działa na LB01.</p>
+          </a>
+
+          <a class="card" href="https://registry.lab.local:5000/v2/">
+            <div class="icon">📦</div>
+            <h2>Local Registry</h2>
+            <p>Lokalne registry obrazów kontenerowych dla aplikacji homelab.</p>
+          </a>
+        </section>
+
+        <div class="section-title">Aplikacje testowe</div>
+        <section class="grid">
+          <a class="card" href="https://whoami.lab.local">
+            <div class="icon">🧭</div>
+            <h2>Whoami</h2>
+            <p>Prosta aplikacja testowa dla ingress, TLS i routingu HTTP.</p>
+          </a>
+
+          <a class="card" href="https://nginx-demo.lab.local">
+            <div class="icon">🌐</div>
+            <h2>Nginx Demo</h2>
+            <p>Demo aplikacji z security baseline, PDB i NetworkPolicy.</p>
+          </a>
+
+          <a class="card" href="https://homepage.lab.local">
+            <div class="icon">🏠</div>
+            <h2>Homepage</h2>
+            <p>Przykładowa statyczna aplikacja wdrożona przez Argo CD.</p>
+          </a>
+        </section>
+
+        <footer>
+          <div>k3s HA · kube-vip · Longhorn · Argo CD · Rancher</div>
+          <div>Ingress: <code>portal.lab.local</code></div>
+        </footer>
+      </main>
+    </body>
+    </html>

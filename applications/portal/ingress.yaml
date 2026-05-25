@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: portal
+  namespace: portal
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - portal.lab.local
+      secretName: portal-lab-local-tls
+  rules:
+    - host: portal.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: portal
+                port:
+                  number: 80

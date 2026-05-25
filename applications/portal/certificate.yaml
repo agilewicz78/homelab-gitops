@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: portal-lab-local
+  namespace: portal
+spec:
+  secretName: portal-lab-local-tls
+  dnsNames:
+    - portal.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer
