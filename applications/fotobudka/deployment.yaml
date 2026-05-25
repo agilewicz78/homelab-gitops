@@ -24,7 +24,14 @@ spec:
             - -c
             - |
               python -m venv /venv
-              /venv/bin/pip install --no-cache-dir flask gunicorn pillow numpy opencv-python-headless
+              /venv/bin/pip install --no-cache-dir \
+                flask \
+                gunicorn \
+                pillow \
+                numpy \
+                opencv-python-headless \
+                replicate \
+                requests
           volumeMounts:
             - name: venv
               mountPath: /venv
@@ -38,8 +45,17 @@ spec:
             - |
               /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 2 app:app
           workingDir: /app
+
+          env:
+            - name: REPLICATE_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: replicate-api
+                  key: REPLICATE_API_TOKEN
+
           ports:
             - containerPort: 8080
+
           volumeMounts:
             - name: app
               mountPath: /app/app.py
@@ -49,6 +65,7 @@ spec:
               mountPath: /data
             - name: venv
               mountPath: /venv
+
           resources:
             requests:
               cpu: 100m
@@ -56,6 +73,7 @@ spec:
             limits:
               cpu: 700m
               memory: 1Gi
+
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
