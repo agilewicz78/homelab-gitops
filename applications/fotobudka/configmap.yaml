@@ -1,0 +1,490 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fotobudka-app
+  namespace: fotobudka
+data:
+  app.py: |
+    import base64
+    import os
+    import re
+    import time
+    from pathlib import Path
+    from flask import Flask, jsonify, request, send_from_directory, Response
+
+    APP_DIR = Path("/data")
+    PHOTOS_DIR = APP_DIR / "photos"
+    PHOTOS_DIR.mkdir(parents=True, exist_ok=True)
+
+    app = Flask(__name__)
+
+    INDEX_HTML = """
+    <!doctype html>
+    <html lang="pl">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>Fotobudka Homelab</title>
+      <style>
+        :root {
+          --bg: #0f172a;
+          --panel: #111827;
+          --panel2: #1f2937;
+          --text: #f8fafc;
+          --muted: #94a3b8;
+          --accent: #38bdf8;
+          --green: #22c55e;
+          --red: #ef4444;
+          --border: rgba(148, 163, 184, 0.22);
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+          margin: 0;
+          min-height: 100vh;
+          font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          background:
+            radial-gradient(circle at top left, rgba(56, 189, 248, 0.18), transparent 35%),
+            radial-gradient(circle at bottom right, rgba(34, 197, 94, 0.12), transparent 35%),
+            var(--bg);
+          color: var(--text);
+        }
+
+        .page {
+          width: min(1240px, 94vw);
+          margin: 0 auto;
+          padding: 38px 0;
+        }
+
+        header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 24px;
+          margin-bottom: 28px;
+        }
+
+        h1 {
+          margin: 0 0 8px;
+          font-size: clamp(34px, 5vw, 56px);
+          letter-spacing: -0.05em;
+          line-height: 1;
+        }
+
+        h2 { margin-top: 0; }
+
+        .subtitle {
+          margin: 0;
+          color: var(--muted);
+          font-size: 18px;
+        }
+
+        .badge {
+          border: 1px solid var(--border);
+          border-radius: 999px;
+          padding: 10px 14px;
+          color: var(--muted);
+          background: rgba(15, 23, 42, 0.7);
+          white-space: nowrap;
+        }
+
+        .badge span {
+          color: var(--green);
+          font-weight: 700;
+        }
+
+        .layout {
+          display: grid;
+          grid-template-columns: 1.35fr 1fr;
+          gap: 20px;
+        }
+
+        .card {
+          background: linear-gradient(180deg, rgba(17, 24, 39, 0.96), rgba(15, 23, 42, 0.96));
+          border: 1px solid var(--border);
+          border-radius: 24px;
+          padding: 20px;
+          box-shadow: 0 20px 50px rgba(0, 0, 0, 0.24);
+        }
+
+        .video-wrap {
+          position: relative;
+          overflow: hidden;
+          border-radius: 18px;
+          background: #020617;
+          aspect-ratio: 16 / 10;
+          display: grid;
+          place-items: center;
+        }
+
+        video, canvas, img {
+          max-width: 100%;
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+        }
+
+        video { transform: scaleX(-1); }
+
+        .empty {
+          color: var(--muted);
+          text-align: center;
+          padding: 30px;
+        }
+
+        .controls {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: 12px;
+          margin-top: 16px;
+        }
+
+        button, select, a.download {
+          border: 1px solid var(--border);
+          background: var(--panel2);
+          color: var(--text);
+          border-radius: 14px;
+          padding: 13px 14px;
+          font-weight: 700;
+          cursor: pointer;
+          text-decoration: none;
+          text-align: center;
+        }
+
+        button:hover, select:hover, a.download:hover {
+          border-color: rgba(56, 189, 248, 0.6);
+        }
+
+        button.primary {
+          background: linear-gradient(135deg, #0284c7, #22c55e);
+          border-color: transparent;
+        }
+
+        button.danger {
+          background: rgba(239, 68, 68, 0.16);
+          border-color: rgba(239, 68, 68, 0.35);
+        }
+
+        button:disabled, a.disabled {
+          opacity: .45;
+          cursor: not-allowed;
+          pointer-events: none;
+        }
+
+        .preview {
+          aspect-ratio: 4 / 3;
+          border-radius: 18px;
+          background: #020617;
+          border: 1px dashed var(--border);
+          overflow: hidden;
+          display: grid;
+          place-items: center;
+        }
+
+        .note, .status {
+          color: var(--muted);
+          font-size: 14px;
+          line-height: 1.5;
+          margin-top: 16px;
+        }
+
+        .status strong { color: var(--accent); }
+
+        .gallery {
+          margin-top: 20px;
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+          gap: 14px;
+        }
+
+        .photo-card {
+          border: 1px solid var(--border);
+          background: rgba(15, 23, 42, 0.7);
+          border-radius: 16px;
+          overflow: hidden;
+        }
+
+        .photo-card img {
+          display: block;
+          aspect-ratio: 4 / 3;
+          object-fit: cover;
+        }
+
+        .photo-card a {
+          display: block;
+          padding: 10px;
+          color: var(--text);
+          text-decoration: none;
+          font-size: 13px;
+          color: var(--muted);
+        }
+
+        @media (max-width: 900px) {
+          header, .layout {
+            grid-template-columns: 1fr;
+            flex-direction: column;
+          }
+
+          .controls { grid-template-columns: 1fr; }
+        }
+      </style>
+    </head>
+    <body>
+      <main class="page">
+        <header>
+          <div>
+            <h1>Fotobudka Homelab</h1>
+            <p class="subtitle">Zdjęcia z kamery zapisywane na PVC Longhorn.</p>
+          </div>
+          <div class="badge">Storage: <span>Longhorn PVC</span></div>
+        </header>
+
+        <section class="layout">
+          <div class="card">
+            <div class="video-wrap">
+              <video id="video" autoplay playsinline muted></video>
+              <div id="cameraEmpty" class="empty">Kliknij „Uruchom kamerę”, aby rozpocząć.</div>
+            </div>
+
+            <div class="controls">
+              <button id="startBtn" class="primary">Uruchom kamerę</button>
+              <button id="shotBtn" disabled>Zrób zdjęcie</button>
+              <button id="saveBtn" disabled>Zapisz na Longhorn</button>
+              <button id="stopBtn" class="danger" disabled>Zatrzymaj kamerę</button>
+              <select id="filterSelect">
+                <option value="none">Bez filtra</option>
+                <option value="grayscale(1)">Czarno-biały</option>
+                <option value="sepia(0.85)">Sepia</option>
+                <option value="contrast(1.35) saturate(1.4)">Kontrast</option>
+                <option value="hue-rotate(90deg)">Kolorowy</option>
+                <option value="blur(1px) saturate(1.3)">Soft</option>
+              </select>
+              <button id="refreshBtn">Odśwież galerię</button>
+            </div>
+
+            <div id="status" class="status">Status: <strong>gotowe</strong></div>
+          </div>
+
+          <aside class="card">
+            <h2>Podgląd zdjęcia</h2>
+            <div class="preview">
+              <canvas id="canvas" style="display:none"></canvas>
+              <img id="photo" alt="Wykonane zdjęcie" style="display:none" />
+              <div id="photoEmpty" class="empty">Brak zdjęcia.</div>
+            </div>
+
+            <div class="controls">
+              <a id="downloadLink" class="download disabled" href="#" download="fotobudka.png">Pobierz PNG</a>
+              <button id="clearBtn">Wyczyść</button>
+            </div>
+
+            <p class="note">
+              Zdjęcia są zapisywane w katalogu <strong>/data/photos</strong> na wolumenie Longhorn.
+              Kamera wymaga HTTPS i zgody przeglądarki.
+            </p>
+          </aside>
+        </section>
+
+        <section class="card" style="margin-top:20px">
+          <h2>Galeria z Longhorna</h2>
+          <div id="gallery" class="gallery"></div>
+        </section>
+      </main>
+
+      <script>
+        const video = document.getElementById("video");
+        const canvas = document.getElementById("canvas");
+        const photo = document.getElementById("photo");
+        const startBtn = document.getElementById("startBtn");
+        const stopBtn = document.getElementById("stopBtn");
+        const shotBtn = document.getElementById("shotBtn");
+        const saveBtn = document.getElementById("saveBtn");
+        const clearBtn = document.getElementById("clearBtn");
+        const refreshBtn = document.getElementById("refreshBtn");
+        const filterSelect = document.getElementById("filterSelect");
+        const downloadLink = document.getElementById("downloadLink");
+        const cameraEmpty = document.getElementById("cameraEmpty");
+        const photoEmpty = document.getElementById("photoEmpty");
+        const statusEl = document.getElementById("status");
+        const gallery = document.getElementById("gallery");
+
+        let stream = null;
+        let currentPhotoData = null;
+
+        function setStatus(text) {
+          statusEl.innerHTML = `Status: <strong>${text}</strong>`;
+        }
+
+        function setButtons(active) {
+          startBtn.disabled = active;
+          stopBtn.disabled = !active;
+          shotBtn.disabled = !active;
+        }
+
+        filterSelect.addEventListener("change", () => {
+          video.style.filter = filterSelect.value;
+        });
+
+        startBtn.addEventListener("click", async () => {
+          try {
+            stream = await navigator.mediaDevices.getUserMedia({
+              video: { width: { ideal: 1280 }, height: { ideal: 720 }, facingMode: "user" },
+              audio: false
+            });
+
+            video.srcObject = stream;
+            video.style.display = "block";
+            cameraEmpty.style.display = "none";
+            setButtons(true);
+            setStatus("kamera uruchomiona");
+          } catch (err) {
+            console.error(err);
+            setStatus("brak dostępu do kamery");
+            alert("Nie udało się uruchomić kamery. Sprawdź uprawnienia przeglądarki i HTTPS.");
+          }
+        });
+
+        stopBtn.addEventListener("click", () => {
+          if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            stream = null;
+          }
+
+          video.srcObject = null;
+          video.style.display = "none";
+          cameraEmpty.style.display = "block";
+          setButtons(false);
+          setStatus("kamera zatrzymana");
+        });
+
+        shotBtn.addEventListener("click", () => {
+          const width = video.videoWidth || 1280;
+          const height = video.videoHeight || 720;
+
+          canvas.width = width;
+          canvas.height = height;
+
+          const ctx = canvas.getContext("2d");
+          ctx.filter = filterSelect.value;
+          ctx.translate(width, 0);
+          ctx.scale(-1, 1);
+          ctx.drawImage(video, 0, 0, width, height);
+
+          currentPhotoData = canvas.toDataURL("image/png");
+          photo.src = currentPhotoData;
+          photo.style.display = "block";
+          photoEmpty.style.display = "none";
+
+          downloadLink.href = currentPhotoData;
+          downloadLink.classList.remove("disabled");
+          saveBtn.disabled = false;
+          setStatus("zdjęcie gotowe");
+        });
+
+        saveBtn.addEventListener("click", async () => {
+          if (!currentPhotoData) return;
+
+          saveBtn.disabled = true;
+          setStatus("zapisywanie na Longhorn...");
+
+          const res = await fetch("/api/photos", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ image: currentPhotoData })
+          });
+
+          if (!res.ok) {
+            saveBtn.disabled = false;
+            setStatus("błąd zapisu");
+            alert("Nie udało się zapisać zdjęcia.");
+            return;
+          }
+
+          const data = await res.json();
+          setStatus(`zapisano: ${data.filename}`);
+          await loadGallery();
+          saveBtn.disabled = false;
+        });
+
+        clearBtn.addEventListener("click", () => {
+          currentPhotoData = null;
+          photo.removeAttribute("src");
+          photo.style.display = "none";
+          photoEmpty.style.display = "block";
+          downloadLink.href = "#";
+          downloadLink.classList.add("disabled");
+          saveBtn.disabled = true;
+          setStatus("podgląd wyczyszczony");
+        });
+
+        refreshBtn.addEventListener("click", loadGallery);
+
+        async function loadGallery() {
+          const res = await fetch("/api/photos");
+          const photos = await res.json();
+
+          if (!photos.length) {
+            gallery.innerHTML = '<div class="empty">Brak zapisanych zdjęć.</div>';
+            return;
+          }
+
+          gallery.innerHTML = photos.map(item => `
+            <div class="photo-card">
+              <img src="/photos/${item}" alt="${item}" loading="lazy">
+              <a href="/photos/${item}" download>${item}</a>
+            </div>
+          `).join("");
+        }
+
+        video.style.display = "none";
+        setButtons(false);
+        loadGallery();
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setStatus("getUserMedia niedostępne");
+          startBtn.disabled = true;
+          alert("Twoja przeglądarka nie obsługuje getUserMedia.");
+        }
+      </script>
+    </body>
+    </html>
+    """
+
+    @app.get("/")
+    def index():
+      return Response(INDEX_HTML, mimetype="text/html")
+
+    @app.get("/healthz")
+    def healthz():
+      return jsonify({"status": "ok"})
+
+    @app.get("/api/photos")
+    def list_photos():
+      files = sorted(
+        [p.name for p in PHOTOS_DIR.glob("*.png")],
+        reverse=True
+      )
+      return jsonify(files)
+
+    @app.post("/api/photos")
+    def save_photo():
+      payload = request.get_json(silent=True) or {}
+      image = payload.get("image", "")
+
+      match = re.match(r"^data:image/png;base64,(.+)$", image)
+      if not match:
+        return jsonify({"error": "Invalid image payload"}), 400
+
+      raw = base64.b64decode(match.group(1))
+      filename = f"photo-{int(time.time())}.png"
+      path = PHOTOS_DIR / filename
+
+      with open(path, "wb") as f:
+        f.write(raw)
+
+      return jsonify({"filename": filename})
+
+    @app.get("/photos/<path:filename>")
+    def get_photo(filename):
+      return send_from_directory(PHOTOS_DIR, filename)

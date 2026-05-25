@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: fotobudka-lab-local
+  namespace: fotobudka
+spec:
+  secretName: fotobudka-lab-local-tls
+  dnsNames:
+    - fotobudka.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer

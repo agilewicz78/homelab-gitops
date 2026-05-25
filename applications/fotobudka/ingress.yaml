@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: fotobudka
+  namespace: fotobudka
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - fotobudka.lab.local
+      secretName: fotobudka-lab-local-tls
+  rules:
+    - host: fotobudka.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: fotobudka
+                port:
+                  number: 80

@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fotobudka
+  namespace: fotobudka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fotobudka
+  template:
+    metadata:
+      labels:
+        app: fotobudka
+    spec:
+      securityContext:
+        fsGroup: 1000
+
+      initContainers:
+        - name: install-deps
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              python -m venv /venv
+              /venv/bin/pip install --no-cache-dir flask gunicorn
+          volumeMounts:
+            - name: venv
+              mountPath: /venv
+
+      containers:
+        - name: fotobudka
+          image: python:3.12-alpine
+          command:
+            - /bin/sh
+            - -c
+            - |
+              /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 2 app:app
+          workingDir: /app
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: app
+              mountPath: /app/app.py
+              subPath: app.py
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: venv
+              mountPath: /venv
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 300m
+              memory: 512Mi
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+      volumes:
+        - name: app
+          configMap:
+            name: fotobudka-app
+        - name: data
+          persistentVolumeClaim:
+            claimName: fotobudka-data
+        - name: venv
+          emptyDir: {}

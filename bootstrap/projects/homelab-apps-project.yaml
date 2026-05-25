@@ -10,6 +10,8 @@ spec:
     - https://github.com/agilewicz78/homelab-gitops.git
 
   destinations:
+    - namespace: fotobudka
+      server: https://kubernetes.default.svc
     - namespace: portal
       server: https://kubernetes.default.svc
     - namespace: homepage
