@@ -220,7 +220,7 @@ data:
 
         <div class="section-title">Backupy i registry</div>
         <section class="grid">
-          <a class="card" href="http://192.168.239.143:9001">
+          <a class="card" href="https://minio.lab.local">
             <div class="icon">🪣</div>
             <h2>MinIO</h2>
             <p>S3-compatible backup target dla Longhorna. Konsola działa na LB01.</p>
