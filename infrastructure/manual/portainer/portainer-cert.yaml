@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: portainer-lab-local
+  namespace: portainer
+spec:
+  secretName: portainer-lab-local-tls
+  dnsNames:
+    - portainer.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer
