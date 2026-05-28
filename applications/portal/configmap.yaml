@@ -187,10 +187,17 @@ data:
             <p>Panel zarządzania klastrem, workloadami, namespace’ami i RBAC.</p>
           </a>
 
+<<<<<<< HEAD
           <a class="card" href="https://portainer.lab.local"
             <div class="icon">🐳</div>
             <h2>Portainer</h2>
             <p>Panel do zarządzania kontenerami i środowiskami Kubernetes.</p>
+=======
+          <a class="card" href="https://portainer.lab.local">
+           <div class="icon">🐳</div>
+           <h2>Portainer</h2>
+           <p>Panel do zarządzania kontenerami i środowiskami Kubernetes.</p>
+>>>>>>> 6b13409 (Fix portal ConfigMap YAML)
           </a>
 
           <a class="card" href="https://argocd.lab.local">
