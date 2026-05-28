@@ -187,6 +187,12 @@ data:
             <p>Panel zarządzania klastrem, workloadami, namespace’ami i RBAC.</p>
           </a>
 
+          <a class="card" href="https://portainer.lab.local">
+            <div class="icon">🐳</div>
+            <h2>Portainer</h2>
+            <p>Panel do zarządzania kontenerami i środowiskami Kubernetes.</p>
+          </a>
+
           <a class="card" href="https://argocd.lab.local">
             <div class="icon">🚀</div>
             <h2>Argo CD</h2>
@@ -233,12 +239,6 @@ data:
             <div class="icon">🌐</div>
             <h2>Nginx Demo</h2>
             <p>Demo aplikacji z security baseline, PDB i NetworkPolicy.</p>
-          </a>
-          
-          <a class="card" href="https://portainer.lab.local">
-            <div class="icon">🐳</div>
-            <h2>Portainer</h2>
-            <p>Panel do zarządzania kontenerami i środowiskami Kubernetes.</p>
           </a>
           
           <a class="card" href="https://homepage.lab.local">
