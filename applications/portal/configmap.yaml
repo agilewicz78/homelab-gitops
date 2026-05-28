@@ -234,7 +234,13 @@ data:
             <h2>Nginx Demo</h2>
             <p>Demo aplikacji z security baseline, PDB i NetworkPolicy.</p>
           </a>
-
+          
+          <a class="card" href="https://portainer.lab.local">
+            <div class="icon">🐳</div>
+            <h2>Portainer</h2>
+            <p>Panel do zarządzania kontenerami i środowiskami Kubernetes.</p>
+          </a>
+          
           <a class="card" href="https://homepage.lab.local">
             <div class="icon">🏠</div>
             <h2>Homepage</h2>
