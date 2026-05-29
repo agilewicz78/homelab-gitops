@@ -9,14 +9,13 @@ data:
     import time
     import html
     import uuid
-    from functools import wraps
-    from urllib.parse import quote
-
     import psycopg2
-    from flask import Flask, request, redirect, Response
+    from functools import wraps
+    from flask import Flask, request, redirect, Response, jsonify
     from werkzeug.security import generate_password_hash, check_password_hash
 
     app = Flask(__name__)
+    app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
@@ -138,7 +137,6 @@ data:
         ),
     ]
 
-
     def get_conn():
         return psycopg2.connect(
             host=DB_HOST,
@@ -147,7 +145,6 @@ data:
             user=DB_USER,
             password=DB_PASSWORD,
         )
-
 
     def init_db():
         for _ in range(40):
@@ -164,6 +161,15 @@ data:
                         role TEXT NOT NULL DEFAULT 'user',
                         password_hash TEXT NOT NULL,
                         created_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_sessions (
+                        sid TEXT PRIMARY KEY,
+                        user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        last_seen TIMESTAMP DEFAULT NOW()
                     );
                 """)
 
@@ -193,15 +199,6 @@ data:
                     );
                 """)
 
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS user_sessions (
-                        sid TEXT PRIMARY KEY,
-                        user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        last_seen TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for full_name, email, department, role in SEED_USERS:
                     cur.execute("""
@@ -216,14 +213,8 @@ data:
                     for ticket in SEED_TICKETS:
                         cur.execute("""
                             INSERT INTO tickets (
-                                title,
-                                description,
-                                requester_name,
-                                requester_email,
-                                department,
-                                category,
-                                priority,
-                                status
+                                title, description, requester_name, requester_email,
+                                department, category, priority, status
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                         """, ticket)
@@ -235,47 +226,22 @@ data:
             except Exception as e:
                 print(f"Waiting for database: {e}", flush=True)
                 time.sleep(2)
-
         raise RuntimeError("Database unavailable")
 
-
     init_db()
-
 
     def esc(value):
         return html.escape(str(value or ""))
 
+    def clean(value):
+        return str(value or "").strip()
 
-    def options(values, selected=None):
-        result = ""
-        for value in values:
-            selected_attr = " selected" if value == selected else ""
-            result += f'<option value="{esc(value)}"{selected_attr}>{esc(value)}</option>'
-        return result
+    def get_sid_from_request():
+        return request.headers.get("X-Helpdesk-Session", "").strip()
 
-
-    def request_sid():
-        sid = request.values.get("sid") or request.args.get("sid")
-        return sid.strip() if sid else ""
-
-
-    def sid_qs(sid):
-        return f"?sid={quote(sid)}" if sid else ""
-
-
-    def sid_hidden(sid):
-        return f'<input type="hidden" name="sid" value="{esc(sid)}">' if sid else ""
-
-
-    def path_with_sid(path, sid):
-        return f"{path}{sid_qs(sid)}"
-
-
-    def current_user():
-        sid = request_sid()
+    def get_user_by_sid(sid):
         if not sid:
             return None
-
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -285,60 +251,36 @@ data:
             WHERE s.sid = %s
         """, (sid,))
         row = cur.fetchone()
-
         if row:
             cur.execute("UPDATE user_sessions SET last_seen = NOW() WHERE sid = %s", (sid,))
             conn.commit()
-
         cur.close()
         conn.close()
-
         if not row:
             return None
-
-        full_name, email, department, role = row
         return {
-            "sid": sid,
-            "name": full_name,
-            "email": email,
-            "department": department,
-            "role": role,
+            "name": row[0],
+            "email": row[1],
+            "department": row[2],
+            "role": row[3],
         }
 
+    def current_user():
+        return get_user_by_sid(get_sid_from_request())
 
-    def login_required(fn):
+    def api_login_required(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
-            if not current_user():
-                return redirect("/login")
-            return fn(*args, **kwargs)
+            user = current_user()
+            if not user:
+                return jsonify({"error": "unauthorized"}), 401
+            return fn(user, *args, **kwargs)
         return wrapper
 
+    def is_admin(user):
+        return bool(user and user.get("role") == "admin")
 
-    def is_admin():
-        user = current_user()
-        return bool(user and user["role"] == "admin")
-
-
-    def layout(content):
-        user = current_user()
-        sid = request_sid()
-
-        if user:
-            nav = f"""
-              <div class="badge">
-                Zalogowany: <strong>{esc(user["name"])}</strong>
-                · {esc(user["department"])}
-                · <a href="{path_with_sid('/logout', sid)}">Wyloguj</a>
-              </div>
-            """
-        else:
-            nav = """
-              <div class="badge">
-                <a href="/login">Zaloguj</a>
-              </div>
-            """
-
+    def public_html(body):
         return f"""
         <!doctype html>
         <html lang="pl">
@@ -346,182 +288,7 @@ data:
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
           <title>INCoprp Helpdesk</title>
-          <style>
-            :root {{
-              --bg: #0f172a;
-              --card: #111827;
-              --card2: #1f2937;
-              --text: #f8fafc;
-              --muted: #94a3b8;
-              --accent: #38bdf8;
-              --green: #22c55e;
-              --red: #ef4444;
-              --yellow: #facc15;
-              --border: rgba(148,163,184,.25);
-            }}
-            * {{ box-sizing: border-box; }}
-            body {{
-              margin: 0;
-              font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-              background:
-                radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 35%),
-                radial-gradient(circle at bottom right, rgba(34,197,94,.12), transparent 35%),
-                var(--bg);
-              color: var(--text);
-            }}
-            a {{ color: inherit; }}
-            .page {{
-              width: min(1220px, 94vw);
-              margin: 0 auto;
-              padding: 42px 0;
-            }}
-            header {{
-              display: flex;
-              justify-content: space-between;
-              gap: 20px;
-              align-items: flex-start;
-              margin-bottom: 24px;
-            }}
-            h1 {{
-              margin: 0 0 8px;
-              font-size: clamp(34px, 5vw, 56px);
-              line-height: 1;
-              letter-spacing: -.05em;
-            }}
-            .subtitle {{
-              margin: 0;
-              color: var(--muted);
-              font-size: 18px;
-            }}
-            .badge {{
-              border: 1px solid var(--border);
-              border-radius: 999px;
-              padding: 10px 14px;
-              color: var(--muted);
-              white-space: nowrap;
-              background: rgba(15,23,42,.65);
-            }}
-            .badge strong {{ color: var(--green); }}
-            .card {{
-              background: linear-gradient(180deg, rgba(17,24,39,.96), rgba(15,23,42,.96));
-              border: 1px solid var(--border);
-              border-radius: 22px;
-              padding: 22px;
-              box-shadow: 0 20px 40px rgba(0,0,0,.25);
-              margin-bottom: 18px;
-            }}
-            .stats {{
-              display: grid;
-              grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-              gap: 14px;
-              margin-bottom: 18px;
-            }}
-            .stat {{
-              border: 1px solid var(--border);
-              background: rgba(31,41,55,.72);
-              border-radius: 18px;
-              padding: 16px;
-            }}
-            .stat .num {{
-              font-size: 32px;
-              font-weight: 800;
-            }}
-            .stat .label {{
-              color: var(--muted);
-              font-size: 14px;
-            }}
-            table {{
-              width: 100%;
-              border-collapse: collapse;
-            }}
-            th, td {{
-              padding: 12px;
-              border-bottom: 1px solid var(--border);
-              text-align: left;
-              vertical-align: top;
-            }}
-            th {{
-              color: var(--muted);
-              font-size: 13px;
-              text-transform: uppercase;
-              letter-spacing: .08em;
-            }}
-            .pill {{
-              display: inline-block;
-              border-radius: 999px;
-              padding: 5px 9px;
-              font-size: 12px;
-              font-weight: 700;
-              border: 1px solid var(--border);
-              color: var(--text);
-              background: rgba(31,41,55,.72);
-            }}
-            .priority-Krytyczny {{ color: #fecaca; border-color: rgba(239,68,68,.45); }}
-            .priority-Wysoki {{ color: #fde68a; border-color: rgba(250,204,21,.45); }}
-            .priority-Normalny {{ color: #bae6fd; border-color: rgba(56,189,248,.45); }}
-            .priority-Niski {{ color: #bbf7d0; border-color: rgba(34,197,94,.45); }}
-            input, textarea, select {{
-              width: 100%;
-              background: var(--card2);
-              color: var(--text);
-              border: 1px solid var(--border);
-              border-radius: 14px;
-              padding: 12px;
-              font-size: 15px;
-            }}
-            textarea {{
-              min-height: 120px;
-              resize: vertical;
-            }}
-            label {{
-              display: block;
-              color: var(--muted);
-              font-size: 13px;
-              margin: 12px 0 6px;
-            }}
-            .grid {{
-              display: grid;
-              grid-template-columns: repeat(2, minmax(0, 1fr));
-              gap: 14px;
-            }}
-            button, .btn {{
-              display: inline-block;
-              margin-top: 14px;
-              border: 0;
-              border-radius: 14px;
-              padding: 12px 18px;
-              font-weight: 700;
-              color: white;
-              background: linear-gradient(135deg, #0284c7, #22c55e);
-              cursor: pointer;
-              text-decoration: none;
-            }}
-            .btn-secondary {{
-              background: rgba(31,41,55,.9);
-              border: 1px solid var(--border);
-            }}
-            .ticket-title {{
-              font-weight: 800;
-              text-decoration: none;
-            }}
-            .muted {{ color: var(--muted); }}
-            .comment {{
-              border: 1px solid var(--border);
-              border-radius: 16px;
-              padding: 14px;
-              background: rgba(31,41,55,.65);
-              margin-top: 10px;
-            }}
-            .login-box {{
-              width: min(520px, 100%);
-              margin: 0 auto;
-            }}
-            @media (max-width: 860px) {{
-              header {{ flex-direction: column; }}
-              .grid {{ grid-template-columns: 1fr; }}
-              table {{ font-size: 14px; }}
-            }}
-          </style>
+          <style>{CSS}</style>
         </head>
         <body>
           <main class="page">
@@ -530,57 +297,357 @@ data:
                 <h1>INCoprp Helpdesk</h1>
                 <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
               </div>
-              {nav}
+              <div class="badge">SessionStorage: <strong>per karta</strong></div>
             </header>
-            {content}
+            {body}
           </main>
         </body>
         </html>
         """
 
+    CSS = """
+      :root {
+        --bg: #0f172a;
+        --card: #111827;
+        --card2: #1f2937;
+        --text: #f8fafc;
+        --muted: #94a3b8;
+        --accent: #38bdf8;
+        --green: #22c55e;
+        --red: #ef4444;
+        --yellow: #facc15;
+        --border: rgba(148,163,184,.25);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 35%),
+          radial-gradient(circle at bottom right, rgba(34,197,94,.12), transparent 35%),
+          var(--bg);
+        color: var(--text);
+      }
+      a { color: inherit; }
+      .page { width: min(1220px, 94vw); margin: 0 auto; padding: 42px 0; }
+      header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 24px; }
+      h1 { margin: 0 0 8px; font-size: clamp(34px, 5vw, 56px); line-height: 1; letter-spacing: -.05em; }
+      .subtitle { margin: 0; color: var(--muted); font-size: 18px; }
+      .badge { border: 1px solid var(--border); border-radius: 999px; padding: 10px 14px; color: var(--muted); white-space: nowrap; background: rgba(15,23,42,.65); }
+      .badge strong { color: var(--green); }
+      .card { background: linear-gradient(180deg, rgba(17,24,39,.96), rgba(15,23,42,.96)); border: 1px solid var(--border); border-radius: 22px; padding: 22px; box-shadow: 0 20px 40px rgba(0,0,0,.25); margin-bottom: 18px; }
+      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
+      .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
+      .stat .num { font-size: 32px; font-weight: 800; }
+      .stat .label { color: var(--muted); font-size: 14px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+      th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
+      .pill { display: inline-block; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; border: 1px solid var(--border); color: var(--text); background: rgba(31,41,55,.72); }
+      .priority-Krytyczny { color: #fecaca; border-color: rgba(239,68,68,.45); }
+      .priority-Wysoki { color: #fde68a; border-color: rgba(250,204,21,.45); }
+      .priority-Normalny { color: #bae6fd; border-color: rgba(56,189,248,.45); }
+      .priority-Niski { color: #bbf7d0; border-color: rgba(34,197,94,.45); }
+      input, textarea, select { width: 100%; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 12px; font-size: 15px; }
+      textarea { min-height: 120px; resize: vertical; }
+      label { display: block; color: var(--muted); font-size: 13px; margin: 12px 0 6px; }
+      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      button, .btn { display: inline-block; margin-top: 14px; border: 0; border-radius: 14px; padding: 12px 18px; font-weight: 700; color: white; background: linear-gradient(135deg, #0284c7, #22c55e); cursor: pointer; text-decoration: none; }
+      .btn-secondary { background: rgba(31,41,55,.9); border: 1px solid var(--border); }
+      .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; }
+      .muted { color: var(--muted); }
+      .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
+      .login-box { width: min(520px, 100%); margin: 0 auto; }
+      .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
+      .error { color: #fecaca; }
+      .hidden { display: none; }
+      @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
+    """
+
+    SPA_HTML = f"""
+    <!doctype html>
+    <html lang="pl">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>INCoprp Helpdesk</title>
+      <style>{CSS}</style>
+    </head>
+    <body>
+      <main class="page">
+        <header>
+          <div>
+            <h1>INCoprp Helpdesk</h1>
+            <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
+          </div>
+          <div id="userBadge" class="badge">Ładowanie...</div>
+        </header>
+        <div id="app"></div>
+      </main>
+
+      <script>
+        const appEl = document.getElementById("app");
+        const userBadge = document.getElementById("userBadge");
+
+        function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
+        function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
+        function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
+
+        async function api(path, options = {{}}) {{
+          const headers = options.headers || {{}};
+          headers["X-Helpdesk-Session"] = getSid();
+          if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
+          const res = await fetch(path, {{ ...options, headers }});
+          if (res.status === 401) {{
+            clearSid();
+            window.location.href = "/login";
+            return null;
+          }}
+          return res;
+        }}
+
+        function esc(value) {{
+          return String(value ?? "").replace(/[&<>"']/g, ch => ({{
+            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
+          }}[ch]));
+        }}
+
+        function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
+
+        async function loadMe() {{
+          const res = await api("/api/me");
+          if (!res) return null;
+          const data = await res.json();
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          return data;
+        }}
+
+        async function logout() {{
+          await api("/api/logout", {{ method: "POST" }});
+          clearSid();
+          window.location.href = "/login";
+        }}
+
+        async function renderHome() {{
+          const me = await loadMe();
+          if (!me) return;
+          const res = await api("/api/tickets");
+          if (!res) return;
+          const data = await res.json();
+          const scope = me.role === "admin" ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
+
+          const rows = data.tickets.map(t => `
+            <tr>
+              <td>#${{t.id}}</td>
+              <td><a class="ticket-title" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
+              <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
+              <td>${{esc(t.category)}}</td>
+              <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
+              <td><span class="pill">${{esc(t.status)}}</span></td>
+              <td class="muted">${{esc(t.created_at)}}</td>
+            </tr>`).join("");
+
+          appEl.innerHTML = `
+            <section class="stats">
+              <div class="stat"><div class="num">${{data.stats.total}}</div><div class="label">${{scope}}</div></div>
+              <div class="stat"><div class="num">${{data.stats.new}}</div><div class="label">Nowe</div></div>
+              <div class="stat"><div class="num">${{data.stats.in_progress}}</div><div class="label">W trakcie</div></div>
+              <div class="stat"><div class="num">${{data.stats.high}}</div><div class="label">Wysoki / Krytyczny</div></div>
+              <div class="stat"><div class="num">${{data.stats.resolved}}</div><div class="label">Rozwiązane / Zamknięte</div></div>
+            </section>
+            <section class="card"><button onclick="renderNewTicket()">Nowe zgłoszenie</button></section>
+            <section class="card">
+              <h2>${{scope}}</h2>
+              <table>
+                <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Utworzono</th></tr></thead>
+                <tbody>${{rows}}</tbody>
+              </table>
+            </section>`;
+        }}
+
+        async function renderNewTicket() {{
+          const me = await loadMe();
+          if (!me) return;
+          const metaRes = await api("/api/meta");
+          const meta = await metaRes.json();
+          appEl.innerHTML = `
+            <section class="card">
+              <h2>Nowe zgłoszenie</h2>
+              <form id="ticketForm">
+                <label>Tytuł problemu</label>
+                <input name="title" required placeholder="Np. Outlook nie odbiera poczty">
+                <label>Opis</label>
+                <textarea name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
+                <div class="grid">
+                  <div><label>Zgłaszający</label><input value="${{esc(me.name)}}" disabled></div>
+                  <div><label>E-mail</label><input value="${{esc(me.email)}}" disabled></div>
+                </div>
+                <div class="grid">
+                  <div><label>Dział</label><input value="${{esc(me.department)}}" disabled></div>
+                  <div><label>Kategoria</label><select name="category">${{meta.categories.map(x => `<option>${{esc(x)}}</option>`).join("")}}</select></div>
+                </div>
+                <label>Priorytet</label>
+                <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
+                <button type="submit">Utwórz zgłoszenie</button>
+                <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
+              </form>
+            </section>`;
+          document.getElementById("ticketForm").addEventListener("submit", createTicket);
+        }}
+
+        async function createTicket(event) {{
+          event.preventDefault();
+          const form = event.target;
+          const payload = Object.fromEntries(new FormData(form).entries());
+          const res = await api("/api/tickets", {{ method: "POST", body: JSON.stringify(payload) }});
+          if (!res) return;
+          if (!res.ok) {{ alert("Nie udało się utworzyć zgłoszenia."); return; }}
+          await renderHome();
+        }}
+
+        async function renderTicket(id) {{
+          const me = await loadMe();
+          if (!me) return;
+          const res = await api(`/api/tickets/${{id}}`);
+          if (!res) return;
+          if (!res.ok) {{ appEl.innerHTML = `<section class="card"><h2>Brak dostępu albo brak zgłoszenia</h2></section>`; return; }}
+          const data = await res.json();
+          const t = data.ticket;
+          const comments = data.comments.map(c => `
+            <div class="comment"><div class="muted">${{esc(c.author)}} · ${{esc(c.created_at)}}</div><div>${{esc(c.content)}}</div></div>
+          `).join("") || `<p class="muted">Brak komentarzy.</p>`;
+
+          const statusPanel = me.role === "admin" ? `
+            <section class="card">
+              <h3>Zmień status</h3>
+              <form id="statusForm">
+                <label>Status</label>
+                <select name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
+                <button type="submit">Zapisz status</button>
+              </form>
+            </section>` : "";
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
+              <h2>#${{t.id}} · ${{esc(t.title)}}</h2>
+              <p class="muted">Utworzono: ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>
+              <p><strong>Status:</strong> <span class="pill">${{esc(t.status)}}</span></p>
+              <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
+              <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
+              <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
+              <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
+              <h3>Opis</h3><p>${{esc(t.description)}}</p>
+            </section>
+            ${{statusPanel}}
+            <section class="card">
+              <h3>Komentarze</h3>
+              ${{comments}}
+              <form id="commentForm">
+                <label>Komentarz</label>
+                <textarea name="content" required></textarea>
+                <button type="submit">Dodaj komentarz</button>
+              </form>
+            </section>`;
+
+          const commentForm = document.getElementById("commentForm");
+          commentForm.addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const payload = Object.fromEntries(new FormData(commentForm).entries());
+            await api(`/api/tickets/${{id}}/comments`, {{ method: "POST", body: JSON.stringify(payload) }});
+            await renderTicket(id);
+          }});
+
+          const statusForm = document.getElementById("statusForm");
+          if (statusForm) {{
+            statusForm.addEventListener("submit", async (e) => {{
+              e.preventDefault();
+              const payload = Object.fromEntries(new FormData(statusForm).entries());
+              await api(`/api/tickets/${{id}}/status`, {{ method: "POST", body: JSON.stringify(payload) }});
+              await renderTicket(id);
+            }});
+          }}
+        }}
+
+        renderHome();
+      </script>
+    </body>
+    </html>
+    """
+
+    LOGIN_HTML = f"""
+    <!doctype html>
+    <html lang="pl">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>INCoprp Helpdesk — Logowanie</title>
+      <style>{CSS}</style>
+    </head>
+    <body>
+      <main class="page">
+        <header>
+          <div>
+            <h1>INCoprp Helpdesk</h1>
+            <p class="subtitle">Logowanie do systemu zgłoszeń IT.</p>
+          </div>
+          <div class="badge">Sesja: <strong>ukryta w sessionStorage</strong></div>
+        </header>
+        <section class="card login-box">
+          <h2>Logowanie</h2>
+          <p id="error" class="error hidden">Nieprawidłowy e-mail albo hasło.</p>
+          <form id="loginForm">
+            <label>E-mail</label>
+            <input name="email" type="email" required placeholder="anna.kowalska@incoprp.local">
+            <label>Hasło</label>
+            <input name="password" type="password" required placeholder="Incoprp123!">
+            <button type="submit">Zaloguj</button>
+          </form>
+          <p class="muted">
+            Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
+            admin@incoprp.local. Hasło startowe: Incoprp123!
+          </p>
+        </section>
+      </main>
+      <script>
+        document.getElementById("loginForm").addEventListener("submit", async (event) => {{
+          event.preventDefault();
+          const payload = Object.fromEntries(new FormData(event.target).entries());
+          const res = await fetch("/api/login", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify(payload)
+          }});
+          if (!res.ok) {{
+            document.getElementById("error").classList.remove("hidden");
+            return;
+          }}
+          const data = await res.json();
+          sessionStorage.setItem("helpdesk_sid", data.sid);
+          window.location.href = "/";
+        }});
+      </script>
+    </body>
+    </html>
+    """
 
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
 
-
     @app.get("/login")
-    def login_form():
-        error = request.args.get("error")
-        error_html = "<p class='muted'>Nieprawidłowy e-mail albo hasło.</p>" if error else ""
+    def login_page():
+        return Response(LOGIN_HTML, mimetype="text/html")
 
-        content = f"""
-        <section class="card login-box">
-          <h2>Logowanie</h2>
-          {error_html}
-          <form method="post" action="/login">
-            <label>E-mail</label>
-            <input name="email" type="email" required placeholder="anna.kowalska@incoprp.local">
+    @app.get("/")
+    def spa_page():
+        return Response(SPA_HTML, mimetype="text/html")
 
-            <label>Hasło</label>
-            <input name="password" type="password" required placeholder="Incoprp123!">
-
-            <button type="submit">Zaloguj w nowej sesji tej karty</button>
-          </form>
-
-          <p class="muted">
-            Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
-            admin@incoprp.local. Hasło startowe: Incoprp123!
-          </p>
-          <p class="muted">
-            Każde logowanie tworzy osobny identyfikator <code>sid</code> w adresie URL,
-            więc w kilku kartach tej samej przeglądarki mogą działać różni użytkownicy jednocześnie.
-          </p>
-        </section>
-        """
-
-        return Response(layout(content), mimetype="text/html")
-
-
-    @app.post("/login")
-    def login_submit():
-        email = request.form.get("email", "").strip().lower()
-        password = request.form.get("password", "")
+    @app.post("/api/login")
+    def api_login():
+        payload = request.get_json(silent=True) or {}
+        email = clean(payload.get("email")).lower()
+        password = str(payload.get("password") or "")
 
         conn = get_conn()
         cur = conn.cursor()
@@ -590,34 +657,36 @@ data:
             WHERE lower(email) = %s
         """, (email,))
         user = cur.fetchone()
-
         if not user:
             cur.close()
             conn.close()
-            return redirect("/login?error=1")
+            return jsonify({"error": "invalid credentials"}), 401
 
         full_name, user_email, department, role, password_hash = user
-
         if not check_password_hash(password_hash, password):
             cur.close()
             conn.close()
-            return redirect("/login?error=1")
+            return jsonify({"error": "invalid credentials"}), 401
 
         sid = str(uuid.uuid4())
-        cur.execute("""
-            INSERT INTO user_sessions (sid, user_email)
-            VALUES (%s, %s)
-        """, (sid, user_email))
+        cur.execute("INSERT INTO user_sessions (sid, user_email) VALUES (%s, %s)", (sid, user_email))
         conn.commit()
         cur.close()
         conn.close()
 
-        return redirect(path_with_sid("/", sid))
+        return jsonify({
+            "sid": sid,
+            "user": {
+                "name": full_name,
+                "email": user_email,
+                "department": department,
+                "role": role,
+            }
+        })
 
-
-    @app.get("/logout")
-    def logout():
-        sid = request_sid()
+    @app.post("/api/logout")
+    def api_logout():
+        sid = get_sid_from_request()
         if sid:
             conn = get_conn()
             cur = conn.cursor()
@@ -625,19 +694,30 @@ data:
             conn.commit()
             cur.close()
             conn.close()
-        return redirect("/login")
+        return jsonify({"status": "ok"})
 
+    @app.get("/api/me")
+    @api_login_required
+    def api_me(user):
+        return jsonify(user)
 
-    @app.get("/")
-    @login_required
-    def index():
-        user = current_user()
-        sid = user["sid"]
+    @app.get("/api/meta")
+    @api_login_required
+    def api_meta(user):
+        return jsonify({
+            "departments": DEPARTMENTS,
+            "categories": CATEGORIES,
+            "priorities": PRIORITIES,
+            "statuses": STATUSES,
+        })
 
+    @app.get("/api/tickets")
+    @api_login_required
+    def api_tickets(user):
         conn = get_conn()
         cur = conn.cursor()
 
-        if is_admin():
+        if is_admin(user):
             where_sql = ""
             where_params = ()
         else:
@@ -657,200 +737,103 @@ data:
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
 
         cur.execute(f"""
-            SELECT id, title, requester_name, department, category, priority, status, created_at
+            SELECT id, title, requester_name, requester_email, department, category,
+                   priority, status, created_at, updated_at
             FROM tickets
             {where_sql}
             ORDER BY id DESC
         """, where_params)
         rows = cur.fetchall()
-
         cur.close()
         conn.close()
 
-        table_rows = ""
+        tickets = []
         for row in rows:
-            ticket_id, title, requester, department, category, priority, status, created_at = row
-            priority_class = "priority-" + priority.replace(" ", "-")
-            table_rows += f"""
-            <tr>
-              <td>#{ticket_id}</td>
-              <td><a class="ticket-title" href="{path_with_sid(f'/tickets/{ticket_id}', sid)}">{esc(title)}</a></td>
-              <td>{esc(requester)}<br><span class="muted">{esc(department)}</span></td>
-              <td>{esc(category)}</td>
-              <td><span class="pill {esc(priority_class)}">{esc(priority)}</span></td>
-              <td><span class="pill">{esc(status)}</span></td>
-              <td class="muted">{esc(created_at)}</td>
-            </tr>
-            """
+            tickets.append({
+                "id": row[0],
+                "title": row[1],
+                "requester_name": row[2],
+                "requester_email": row[3],
+                "department": row[4],
+                "category": row[5],
+                "priority": row[6],
+                "status": row[7],
+                "created_at": str(row[8]),
+                "updated_at": str(row[9]),
+            })
 
-        scope_label = "Wszystkie zgłoszenia" if is_admin() else "Moje zgłoszenia"
+        return jsonify({
+            "stats": {
+                "total": total,
+                "new": new_count,
+                "in_progress": in_progress,
+                "high": high_count,
+                "resolved": resolved_count,
+            },
+            "tickets": tickets,
+        })
 
-        content = f"""
-        <section class="stats">
-          <div class="stat"><div class="num">{total}</div><div class="label">{scope_label}</div></div>
-          <div class="stat"><div class="num">{new_count}</div><div class="label">Nowe</div></div>
-          <div class="stat"><div class="num">{in_progress}</div><div class="label">W trakcie</div></div>
-          <div class="stat"><div class="num">{high_count}</div><div class="label">Wysoki / Krytyczny</div></div>
-          <div class="stat"><div class="num">{resolved_count}</div><div class="label">Rozwiązane / Zamknięte</div></div>
-        </section>
+    @app.post("/api/tickets")
+    @api_login_required
+    def api_create_ticket(user):
+        payload = request.get_json(silent=True) or {}
+        title = clean(payload.get("title"))
+        description = clean(payload.get("description"))
+        category = clean(payload.get("category"))
+        priority = clean(payload.get("priority")) or "Normalny"
 
-        <section class="card">
-          <a class="btn" href="{path_with_sid('/tickets/new', sid)}">Nowe zgłoszenie</a>
-        </section>
-
-        <section class="card">
-          <h2>{scope_label}</h2>
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Tytuł</th>
-                <th>Zgłaszający</th>
-                <th>Kategoria</th>
-                <th>Priorytet</th>
-                <th>Status</th>
-                <th>Utworzono</th>
-              </tr>
-            </thead>
-            <tbody>
-              {table_rows}
-            </tbody>
-          </table>
-        </section>
-        """
-
-        return Response(layout(content), mimetype="text/html")
-
-
-    @app.get("/tickets/new")
-    @login_required
-    def new_ticket():
-        user = current_user()
-        sid = user["sid"]
-
-        content = f"""
-        <section class="card">
-          <h2>Nowe zgłoszenie</h2>
-          <form method="post" action="/tickets">
-            {sid_hidden(sid)}
-
-            <label>Tytuł problemu</label>
-            <input name="title" required placeholder="Np. Outlook nie odbiera poczty">
-
-            <label>Opis</label>
-            <textarea name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
-
-            <div class="grid">
-              <div>
-                <label>Zgłaszający</label>
-                <input value="{esc(user['name'])}" disabled>
-              </div>
-              <div>
-                <label>E-mail</label>
-                <input value="{esc(user['email'])}" disabled>
-              </div>
-            </div>
-
-            <div class="grid">
-              <div>
-                <label>Dział</label>
-                <input value="{esc(user['department'])}" disabled>
-              </div>
-              <div>
-                <label>Kategoria</label>
-                <select name="category">{options(CATEGORIES)}</select>
-              </div>
-            </div>
-
-            <label>Priorytet</label>
-            <select name="priority">{options(PRIORITIES, 'Normalny')}</select>
-
-            <button type="submit">Utwórz zgłoszenie</button>
-            <a class="btn btn-secondary" href="{path_with_sid('/', sid)}">Anuluj</a>
-          </form>
-        </section>
-        """
-
-        return Response(layout(content), mimetype="text/html")
-
-
-    @app.post("/tickets")
-    @login_required
-    def create_ticket():
-        user = current_user()
-        sid = user["sid"]
+        if not title or not description:
+            return jsonify({"error": "title and description are required"}), 400
 
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
             INSERT INTO tickets (
-                title,
-                description,
-                requester_name,
-                requester_email,
-                department,
-                category,
-                priority,
-                status
+                title, description, requester_name, requester_email,
+                department, category, priority, status
             )
             VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe')
+            RETURNING id
         """, (
-            request.form.get("title", "").strip(),
-            request.form.get("description", "").strip(),
-            user["name"],
-            user["email"],
-            user["department"],
-            request.form.get("category", "").strip(),
-            request.form.get("priority", "Normalny").strip(),
+            title, description, user["name"], user["email"],
+            user["department"], category, priority,
         ))
+        ticket_id = cur.fetchone()[0]
         conn.commit()
         cur.close()
         conn.close()
-        return redirect(path_with_sid("/", sid))
+        return jsonify({"id": ticket_id}), 201
 
-
-    def can_view_ticket(ticket_id):
-        user = current_user()
-        if not user:
-            return False
-
-        if is_admin():
+    def can_view_ticket(user, ticket_id):
+        if is_admin(user):
             return True
-
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT requester_email FROM tickets WHERE id = %s", (ticket_id,))
         row = cur.fetchone()
         cur.close()
         conn.close()
-
         return bool(row and row[0] == user["email"])
 
-
-    @app.get("/tickets/<int:ticket_id>")
-    @login_required
-    def ticket_detail(ticket_id):
-        if not can_view_ticket(ticket_id):
-            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
-
-        user = current_user()
-        sid = user["sid"]
+    @app.get("/api/tickets/<int:ticket_id>")
+    @api_login_required
+    def api_ticket_detail(user, ticket_id):
+        if not can_view_ticket(user, ticket_id):
+            return jsonify({"error": "forbidden"}), 403
 
         conn = get_conn()
         cur = conn.cursor()
-
         cur.execute("""
             SELECT id, title, description, requester_name, requester_email, department,
                    category, priority, status, created_at, updated_at
             FROM tickets
             WHERE id = %s
         """, (ticket_id,))
-        ticket = cur.fetchone()
-
-        if not ticket:
+        row = cur.fetchone()
+        if not row:
             cur.close()
             conn.close()
-            return Response(layout("<section class='card'><h2>Nie znaleziono zgłoszenia</h2></section>"), status=404)
+            return jsonify({"error": "not found"}), 404
 
         cur.execute("""
             SELECT author, content, created_at
@@ -858,117 +841,65 @@ data:
             WHERE ticket_id = %s
             ORDER BY id ASC
         """, (ticket_id,))
-        comments = cur.fetchall()
-
+        comment_rows = cur.fetchall()
         cur.close()
         conn.close()
 
-        (
-            tid, title, description, requester_name, requester_email,
-            department, category, priority, status, created_at, updated_at
-        ) = ticket
+        ticket = {
+            "id": row[0],
+            "title": row[1],
+            "description": row[2],
+            "requester_name": row[3],
+            "requester_email": row[4],
+            "department": row[5],
+            "category": row[6],
+            "priority": row[7],
+            "status": row[8],
+            "created_at": str(row[9]),
+            "updated_at": str(row[10]),
+        }
+        comments = [
+            {"author": c[0], "content": c[1], "created_at": str(c[2])}
+            for c in comment_rows
+        ]
+        return jsonify({
+            "ticket": ticket,
+            "comments": comments,
+            "meta": {"statuses": STATUSES},
+        })
 
-        comments_html = ""
-        for author, content, created in comments:
-            comments_html += f"""
-            <div class="comment">
-              <div class="muted">{esc(author)} · {esc(created)}</div>
-              <div>{esc(content)}</div>
-            </div>
-            """
-
-        status_form = ""
-        if is_admin():
-            status_form = f"""
-            <section class="card">
-              <h3>Zmień status</h3>
-              <form method="post" action="/tickets/{tid}/status">
-                {sid_hidden(sid)}
-                <label>Status</label>
-                <select name="status">{options(STATUSES, status)}</select>
-                <button type="submit">Zapisz status</button>
-              </form>
-            </section>
-            """
-
-        content = f"""
-        <section class="card">
-          <a class="btn btn-secondary" href="{path_with_sid('/', sid)}">← Powrót</a>
-          <h2>#{tid} · {esc(title)}</h2>
-          <p class="muted">Utworzono: {esc(created_at)} · Aktualizacja: {esc(updated_at)}</p>
-
-          <p><strong>Status:</strong> <span class="pill">{esc(status)}</span></p>
-          <p><strong>Priorytet:</strong> <span class="pill priority-{esc(priority)}">{esc(priority)}</span></p>
-          <p><strong>Kategoria:</strong> {esc(category)}</p>
-          <p><strong>Zgłaszający:</strong> {esc(requester_name)} · {esc(requester_email)}</p>
-          <p><strong>Dział:</strong> {esc(department)}</p>
-
-          <h3>Opis</h3>
-          <p>{esc(description)}</p>
-        </section>
-
-        {status_form}
-
-        <section class="card">
-          <h3>Komentarze</h3>
-          {comments_html if comments_html else "<p class='muted'>Brak komentarzy.</p>"}
-          <form method="post" action="/tickets/{tid}/comments">
-            {sid_hidden(sid)}
-            <label>Komentarz</label>
-            <textarea name="content" required></textarea>
-            <button type="submit">Dodaj komentarz</button>
-          </form>
-        </section>
-        """
-
-        return Response(layout(content), mimetype="text/html")
-
-
-    @app.post("/tickets/<int:ticket_id>/status")
-    @login_required
-    def update_status(ticket_id):
-        if not is_admin():
-            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
-
-        sid = request_sid()
-        status = request.form.get("status", "Nowe")
+    @app.post("/api/tickets/<int:ticket_id>/status")
+    @api_login_required
+    def api_update_status(user, ticket_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        status = clean(payload.get("status")) or "Nowe"
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("""
-            UPDATE tickets
-            SET status = %s, updated_at = NOW()
-            WHERE id = %s
-        """, (status, ticket_id))
+        cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
         conn.commit()
         cur.close()
         conn.close()
-        return redirect(path_with_sid(f"/tickets/{ticket_id}", sid))
+        return jsonify({"status": "ok"})
 
-
-    @app.post("/tickets/<int:ticket_id>/comments")
-    @login_required
-    def add_comment(ticket_id):
-        if not can_view_ticket(ticket_id):
-            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
-
-        user = current_user()
-        sid = user["sid"]
-        content = request.form.get("content", "").strip()
-
-        if content:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO comments (ticket_id, author, content)
-                VALUES (%s, %s, %s)
-            """, (ticket_id, user["name"], content))
-            cur.execute("""
-                UPDATE tickets
-                SET updated_at = NOW()
-                WHERE id = %s
-            """, (ticket_id,))
-            conn.commit()
-            cur.close()
-            conn.close()
-
-        return redirect(path_with_sid(f"/tickets/{ticket_id}", sid))
+    @app.post("/api/tickets/<int:ticket_id>/comments")
+    @api_login_required
+    def api_add_comment(user, ticket_id):
+        if not can_view_ticket(user, ticket_id):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        content = clean(payload.get("content"))
+        if not content:
+            return jsonify({"error": "content is required"}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO comments (ticket_id, author, content)
+            VALUES (%s, %s, %s)
+        """, (ticket_id, user["name"], content))
+        cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
