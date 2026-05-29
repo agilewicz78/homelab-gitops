@@ -1,0 +1,12 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: helpdesk-lab-local
+  namespace: helpdesk
+spec:
+  secretName: helpdesk-lab-local-tls
+  dnsNames:
+    - helpdesk.lab.local
+  issuerRef:
+    name: lab-local-ca-issuer
+    kind: ClusterIssuer

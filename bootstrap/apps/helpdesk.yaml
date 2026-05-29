@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: helpdesk
+  namespace: argocd
+spec:
+  project: homelab-apps
+
+  source:
+    repoURL: https://github.com/agilewicz78/homelab-gitops.git
+    targetRevision: main
+    path: applications/helpdesk
+    directory:
+      recurse: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: helpdesk
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

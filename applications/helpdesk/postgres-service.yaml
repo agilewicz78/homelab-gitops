@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: helpdesk-postgres
+  namespace: helpdesk
+spec:
+  selector:
+    app: helpdesk-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432

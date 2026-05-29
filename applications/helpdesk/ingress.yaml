@@ -1,0 +1,22 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: helpdesk
+  namespace: helpdesk
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - helpdesk.lab.local
+      secretName: helpdesk-lab-local-tls
+  rules:
+    - host: helpdesk.lab.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: helpdesk
+                port:
+                  number: 80

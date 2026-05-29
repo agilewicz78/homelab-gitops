@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: helpdesk
+  namespace: helpdesk
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: helpdesk
+  template:
+    metadata:
+      labels:
+        app: helpdesk
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+      initContainers:
+        - name: install-deps
+          image: python:3.12-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              python -m venv /venv
+              /venv/bin/pip install --no-cache-dir flask gunicorn psycopg2-binary
+          volumeMounts:
+            - name: venv
+              mountPath: /venv
+      containers:
+        - name: helpdesk
+          image: python:3.12-slim
+          command:
+            - /bin/sh
+            - -c
+            - |
+              /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 2 app:app
+          workingDir: /app
+          ports:
+            - containerPort: 8080
+          env:
+            - name: DB_HOST
+              value: helpdesk-postgres
+            - name: DB_PORT
+              value: "5432"
+          envFrom:
+            - secretRef:
+                name: helpdesk-db-secret
+          volumeMounts:
+            - name: app
+              mountPath: /app/app.py
+              subPath: app.py
+              readOnly: true
+            - name: venv
+              mountPath: /venv
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: app
+          configMap:
+            name: helpdesk-app
+        - name: venv
+          emptyDir: {}
