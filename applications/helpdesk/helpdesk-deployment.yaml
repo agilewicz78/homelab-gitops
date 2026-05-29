@@ -6,7 +6,7 @@ metadata:
   name: helpdesk
   namespace: helpdesk
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: helpdesk
@@ -28,7 +28,7 @@ spec:
             - -c
             - |
               python -m venv /venv
-              /venv/bin/pip install --no-cache-dir flask gunicorn psycopg2-binary
+              /venv/bin/pip install --no-cache-dir flask gunicorn psycopg2-binary flask-sock
           volumeMounts:
             - name: venv
               mountPath: /venv
@@ -39,7 +39,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 2 app:app
+              /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 50 app:app
           workingDir: /app
           ports:
             - containerPort: 8080

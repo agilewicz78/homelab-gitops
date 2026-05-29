@@ -9,13 +9,19 @@ data:
     import time
     import html
     import uuid
+    import json
     import psycopg2
     from functools import wraps
     from flask import Flask, request, redirect, Response, jsonify
+    from flask_sock import Sock
     from werkzeug.security import generate_password_hash, check_password_hash
 
     app = Flask(__name__)
     app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
+    sock = Sock(app)
+    active_ws_clients = set()
+    last_live_event = {"type": "system", "message": "System gotowy", "ticket_id": None}
+
 
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
@@ -309,6 +315,15 @@ data:
     def is_admin(user):
         return bool(user and user.get("role") == "admin")
 
+    def publish_event(message, event_type="info", ticket_id=None):
+        global last_live_event
+        last_live_event = {
+            "type": event_type,
+            "message": message,
+            "ticket_id": ticket_id,
+            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
     def api_admin_required(fn):
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
@@ -423,6 +438,12 @@ data:
       .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
       .error { color: #fecaca; }
       .success { color: #bbf7d0; }
+      .live-panel { border: 1px solid var(--border); border-radius: 18px; padding: 12px 14px; background: rgba(15,23,42,.65); color: var(--muted); min-width: 280px; }
+      .live-panel .live-row { display:flex; justify-content:space-between; gap:12px; margin:4px 0; }
+      .live-panel .live-value { color: var(--text); font-weight: 800; }
+      .live-panel .ws-connected { color: #22c55e; }
+      .live-panel .ws-disconnected { color: #ef4444; }
+      .header-actions { display:flex; flex-direction:column; gap:10px; align-items:flex-end; }
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
     """
@@ -443,7 +464,15 @@ data:
             <h1>INCoprp Helpdesk</h1>
             <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
           </div>
-          <div id="userBadge" class="badge">Ładowanie...</div>
+          <div class="header-actions">
+            <div id="userBadge" class="badge">Ładowanie...</div>
+            <div id="livePanel" class="live-panel">
+              <div class="live-row"><span>WebSocket</span><span id="wsStatus" class="live-value ws-disconnected">disconnected</span></div>
+              <div class="live-row"><span>Aktywni</span><span id="wsClients" class="live-value">-</span></div>
+              <div class="live-row"><span>Czas serwera</span><span id="wsTime" class="live-value">-</span></div>
+              <div class="live-row"><span>Ostatnie zdarzenie</span><span id="wsEvent" class="live-value">-</span></div>
+            </div>
+          </div>
         </header>
         <div id="app"></div>
       </main>
@@ -451,6 +480,12 @@ data:
       <script>
         const appEl = document.getElementById("app");
         const userBadge = document.getElementById("userBadge");
+        const wsStatus = document.getElementById("wsStatus");
+        const wsClients = document.getElementById("wsClients");
+        const wsTime = document.getElementById("wsTime");
+        const wsEvent = document.getElementById("wsEvent");
+        let liveSocket = null;
+        let liveReconnectTimer = null;
 
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
@@ -485,6 +520,57 @@ data:
             .replace(/[^a-zA-Z0-9]+/g, "-")
             .replace(/^-|-$/g, "");
         }}
+        function setWsStatus(text, connected) {{
+          wsStatus.textContent = text;
+          wsStatus.className = connected ? "live-value ws-connected" : "live-value ws-disconnected";
+        }}
+
+        function connectLive() {{
+          const sid = getSid();
+          if (!sid) return;
+          if (liveSocket && (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING)) return;
+
+          const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+          liveSocket = new WebSocket(`${{scheme}}://${{window.location.host}}/ws`);
+          setWsStatus("connecting", false);
+
+          liveSocket.onopen = () => {{
+            setWsStatus("connected", true);
+            liveSocket.send(JSON.stringify({{ type: "auth", sid }}));
+          }};
+
+          liveSocket.onmessage = (event) => {{
+            const data = JSON.parse(event.data);
+            wsClients.textContent = data.active_clients ?? "-";
+            wsTime.textContent = data.server_time ?? "-";
+            wsEvent.textContent = data.event?.message || data.message || "-";
+          }};
+
+          liveSocket.onclose = () => {{
+            setWsStatus("disconnected", false);
+            if (getSid()) {{
+              clearTimeout(liveReconnectTimer);
+              liveReconnectTimer = setTimeout(connectLive, 2000);
+            }}
+          }};
+
+          liveSocket.onerror = () => {{
+            try {{ liveSocket.close(); }} catch (e) {{}}
+          }};
+        }}
+
+        function disconnectLive() {{
+          clearTimeout(liveReconnectTimer);
+          if (liveSocket) {{
+            try {{ liveSocket.close(); }} catch (e) {{}}
+          }}
+          liveSocket = null;
+          setWsStatus("disconnected", false);
+          wsClients.textContent = "-";
+          wsTime.textContent = "-";
+          wsEvent.textContent = "-";
+        }}
+
         function loadStatusFilters() {{
           try {{ return JSON.parse(sessionStorage.getItem("helpdesk_status_filters") || "[]"); }}
           catch {{ return []; }}
@@ -509,12 +595,14 @@ data:
           const data = await res.json();
           const adminLink = data.role === "admin" ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
           userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          connectLive();
           return data;
         }}
 
         async function logout() {{
           await api("/api/logout", {{ method: "POST" }});
           clearSid();
+          disconnectLive();
           window.location.href = "/login";
         }}
 
@@ -1006,6 +1094,39 @@ data:
     </html>
     """
 
+    @sock.route("/ws")
+    def websocket(ws):
+        client_id = id(ws)
+        user = None
+        try:
+            raw = ws.receive()
+            auth = json.loads(raw or "{}")
+            sid = clean(auth.get("sid"))
+            user = get_user_by_sid(sid)
+            if not user:
+                ws.send(json.dumps({"error": "unauthorized"}))
+                return
+
+            active_ws_clients.add(client_id)
+            publish_event(f"{user['name']} połączony z live helpdesk", "presence")
+
+            while True:
+                ws.send(json.dumps({
+                    "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                    "active_clients": len(active_ws_clients),
+                    "user": {
+                        "name": user["name"],
+                        "email": user["email"],
+                        "role": user["role"],
+                    },
+                    "event": last_live_event,
+                }))
+                time.sleep(2)
+        except Exception:
+            pass
+        finally:
+            active_ws_clients.discard(client_id)
+
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
@@ -1459,6 +1580,7 @@ data:
         conn.commit()
         cur.close()
         conn.close()
+        publish_event(f"{user['name']} utworzył zgłoszenie #{ticket_id}: {title}", "ticket_created", ticket_id)
         return jsonify({"id": ticket_id}), 201
 
     def can_view_ticket(user, ticket_id):
@@ -1538,6 +1660,7 @@ data:
         conn.commit()
         cur.close()
         conn.close()
+        publish_event(f"{user['name']} zmienił status zgłoszenia #{ticket_id} na {status}", "status_changed", ticket_id)
         return jsonify({"status": "ok"})
 
     @app.post("/api/tickets/<int:ticket_id>/comments")
@@ -1559,4 +1682,5 @@ data:
         conn.commit()
         cur.close()
         conn.close()
+        publish_event(f"{user['name']} dodał komentarz do zgłoszenia #{ticket_id}", "comment_added", ticket_id)
         return jsonify({"status": "ok"})
