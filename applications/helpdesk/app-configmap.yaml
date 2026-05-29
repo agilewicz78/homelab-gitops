@@ -8,13 +8,15 @@ data:
     import os
     import time
     import html
-    import psycopg2
+    import uuid
     from functools import wraps
-    from flask import Flask, request, redirect, Response, session
+    from urllib.parse import quote
+
+    import psycopg2
+    from flask import Flask, request, redirect, Response
     from werkzeug.security import generate_password_hash, check_password_hash
 
     app = Flask(__name__)
-    app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
@@ -51,12 +53,7 @@ data:
         "Inne",
     ]
 
-    PRIORITIES = [
-        "Niski",
-        "Normalny",
-        "Wysoki",
-        "Krytyczny",
-    ]
+    PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
 
     STATUSES = [
         "Nowe",
@@ -141,6 +138,7 @@ data:
         ),
     ]
 
+
     def get_conn():
         return psycopg2.connect(
             host=DB_HOST,
@@ -149,6 +147,7 @@ data:
             user=DB_USER,
             password=DB_PASSWORD,
         )
+
 
     def init_db():
         for _ in range(40):
@@ -194,8 +193,16 @@ data:
                     );
                 """)
 
-                password_hash = generate_password_hash(INITIAL_PASSWORD)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS user_sessions (
+                        sid TEXT PRIMARY KEY,
+                        user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        last_seen TIMESTAMP DEFAULT NOW()
+                    );
+                """)
 
+                password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for full_name, email, department, role in SEED_USERS:
                     cur.execute("""
                         INSERT INTO users (full_name, email, department, role, password_hash)
@@ -205,7 +212,6 @@ data:
 
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
-
                 if count == 0:
                     for ticket in SEED_TICKETS:
                         cur.execute("""
@@ -232,10 +238,13 @@ data:
 
         raise RuntimeError("Database unavailable")
 
+
     init_db()
+
 
     def esc(value):
         return html.escape(str(value or ""))
+
 
     def options(values, selected=None):
         result = ""
@@ -244,15 +253,58 @@ data:
             result += f'<option value="{esc(value)}"{selected_attr}>{esc(value)}</option>'
         return result
 
+
+    def request_sid():
+        sid = request.values.get("sid") or request.args.get("sid")
+        return sid.strip() if sid else ""
+
+
+    def sid_qs(sid):
+        return f"?sid={quote(sid)}" if sid else ""
+
+
+    def sid_hidden(sid):
+        return f'<input type="hidden" name="sid" value="{esc(sid)}">' if sid else ""
+
+
+    def path_with_sid(path, sid):
+        return f"{path}{sid_qs(sid)}"
+
+
     def current_user():
-        if "user_email" not in session:
+        sid = request_sid()
+        if not sid:
             return None
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.full_name, u.email, u.department, u.role
+            FROM user_sessions s
+            JOIN users u ON u.email = s.user_email
+            WHERE s.sid = %s
+        """, (sid,))
+        row = cur.fetchone()
+
+        if row:
+            cur.execute("UPDATE user_sessions SET last_seen = NOW() WHERE sid = %s", (sid,))
+            conn.commit()
+
+        cur.close()
+        conn.close()
+
+        if not row:
+            return None
+
+        full_name, email, department, role = row
         return {
-            "email": session.get("user_email"),
-            "name": session.get("user_name"),
-            "department": session.get("user_department"),
-            "role": session.get("user_role"),
+            "sid": sid,
+            "name": full_name,
+            "email": email,
+            "department": department,
+            "role": role,
         }
+
 
     def login_required(fn):
         @wraps(fn)
@@ -262,19 +314,22 @@ data:
             return fn(*args, **kwargs)
         return wrapper
 
+
     def is_admin():
         user = current_user()
         return bool(user and user["role"] == "admin")
 
+
     def layout(content):
         user = current_user()
+        sid = request_sid()
 
         if user:
             nav = f"""
               <div class="badge">
                 Zalogowany: <strong>{esc(user["name"])}</strong>
                 · {esc(user["department"])}
-                · <a href="/logout">Wyloguj</a>
+                · <a href="{path_with_sid('/logout', sid)}">Wyloguj</a>
               </div>
             """
         else:
@@ -483,9 +538,11 @@ data:
         </html>
         """
 
+
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
+
 
     @app.get("/login")
     def login_form():
@@ -503,17 +560,22 @@ data:
             <label>Hasło</label>
             <input name="password" type="password" required placeholder="Incoprp123!">
 
-            <button type="submit">Zaloguj</button>
+            <button type="submit">Zaloguj w nowej sesji tej karty</button>
           </form>
 
           <p class="muted">
             Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
             admin@incoprp.local. Hasło startowe: Incoprp123!
           </p>
+          <p class="muted">
+            Każde logowanie tworzy osobny identyfikator <code>sid</code> w adresie URL,
+            więc w kilku kartach tej samej przeglądarki mogą działać różni użytkownicy jednocześnie.
+          </p>
         </section>
         """
 
         return Response(layout(content), mimetype="text/html")
+
 
     @app.post("/login")
     def login_submit():
@@ -528,33 +590,49 @@ data:
             WHERE lower(email) = %s
         """, (email,))
         user = cur.fetchone()
-        cur.close()
-        conn.close()
 
         if not user:
+            cur.close()
+            conn.close()
             return redirect("/login?error=1")
 
         full_name, user_email, department, role, password_hash = user
 
         if not check_password_hash(password_hash, password):
+            cur.close()
+            conn.close()
             return redirect("/login?error=1")
 
-        session["user_name"] = full_name
-        session["user_email"] = user_email
-        session["user_department"] = department
-        session["user_role"] = role
+        sid = str(uuid.uuid4())
+        cur.execute("""
+            INSERT INTO user_sessions (sid, user_email)
+            VALUES (%s, %s)
+        """, (sid, user_email))
+        conn.commit()
+        cur.close()
+        conn.close()
 
-        return redirect("/")
+        return redirect(path_with_sid("/", sid))
+
 
     @app.get("/logout")
     def logout():
-        session.clear()
+        sid = request_sid()
+        if sid:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("DELETE FROM user_sessions WHERE sid = %s", (sid,))
+            conn.commit()
+            cur.close()
+            conn.close()
         return redirect("/login")
+
 
     @app.get("/")
     @login_required
     def index():
         user = current_user()
+        sid = user["sid"]
 
         conn = get_conn()
         cur = conn.cursor()
@@ -596,7 +674,7 @@ data:
             table_rows += f"""
             <tr>
               <td>#{ticket_id}</td>
-              <td><a class="ticket-title" href="/tickets/{ticket_id}">{esc(title)}</a></td>
+              <td><a class="ticket-title" href="{path_with_sid(f'/tickets/{ticket_id}', sid)}">{esc(title)}</a></td>
               <td>{esc(requester)}<br><span class="muted">{esc(department)}</span></td>
               <td>{esc(category)}</td>
               <td><span class="pill {esc(priority_class)}">{esc(priority)}</span></td>
@@ -617,7 +695,7 @@ data:
         </section>
 
         <section class="card">
-          <a class="btn" href="/tickets/new">Nowe zgłoszenie</a>
+          <a class="btn" href="{path_with_sid('/tickets/new', sid)}">Nowe zgłoszenie</a>
         </section>
 
         <section class="card">
@@ -643,15 +721,19 @@ data:
 
         return Response(layout(content), mimetype="text/html")
 
+
     @app.get("/tickets/new")
     @login_required
     def new_ticket():
         user = current_user()
+        sid = user["sid"]
 
         content = f"""
         <section class="card">
           <h2>Nowe zgłoszenie</h2>
           <form method="post" action="/tickets">
+            {sid_hidden(sid)}
+
             <label>Tytuł problemu</label>
             <input name="title" required placeholder="Np. Outlook nie odbiera poczty">
 
@@ -661,18 +743,18 @@ data:
             <div class="grid">
               <div>
                 <label>Zgłaszający</label>
-                <input value="{esc(user["name"])}" disabled>
+                <input value="{esc(user['name'])}" disabled>
               </div>
               <div>
                 <label>E-mail</label>
-                <input value="{esc(user["email"])}" disabled>
+                <input value="{esc(user['email'])}" disabled>
               </div>
             </div>
 
             <div class="grid">
               <div>
                 <label>Dział</label>
-                <input value="{esc(user["department"])}" disabled>
+                <input value="{esc(user['department'])}" disabled>
               </div>
               <div>
                 <label>Kategoria</label>
@@ -681,20 +763,22 @@ data:
             </div>
 
             <label>Priorytet</label>
-            <select name="priority">{options(PRIORITIES, "Normalny")}</select>
+            <select name="priority">{options(PRIORITIES, 'Normalny')}</select>
 
             <button type="submit">Utwórz zgłoszenie</button>
-            <a class="btn btn-secondary" href="/">Anuluj</a>
+            <a class="btn btn-secondary" href="{path_with_sid('/', sid)}">Anuluj</a>
           </form>
         </section>
         """
 
         return Response(layout(content), mimetype="text/html")
 
+
     @app.post("/tickets")
     @login_required
     def create_ticket():
         user = current_user()
+        sid = user["sid"]
 
         conn = get_conn()
         cur = conn.cursor()
@@ -722,13 +806,17 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-        return redirect("/")
+        return redirect(path_with_sid("/", sid))
+
 
     def can_view_ticket(ticket_id):
+        user = current_user()
+        if not user:
+            return False
+
         if is_admin():
             return True
 
-        user = current_user()
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT requester_email FROM tickets WHERE id = %s", (ticket_id,))
@@ -738,11 +826,15 @@ data:
 
         return bool(row and row[0] == user["email"])
 
+
     @app.get("/tickets/<int:ticket_id>")
     @login_required
     def ticket_detail(ticket_id):
         if not can_view_ticket(ticket_id):
             return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
+
+        user = current_user()
+        sid = user["sid"]
 
         conn = get_conn()
         cur = conn.cursor()
@@ -791,6 +883,7 @@ data:
             <section class="card">
               <h3>Zmień status</h3>
               <form method="post" action="/tickets/{tid}/status">
+                {sid_hidden(sid)}
                 <label>Status</label>
                 <select name="status">{options(STATUSES, status)}</select>
                 <button type="submit">Zapisz status</button>
@@ -800,7 +893,7 @@ data:
 
         content = f"""
         <section class="card">
-          <a class="btn btn-secondary" href="/">← Powrót</a>
+          <a class="btn btn-secondary" href="{path_with_sid('/', sid)}">← Powrót</a>
           <h2>#{tid} · {esc(title)}</h2>
           <p class="muted">Utworzono: {esc(created_at)} · Aktualizacja: {esc(updated_at)}</p>
 
@@ -820,6 +913,7 @@ data:
           <h3>Komentarze</h3>
           {comments_html if comments_html else "<p class='muted'>Brak komentarzy.</p>"}
           <form method="post" action="/tickets/{tid}/comments">
+            {sid_hidden(sid)}
             <label>Komentarz</label>
             <textarea name="content" required></textarea>
             <button type="submit">Dodaj komentarz</button>
@@ -829,12 +923,14 @@ data:
 
         return Response(layout(content), mimetype="text/html")
 
+
     @app.post("/tickets/<int:ticket_id>/status")
     @login_required
     def update_status(ticket_id):
         if not is_admin():
             return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
 
+        sid = request_sid()
         status = request.form.get("status", "Nowe")
         conn = get_conn()
         cur = conn.cursor()
@@ -846,7 +942,8 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-        return redirect(f"/tickets/{ticket_id}")
+        return redirect(path_with_sid(f"/tickets/{ticket_id}", sid))
+
 
     @app.post("/tickets/<int:ticket_id>/comments")
     @login_required
@@ -855,6 +952,7 @@ data:
             return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
 
         user = current_user()
+        sid = user["sid"]
         content = request.form.get("content", "").strip()
 
         if content:
@@ -873,4 +971,4 @@ data:
             cur.close()
             conn.close()
 
-        return redirect(f"/tickets/{ticket_id}")
+        return redirect(path_with_sid(f"/tickets/{ticket_id}", sid))
