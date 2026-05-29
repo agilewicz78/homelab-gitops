@@ -280,6 +280,14 @@ data:
     def is_admin(user):
         return bool(user and user.get("role") == "admin")
 
+    def api_admin_required(fn):
+        @wraps(fn)
+        def wrapper(user, *args, **kwargs):
+            if not is_admin(user):
+                return jsonify({"error": "admin required"}), 403
+            return fn(user, *args, **kwargs)
+        return wrapper
+
     def public_html(body):
         return f"""
         <!doctype html>
@@ -354,6 +362,9 @@ data:
       .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
       button, .btn { display: inline-block; margin-top: 14px; border: 0; border-radius: 14px; padding: 12px 18px; font-weight: 700; color: white; background: linear-gradient(135deg, #0284c7, #22c55e); cursor: pointer; text-decoration: none; }
       .btn-secondary { background: rgba(31,41,55,.9); border: 1px solid var(--border); }
+      .btn-danger { background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.45); color: #fecaca; }
+      .btn-small { margin-top: 0; padding: 8px 11px; border-radius: 10px; font-size: 13px; }
+      .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
       .status-filter-btn { margin-top: 0; color: var(--muted); transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
       .status-filter-btn:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text); }
       .status-filter-btn.active { color: white; background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
@@ -458,7 +469,8 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a> · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          const adminLink = data.role === "admin" ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           return data;
         }}
 
@@ -549,6 +561,175 @@ data:
           }});
         }}
 
+        async function renderAdminUsers() {{
+          const me = await loadMe();
+          if (!me) return;
+          if (me.role !== "admin") {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Tylko administrator może zarządzać użytkownikami.</p></section>`;
+            return;
+          }}
+
+          const res = await api("/api/admin/users");
+          if (!res) return;
+          if (!res.ok) {{ appEl.innerHTML = `<section class="card"><h2>Błąd pobierania użytkowników</h2></section>`; return; }}
+          const data = await res.json();
+
+          const rows = data.users.map(u => `
+            <tr>
+              <td><strong>${{esc(u.full_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
+              <td>${{esc(u.department)}}</td>
+              <td><span class="pill">${{esc(u.role)}}</span></td>
+              <td class="muted">${{esc(u.created_at)}}</td>
+              <td>
+                <div class="actions">
+                  <button class="btn-secondary btn-small" onclick="renderAdminUserForm('${{encodeURIComponent(u.email)}}')">Edytuj</button>
+                  <button class="btn-secondary btn-small" onclick="renderAdminPasswordForm('${{encodeURIComponent(u.email)}}')">Hasło</button>
+                  <button class="btn-danger btn-small" onclick="deleteAdminUser('${{encodeURIComponent(u.email)}}')">Usuń</button>
+                </div>
+              </td>
+            </tr>`).join("");
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
+              <h2>Zarządzanie użytkownikami</h2>
+              <p class="muted">Panel administratora: dodawanie użytkowników, edycja profilu, reset hasła i usuwanie kont.</p>
+              <button onclick="renderAdminUserForm()">Dodaj użytkownika</button>
+            </section>
+            <section class="card">
+              <h3>Użytkownicy INCoprp</h3>
+              <table>
+                <thead><tr><th>Użytkownik</th><th>Dział</th><th>Rola</th><th>Utworzono</th><th>Akcje</th></tr></thead>
+                <tbody>${{rows}}</tbody>
+              </table>
+            </section>`;
+        }}
+
+        async function renderAdminUserForm(encodedEmail = null) {{
+          const me = await loadMe();
+          if (!me || me.role !== "admin") return;
+          const metaRes = await api("/api/meta");
+          const meta = await metaRes.json();
+
+          let user = {{ full_name: "", email: "", department: meta.departments[0], role: "user" }};
+          const editing = !!encodedEmail;
+
+          if (editing) {{
+            const email = decodeURIComponent(encodedEmail);
+            const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`);
+            if (!res || !res.ok) {{ alert("Nie udało się pobrać użytkownika."); return; }}
+            user = await res.json();
+          }}
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminUsers()">← Użytkownicy</button>
+              <h2>${{editing ? "Edytuj użytkownika" : "Dodaj użytkownika"}}</h2>
+              <p id="adminUserMessage" class="success hidden">Zapisano użytkownika.</p>
+              <p id="adminUserError" class="error hidden">Nie udało się zapisać użytkownika.</p>
+              <form id="adminUserForm">
+                <label>Imię i nazwisko</label>
+                <input name="full_name" value="${{esc(user.full_name)}}" required>
+
+                <label>E-mail</label>
+                <input name="email" type="email" value="${{esc(user.email)}}" ${{editing ? "disabled" : "required"}} placeholder="jan.kowalski@incoprp.local">
+
+                <label>Dział</label>
+                <select name="department">${{meta.departments.map(x => `<option ${{x === user.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
+
+                <label>Rola</label>
+                <select name="role">
+                  <option value="user" ${{user.role === "user" ? "selected" : ""}}>user</option>
+                  <option value="admin" ${{user.role === "admin" ? "selected" : ""}}>admin</option>
+                </select>
+
+                ${{editing ? "" : `
+                  <label>Hasło startowe</label>
+                  <input name="password" type="password" minlength="8" required placeholder="minimum 8 znaków">
+                `}}
+
+                <button type="submit">Zapisz</button>
+                <button type="button" class="btn-secondary" onclick="renderAdminUsers()">Anuluj</button>
+              </form>
+            </section>`;
+
+          document.getElementById("adminUserForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const payload = Object.fromEntries(new FormData(e.target).entries());
+            const endpoint = editing ? `/api/admin/users/${{encodeURIComponent(user.email)}}` : "/api/admin/users";
+            const method = editing ? "PUT" : "POST";
+            const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
+            const msg = document.getElementById("adminUserMessage");
+            const err = document.getElementById("adminUserError");
+            msg.classList.add("hidden");
+            err.classList.add("hidden");
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              err.textContent = data.error || "Nie udało się zapisać użytkownika.";
+              err.classList.remove("hidden");
+              return;
+            }}
+            msg.classList.remove("hidden");
+            setTimeout(renderAdminUsers, 500);
+          }});
+        }}
+
+        async function renderAdminPasswordForm(encodedEmail) {{
+          const me = await loadMe();
+          if (!me || me.role !== "admin") return;
+          const email = decodeURIComponent(encodedEmail);
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminUsers()">← Użytkownicy</button>
+              <h2>Reset hasła</h2>
+              <p class="muted">Ustaw nowe hasło dla konta: <strong>${{esc(email)}}</strong></p>
+              <p id="adminPasswordMessage" class="success hidden">Hasło zostało zmienione.</p>
+              <p id="adminPasswordError" class="error hidden">Nie udało się zmienić hasła.</p>
+              <form id="adminPasswordForm">
+                <label>Nowe hasło</label>
+                <input name="new_password" type="password" minlength="8" required>
+                <label>Powtórz nowe hasło</label>
+                <input name="confirm_password" type="password" minlength="8" required>
+                <button type="submit">Zmień hasło</button>
+                <button type="button" class="btn-secondary" onclick="renderAdminUsers()">Anuluj</button>
+              </form>
+            </section>`;
+          document.getElementById("adminPasswordForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const payload = Object.fromEntries(new FormData(e.target).entries());
+            const msg = document.getElementById("adminPasswordMessage");
+            const err = document.getElementById("adminPasswordError");
+            msg.classList.add("hidden");
+            err.classList.add("hidden");
+            if (payload.new_password !== payload.confirm_password) {{
+              err.textContent = "Hasła nie są takie same.";
+              err.classList.remove("hidden");
+              return;
+            }}
+            const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}/password`, {{ method: "POST", body: JSON.stringify(payload) }});
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              err.textContent = data.error || "Nie udało się zmienić hasła.";
+              err.classList.remove("hidden");
+              return;
+            }}
+            e.target.reset();
+            msg.classList.remove("hidden");
+          }});
+        }}
+
+        async function deleteAdminUser(encodedEmail) {{
+          const email = decodeURIComponent(encodedEmail);
+          if (!confirm(`Usunąć użytkownika ${{email}}? Tej operacji nie można cofnąć.`)) return;
+          const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`, {{ method: "DELETE" }});
+          if (!res || !res.ok) {{
+            const data = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(data.error || "Nie udało się usunąć użytkownika.");
+            return;
+          }}
+          await renderAdminUsers();
+        }}
+
         async function renderHome(statusFilters = loadStatusFilters()) {{
           const me = await loadMe();
           if (!me) return;
@@ -589,6 +770,7 @@ data:
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
+              ${{me.role === "admin" ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
               <div style="margin-top:16px">
                 <strong>Filtry statusów:</strong>
                 <div class="status-filter-actions">${{statusButtons}}</div>
@@ -896,6 +1078,200 @@ data:
         cur.close()
         conn.close()
 
+        return jsonify({"status": "ok"})
+
+    @app.get("/api/admin/users")
+    @api_login_required
+    @api_admin_required
+    def api_admin_users(user):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT full_name, email, department, role, created_at
+            FROM users
+            ORDER BY lower(full_name), lower(email)
+        """)
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({
+            "users": [
+                {
+                    "full_name": r[0],
+                    "email": r[1],
+                    "department": r[2],
+                    "role": r[3],
+                    "created_at": str(r[4]),
+                }
+                for r in rows
+            ]
+        })
+
+    @app.get("/api/admin/users/<path:email>")
+    @api_login_required
+    @api_admin_required
+    def api_admin_get_user(user, email):
+        email = clean(email).lower()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT full_name, email, department, role, created_at
+            FROM users
+            WHERE lower(email) = %s
+        """, (email,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        if not row:
+            return jsonify({"error": "user not found"}), 404
+        return jsonify({
+            "full_name": row[0],
+            "email": row[1],
+            "department": row[2],
+            "role": row[3],
+            "created_at": str(row[4]),
+        })
+
+    @app.post("/api/admin/users")
+    @api_login_required
+    @api_admin_required
+    def api_admin_create_user(user):
+        payload = request.get_json(silent=True) or {}
+        full_name = clean(payload.get("full_name"))
+        email = clean(payload.get("email")).lower()
+        department = clean(payload.get("department"))
+        role = clean(payload.get("role")) or "user"
+        password = str(payload.get("password") or "")
+
+        if not full_name or not email:
+            return jsonify({"error": "Imię i nazwisko oraz e-mail są wymagane."}), 400
+        if department not in DEPARTMENTS:
+            return jsonify({"error": "Nieprawidłowy dział."}), 400
+        if role not in ("user", "admin"):
+            return jsonify({"error": "Nieprawidłowa rola."}), 400
+        if len(password) < 8:
+            return jsonify({"error": "Hasło musi mieć co najmniej 8 znaków."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (email,))
+        if cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Użytkownik o takim adresie e-mail już istnieje."}), 409
+
+        cur.execute("""
+            INSERT INTO users (full_name, email, department, role, password_hash)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (full_name, email, department, role, generate_password_hash(password)))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"}), 201
+
+    @app.put("/api/admin/users/<path:email>")
+    @api_login_required
+    @api_admin_required
+    def api_admin_update_user(user, email):
+        target_email = clean(email).lower()
+        payload = request.get_json(silent=True) or {}
+        full_name = clean(payload.get("full_name"))
+        department = clean(payload.get("department"))
+        role = clean(payload.get("role")) or "user"
+
+        if not full_name:
+            return jsonify({"error": "Imię i nazwisko jest wymagane."}), 400
+        if department not in DEPARTMENTS:
+            return jsonify({"error": "Nieprawidłowy dział."}), 400
+        if role not in ("user", "admin"):
+            return jsonify({"error": "Nieprawidłowa rola."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
+
+        old_role = row[0]
+        if target_email == user["email"].lower() and old_role == "admin" and role != "admin":
+            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            admin_count = cur.fetchone()[0]
+            if admin_count <= 1:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Nie można odebrać roli ostatniemu administratorowi."}), 400
+
+        cur.execute("""
+            UPDATE users
+            SET full_name = %s, department = %s, role = %s
+            WHERE lower(email) = %s
+        """, (full_name, department, role, target_email))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
+
+    @app.post("/api/admin/users/<path:email>/password")
+    @api_login_required
+    @api_admin_required
+    def api_admin_reset_password(user, email):
+        target_email = clean(email).lower()
+        payload = request.get_json(silent=True) or {}
+        new_password = str(payload.get("new_password") or "")
+        confirm_password = str(payload.get("confirm_password") or "")
+
+        if len(new_password) < 8:
+            return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
+        if new_password != confirm_password:
+            return jsonify({"error": "Nowe hasła nie są takie same."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (target_email,))
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
+        cur.execute("UPDATE users SET password_hash = %s WHERE lower(email) = %s", (generate_password_hash(new_password), target_email))
+        cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
+
+    @app.delete("/api/admin/users/<path:email>")
+    @api_login_required
+    @api_admin_required
+    def api_admin_delete_user(user, email):
+        target_email = clean(email).lower()
+        if target_email == user["email"].lower():
+            return jsonify({"error": "Nie możesz usunąć własnego konta."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
+
+        if row[0] == "admin":
+            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+            admin_count = cur.fetchone()[0]
+            if admin_count <= 1:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Nie można usunąć ostatniego administratora."}), 400
+
+        cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
+        cur.execute("DELETE FROM users WHERE lower(email) = %s", (target_email,))
+        conn.commit()
+        cur.close()
+        conn.close()
         return jsonify({"status": "ok"})
 
     @app.get("/api/meta")
