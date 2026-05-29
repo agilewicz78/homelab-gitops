@@ -1,3 +1,4 @@
+cat > applications/helpdesk/app-configmap.yaml <<'EOF'
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,15 +10,20 @@ data:
     import time
     import html
     import psycopg2
-    from flask import Flask, request, redirect, Response
+    from functools import wraps
+    from flask import Flask, request, redirect, Response, session
+    from werkzeug.security import generate_password_hash, check_password_hash
 
     app = Flask(__name__)
+    app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
 
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("POSTGRES_DB", "helpdeskdb")
     DB_USER = os.getenv("POSTGRES_USER", "helpdeskuser")
     DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
+
+    INITIAL_PASSWORD = "Incoprp123!"
 
     DEPARTMENTS = [
         "HR",
@@ -61,6 +67,16 @@ data:
         "Oczekuje na dostawcę",
         "Rozwiązane",
         "Zamknięte",
+    ]
+
+    SEED_USERS = [
+        ("Anna Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
+        ("Piotr Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
+        ("Magdalena Zielińska", "magdalena.zielinska@incoprp.local", "Sprzedaż", "user"),
+        ("Tomasz Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
+        ("Karolina Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
+        ("Joanna Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
+        ("Helpdesk Admin", "admin@incoprp.local", "IT", "admin"),
     ]
 
     SEED_TICKETS = [
@@ -142,6 +158,18 @@ data:
                 cur = conn.cursor()
 
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS users (
+                        id SERIAL PRIMARY KEY,
+                        full_name TEXT NOT NULL,
+                        email TEXT UNIQUE NOT NULL,
+                        department TEXT NOT NULL,
+                        role TEXT NOT NULL DEFAULT 'user',
+                        password_hash TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS tickets (
                         id SERIAL PRIMARY KEY,
                         title TEXT NOT NULL,
@@ -166,6 +194,15 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
+
+                password_hash = generate_password_hash(INITIAL_PASSWORD)
+
+                for full_name, email, department, role in SEED_USERS:
+                    cur.execute("""
+                        INSERT INTO users (full_name, email, department, role, password_hash)
+                        VALUES (%s, %s, %s, %s, %s)
+                        ON CONFLICT (email) DO NOTHING
+                    """, (full_name, email, department, role, password_hash))
 
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
@@ -208,7 +245,46 @@ data:
             result += f'<option value="{esc(value)}"{selected_attr}>{esc(value)}</option>'
         return result
 
+    def current_user():
+        if "user_email" not in session:
+            return None
+        return {
+            "email": session.get("user_email"),
+            "name": session.get("user_name"),
+            "department": session.get("user_department"),
+            "role": session.get("user_role"),
+        }
+
+    def login_required(fn):
+        @wraps(fn)
+        def wrapper(*args, **kwargs):
+            if not current_user():
+                return redirect("/login")
+            return fn(*args, **kwargs)
+        return wrapper
+
+    def is_admin():
+        user = current_user()
+        return bool(user and user["role"] == "admin")
+
     def layout(content):
+        user = current_user()
+
+        if user:
+            nav = f"""
+              <div class="badge">
+                Zalogowany: <strong>{esc(user["name"])}</strong>
+                · {esc(user["department"])}
+                · <a href="/logout">Wyloguj</a>
+              </div>
+            """
+        else:
+            nav = """
+              <div class="badge">
+                <a href="/login">Zaloguj</a>
+              </div>
+            """
+
         return f"""
         <!doctype html>
         <html lang="pl">
@@ -382,6 +458,10 @@ data:
               background: rgba(31,41,55,.65);
               margin-top: 10px;
             }}
+            .login-box {{
+              width: min(520px, 100%);
+              margin: 0 auto;
+            }}
             @media (max-width: 860px) {{
               header {{ flex-direction: column; }}
               .grid {{ grid-template-columns: 1fr; }}
@@ -396,7 +476,7 @@ data:
                 <h1>INCoprp Helpdesk</h1>
                 <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
               </div>
-              <div class="badge">Status: <strong>online</strong></div>
+              {nav}
             </header>
             {content}
           </main>
@@ -408,12 +488,86 @@ data:
     def healthz():
         return {"status": "ok"}
 
+    @app.get("/login")
+    def login_form():
+        error = request.args.get("error")
+        error_html = "<p class='muted'>Nieprawidłowy e-mail albo hasło.</p>" if error else ""
+
+        content = f"""
+        <section class="card login-box">
+          <h2>Logowanie</h2>
+          {error_html}
+          <form method="post" action="/login">
+            <label>E-mail</label>
+            <input name="email" type="email" required placeholder="anna.kowalska@incoprp.local">
+
+            <label>Hasło</label>
+            <input name="password" type="password" required placeholder="Incoprp123!">
+
+            <button type="submit">Zaloguj</button>
+          </form>
+
+          <p class="muted">
+            Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
+            admin@incoprp.local. Hasło startowe: Incoprp123!
+          </p>
+        </section>
+        """
+
+        return Response(layout(content), mimetype="text/html")
+
+    @app.post("/login")
+    def login_submit():
+        email = request.form.get("email", "").strip().lower()
+        password = request.form.get("password", "")
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT full_name, email, department, role, password_hash
+            FROM users
+            WHERE lower(email) = %s
+        """, (email,))
+        user = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        if not user:
+            return redirect("/login?error=1")
+
+        full_name, user_email, department, role, password_hash = user
+
+        if not check_password_hash(password_hash, password):
+            return redirect("/login?error=1")
+
+        session["user_name"] = full_name
+        session["user_email"] = user_email
+        session["user_department"] = department
+        session["user_role"] = role
+
+        return redirect("/")
+
+    @app.get("/logout")
+    def logout():
+        session.clear()
+        return redirect("/login")
+
     @app.get("/")
+    @login_required
     def index():
+        user = current_user()
+
         conn = get_conn()
         cur = conn.cursor()
 
-        cur.execute("""
+        if is_admin():
+            where_sql = ""
+            where_params = ()
+        else:
+            where_sql = "WHERE requester_email = %s"
+            where_params = (user["email"],)
+
+        cur.execute(f"""
             SELECT
               COUNT(*),
               COUNT(*) FILTER (WHERE status = 'Nowe'),
@@ -421,14 +575,16 @@ data:
               COUNT(*) FILTER (WHERE priority IN ('Wysoki', 'Krytyczny')),
               COUNT(*) FILTER (WHERE status IN ('Rozwiązane', 'Zamknięte'))
             FROM tickets
-        """)
+            {where_sql}
+        """, where_params)
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
 
-        cur.execute("""
+        cur.execute(f"""
             SELECT id, title, requester_name, department, category, priority, status, created_at
             FROM tickets
+            {where_sql}
             ORDER BY id DESC
-        """)
+        """, where_params)
         rows = cur.fetchall()
 
         cur.close()
@@ -450,9 +606,11 @@ data:
             </tr>
             """
 
+        scope_label = "Wszystkie zgłoszenia" if is_admin() else "Moje zgłoszenia"
+
         content = f"""
         <section class="stats">
-          <div class="stat"><div class="num">{total}</div><div class="label">Wszystkie zgłoszenia</div></div>
+          <div class="stat"><div class="num">{total}</div><div class="label">{scope_label}</div></div>
           <div class="stat"><div class="num">{new_count}</div><div class="label">Nowe</div></div>
           <div class="stat"><div class="num">{in_progress}</div><div class="label">W trakcie</div></div>
           <div class="stat"><div class="num">{high_count}</div><div class="label">Wysoki / Krytyczny</div></div>
@@ -464,7 +622,7 @@ data:
         </section>
 
         <section class="card">
-          <h2>Lista zgłoszeń</h2>
+          <h2>{scope_label}</h2>
           <table>
             <thead>
               <tr>
@@ -487,7 +645,10 @@ data:
         return Response(layout(content), mimetype="text/html")
 
     @app.get("/tickets/new")
+    @login_required
     def new_ticket():
+        user = current_user()
+
         content = f"""
         <section class="card">
           <h2>Nowe zgłoszenie</h2>
@@ -500,19 +661,19 @@ data:
 
             <div class="grid">
               <div>
-                <label>Imię i nazwisko</label>
-                <input name="requester_name" required placeholder="Anna Kowalska">
+                <label>Zgłaszający</label>
+                <input value="{esc(user["name"])}" disabled>
               </div>
               <div>
                 <label>E-mail</label>
-                <input name="requester_email" type="email" required placeholder="anna.kowalska@incoprp.local">
+                <input value="{esc(user["email"])}" disabled>
               </div>
             </div>
 
             <div class="grid">
               <div>
                 <label>Dział</label>
-                <select name="department">{options(DEPARTMENTS)}</select>
+                <input value="{esc(user["department"])}" disabled>
               </div>
               <div>
                 <label>Kategoria</label>
@@ -532,7 +693,10 @@ data:
         return Response(layout(content), mimetype="text/html")
 
     @app.post("/tickets")
+    @login_required
     def create_ticket():
+        user = current_user()
+
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -550,9 +714,9 @@ data:
         """, (
             request.form.get("title", "").strip(),
             request.form.get("description", "").strip(),
-            request.form.get("requester_name", "").strip(),
-            request.form.get("requester_email", "").strip(),
-            request.form.get("department", "").strip(),
+            user["name"],
+            user["email"],
+            user["department"],
             request.form.get("category", "").strip(),
             request.form.get("priority", "Normalny").strip(),
         ))
@@ -561,8 +725,26 @@ data:
         conn.close()
         return redirect("/")
 
+    def can_view_ticket(ticket_id):
+        if is_admin():
+            return True
+
+        user = current_user()
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT requester_email FROM tickets WHERE id = %s", (ticket_id,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+
+        return bool(row and row[0] == user["email"])
+
     @app.get("/tickets/<int:ticket_id>")
+    @login_required
     def ticket_detail(ticket_id):
+        if not can_view_ticket(ticket_id):
+            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
+
         conn = get_conn()
         cur = conn.cursor()
 
@@ -604,6 +786,19 @@ data:
             </div>
             """
 
+        status_form = ""
+        if is_admin():
+            status_form = f"""
+            <section class="card">
+              <h3>Zmień status</h3>
+              <form method="post" action="/tickets/{tid}/status">
+                <label>Status</label>
+                <select name="status">{options(STATUSES, status)}</select>
+                <button type="submit">Zapisz status</button>
+              </form>
+            </section>
+            """
+
         content = f"""
         <section class="card">
           <a class="btn btn-secondary" href="/">← Powrót</a>
@@ -620,21 +815,12 @@ data:
           <p>{esc(description)}</p>
         </section>
 
-        <section class="card">
-          <h3>Zmień status</h3>
-          <form method="post" action="/tickets/{tid}/status">
-            <label>Status</label>
-            <select name="status">{options(STATUSES, status)}</select>
-            <button type="submit">Zapisz status</button>
-          </form>
-        </section>
+        {status_form}
 
         <section class="card">
           <h3>Komentarze</h3>
           {comments_html if comments_html else "<p class='muted'>Brak komentarzy.</p>"}
           <form method="post" action="/tickets/{tid}/comments">
-            <label>Autor</label>
-            <input name="author" value="Helpdesk IT">
             <label>Komentarz</label>
             <textarea name="content" required></textarea>
             <button type="submit">Dodaj komentarz</button>
@@ -645,7 +831,11 @@ data:
         return Response(layout(content), mimetype="text/html")
 
     @app.post("/tickets/<int:ticket_id>/status")
+    @login_required
     def update_status(ticket_id):
+        if not is_admin():
+            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
+
         status = request.form.get("status", "Nowe")
         conn = get_conn()
         cur = conn.cursor()
@@ -660,8 +850,12 @@ data:
         return redirect(f"/tickets/{ticket_id}")
 
     @app.post("/tickets/<int:ticket_id>/comments")
+    @login_required
     def add_comment(ticket_id):
-        author = request.form.get("author", "Helpdesk IT").strip()
+        if not can_view_ticket(ticket_id):
+            return Response(layout("<section class='card'><h2>Brak dostępu</h2></section>"), status=403)
+
+        user = current_user()
         content = request.form.get("content", "").strip()
 
         if content:
@@ -670,7 +864,7 @@ data:
             cur.execute("""
                 INSERT INTO comments (ticket_id, author, content)
                 VALUES (%s, %s, %s)
-            """, (ticket_id, author, content))
+            """, (ticket_id, user["name"], content))
             cur.execute("""
                 UPDATE tickets
                 SET updated_at = NOW()
@@ -681,3 +875,4 @@ data:
             conn.close()
 
         return redirect(f"/tickets/{ticket_id}")
+EOF

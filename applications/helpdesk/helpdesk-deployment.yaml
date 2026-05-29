@@ -1,3 +1,5 @@
+
+
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,6 +49,8 @@ spec:
             - name: DB_PORT
               value: "5432"
           envFrom:
+            - secretRef:
+                name: helpdesk-app-secret
             - secretRef:
                 name: helpdesk-db-secret
           volumeMounts:
