@@ -358,6 +358,15 @@ data:
       .status-filter-btn:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text); }
       .status-filter-btn.active { color: white; background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
       .status-filter-btn.active::before { content: "✓ "; }
+      .status-filter-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
+      .status-filter-hint { margin-top:8px; color:var(--muted); font-size:13px; }
+      .status-Nowe { color:#bbf7d0; border-color:rgba(34,197,94,.55); background:rgba(34,197,94,.14); }
+      .status-Otwarte { color:#fed7aa; border-color:rgba(249,115,22,.58); background:rgba(249,115,22,.14); }
+      .status-W-trakcie { color:#bae6fd; border-color:rgba(56,189,248,.55); background:rgba(56,189,248,.14); }
+      .status-Oczekuje-na-uzytkownika { color:#fecaca; border-color:rgba(239,68,68,.58); background:rgba(239,68,68,.14); }
+      .status-Oczekuje-na-dostawce { color:#ddd6fe; border-color:rgba(168,85,247,.58); background:rgba(168,85,247,.14); }
+      .status-Rozwiazane { color:#c7d2fe; border-color:rgba(99,102,241,.55); background:rgba(99,102,241,.14); }
+      .status-Zamkniete { color:#e5e7eb; border-color:rgba(156,163,175,.55); background:rgba(156,163,175,.14); }
       .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; }
       .muted { color: var(--muted); }
       .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
@@ -417,6 +426,32 @@ data:
         }}
 
         function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
+        function statusClass(status) {{
+          return "status-" + String(status || "")
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replaceAll("ł", "l")
+            .replaceAll("Ł", "L")
+            .replace(/[^a-zA-Z0-9]+/g, "-")
+            .replace(/^-|-$/g, "");
+        }}
+        function loadStatusFilters() {{
+          try {{ return JSON.parse(sessionStorage.getItem("helpdesk_status_filters") || "[]"); }}
+          catch {{ return []; }}
+        }}
+        function saveStatusFilters(filters) {{
+          sessionStorage.setItem("helpdesk_status_filters", JSON.stringify(filters));
+        }}
+        function toggleStatusFilter(status) {{
+          const filters = loadStatusFilters();
+          const next = filters.includes(status) ? filters.filter(s => s !== status) : filters.concat([status]);
+          saveStatusFilters(next);
+          renderHome(next);
+        }}
+        function clearStatusFilters() {{
+          saveStatusFilters([]);
+          renderHome([]);
+        }}
 
         async function loadMe() {{
           const res = await api("/api/me");
@@ -432,21 +467,22 @@ data:
           window.location.href = "/login";
         }}
 
-        async function renderHome(statusFilter = sessionStorage.getItem("helpdesk_status_filter") || "") {{
+        async function renderHome(statusFilters = loadStatusFilters()) {{
           const me = await loadMe();
           if (!me) return;
 
-          sessionStorage.setItem("helpdesk_status_filter", statusFilter);
+          const filters = Array.isArray(statusFilters) ? statusFilters : [];
+          saveStatusFilters(filters);
 
-          const query = statusFilter ? `?status=${{encodeURIComponent(statusFilter)}}` : "";
+          const query = filters.length ? `?statuses=${{encodeURIComponent(filters.join(","))}}` : "";
           const res = await api(`/api/tickets${{query}}`);
           if (!res) return;
           const data = await res.json();
           const scope = me.role === "admin" ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
-          const filteredLabel = statusFilter ? ` · status: ${{statusFilter}}` : "";
+          const filteredLabel = filters.length ? ` · statusy: ${{filters.join(", ")}}` : "";
 
-          const statusButtons = [`<button class="btn-secondary status-filter-btn${{statusFilter === "" ? " active" : ""}}" onclick="renderHome('')">Wszystkie</button>`]
-            .concat(data.statuses.map(s => `<button class="btn-secondary status-filter-btn${{s === statusFilter ? " active" : ""}}" onclick="renderHome('${{esc(s)}}')">${{esc(s)}}</button>`))
+          const statusButtons = [`<button class="btn-secondary status-filter-btn${{filters.length === 0 ? " active" : ""}}" onclick="clearStatusFilters()">Wszystkie</button>`]
+            .concat(data.statuses.map(s => `<button class="btn-secondary status-filter-btn ${{statusClass(s)}}${{filters.includes(s) ? " active" : ""}}" onclick="toggleStatusFilter('${{esc(s)}}')">${{esc(s)}}</button>`))
             .join(" ");
 
           const rows = data.tickets.length ? data.tickets.map(t => `
@@ -456,9 +492,9 @@ data:
               <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
               <td>${{esc(t.category)}}</td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
-              <td><span class="pill">${{esc(t.status)}}</span></td>
+              <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
-            </tr>`).join("") : `<tr><td colspan="7" class="muted">Brak zgłoszeń dla wybranego statusu.</td></tr>`;
+            </tr>`).join("") : `<tr><td colspan="7" class="muted">Brak zgłoszeń dla wybranych statusów.</td></tr>`;
 
           appEl.innerHTML = `
             <section class="stats">
@@ -471,8 +507,9 @@ data:
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <div style="margin-top:16px">
-                <strong>Filtr statusu:</strong>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${{statusButtons}}</div>
+                <strong>Filtry statusów:</strong>
+                <div class="status-filter-actions">${{statusButtons}}</div>
+                <div class="status-filter-hint">Możesz zaznaczyć więcej niż jeden status. Kliknij status ponownie, aby go odznaczyć.</div>
               </div>
             </section>
             <section class="card">
@@ -551,7 +588,7 @@ data:
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
               <h2>#${{t.id}} · ${{esc(t.title)}}</h2>
               <p class="muted">Utworzono: ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>
-              <p><strong>Status:</strong> <span class="pill">${{esc(t.status)}}</span></p>
+              <p><strong>Status:</strong> <span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></p>
               <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
               <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
               <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
@@ -733,9 +770,13 @@ data:
     @app.get("/api/tickets")
     @api_login_required
     def api_tickets(user):
-        status_filter = clean(request.args.get("status"))
-        if status_filter and status_filter not in STATUSES:
-            return jsonify({"error": "invalid status filter"}), 400
+        raw_statuses = clean(request.args.get("statuses")) or clean(request.args.get("status"))
+        status_filters = []
+        if raw_statuses:
+            status_filters = [s.strip() for s in raw_statuses.split(",") if s.strip()]
+            invalid = [s for s in status_filters if s not in STATUSES]
+            if invalid:
+                return jsonify({"error": "invalid status filter", "invalid": invalid}), 400
 
         conn = get_conn()
         cur = conn.cursor()
@@ -751,9 +792,10 @@ data:
 
         filtered_clauses = list(base_clauses)
         filtered_params = list(base_params)
-        if status_filter:
-            filtered_clauses.append("status = %s")
-            filtered_params.append(status_filter)
+        if status_filters:
+            placeholders = ",".join(["%s"] * len(status_filters))
+            filtered_clauses.append(f"status IN ({placeholders})")
+            filtered_params.extend(status_filters)
 
         filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
 
@@ -805,7 +847,7 @@ data:
             },
             "tickets": tickets,
             "statuses": STATUSES,
-            "selected_status": status_filter,
+            "selected_statuses": status_filters,
         })
 
     @app.post("/api/tickets")
