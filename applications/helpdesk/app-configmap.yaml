@@ -20,7 +20,7 @@ data:
     app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
     sock = Sock(app)
     active_ws_clients = set()
-    last_live_event = {"type": "system", "message": "System gotowy", "ticket_id": None}
+    last_live_event = {"id": str(uuid.uuid4()), "type": "system", "message": "System gotowy", "ticket_id": None}
 
 
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
@@ -258,7 +258,7 @@ data:
                 return
             except Exception as e:
                 print(f"Waiting for database: {e}", flush=True)
-                time.sleep(2)
+                time.sleep(1)
         raise RuntimeError("Database unavailable")
 
     init_db()
@@ -318,6 +318,7 @@ data:
     def publish_event(message, event_type="info", ticket_id=None):
         global last_live_event
         last_live_event = {
+            "id": str(uuid.uuid4()),
             "type": event_type,
             "message": message,
             "ticket_id": ticket_id,
@@ -486,6 +487,9 @@ data:
         const wsEvent = document.getElementById("wsEvent");
         let liveSocket = null;
         let liveReconnectTimer = null;
+        let lastLiveEventId = null;
+        let currentView = { name: "home", ticketId: null };
+        let suppressNextLiveRefresh = false;
 
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
@@ -541,9 +545,7 @@ data:
 
           liveSocket.onmessage = (event) => {{
             const data = JSON.parse(event.data);
-            wsClients.textContent = data.active_clients ?? "-";
-            wsTime.textContent = data.server_time ?? "-";
-            wsEvent.textContent = data.event?.message || data.message || "-";
+            handleLivePayload(data);
           }};
 
           liveSocket.onclose = () => {{
@@ -557,6 +559,33 @@ data:
           liveSocket.onerror = () => {{
             try {{ liveSocket.close(); }} catch (e) {{}}
           }};
+        }}
+
+        async function handleLivePayload(data) {{
+          wsClients.textContent = data.active_clients ?? "-";
+          wsTime.textContent = data.server_time ?? "-";
+
+          const liveEvent = data.event || null;
+          wsEvent.textContent = liveEvent?.message || data.message || "-";
+
+          if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
+          lastLiveEventId = liveEvent.id;
+
+          if (!["ticket_created", "status_changed", "comment_added"].includes(liveEvent.type)) return;
+
+          if (suppressNextLiveRefresh) {{
+            suppressNextLiveRefresh = false;
+            return;
+          }}
+
+          if (currentView.name === "ticket" && Number(currentView.ticketId) === Number(liveEvent.ticket_id)) {{
+            await renderTicket(liveEvent.ticket_id, true);
+            return;
+          }}
+
+          if (currentView.name === "home") {{
+            await renderHome(loadStatusFilters(), true);
+          }}
         }}
 
         function disconnectLive() {{
@@ -872,7 +901,8 @@ data:
           await renderAdminUsers();
         }}
 
-        async function renderHome(statusFilters = loadStatusFilters()) {{
+        async function renderHome(statusFilters = loadStatusFilters(), fromLive = false) {{
+          currentView = { name: "home", ticketId: null };
           const me = await loadMe();
           if (!me) return;
 
@@ -929,6 +959,7 @@ data:
         }}
 
         async function renderNewTicket() {{
+          currentView = { name: "new-ticket", ticketId: null };
           const me = await loadMe();
           if (!me) return;
           const metaRes = await api("/api/meta");
@@ -962,13 +993,15 @@ data:
           event.preventDefault();
           const form = event.target;
           const payload = Object.fromEntries(new FormData(form).entries());
+          suppressNextLiveRefresh = true;
           const res = await api("/api/tickets", {{ method: "POST", body: JSON.stringify(payload) }});
           if (!res) return;
           if (!res.ok) {{ alert("Nie udało się utworzyć zgłoszenia."); return; }}
           await renderHome();
         }}
 
-        async function renderTicket(id) {{
+        async function renderTicket(id, fromLive = false) {{
+          currentView = { name: "ticket", ticketId: Number(id) };
           const me = await loadMe();
           if (!me) return;
           const res = await api(`/api/tickets/${{id}}`);
@@ -1017,6 +1050,7 @@ data:
           commentForm.addEventListener("submit", async (e) => {{
             e.preventDefault();
             const payload = Object.fromEntries(new FormData(commentForm).entries());
+            suppressNextLiveRefresh = true;
             await api(`/api/tickets/${{id}}/comments`, {{ method: "POST", body: JSON.stringify(payload) }});
             await renderTicket(id);
           }});
@@ -1026,6 +1060,7 @@ data:
             statusForm.addEventListener("submit", async (e) => {{
               e.preventDefault();
               const payload = Object.fromEntries(new FormData(statusForm).entries());
+              suppressNextLiveRefresh = true;
               await api(`/api/tickets/${{id}}/status`, {{ method: "POST", body: JSON.stringify(payload) }});
               await renderTicket(id);
             }});
@@ -1121,7 +1156,7 @@ data:
                     },
                     "event": last_live_event,
                 }))
-                time.sleep(2)
+                time.sleep(1)
         except Exception:
             pass
         finally:
