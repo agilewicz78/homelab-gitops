@@ -23,6 +23,9 @@ spec:
           envFrom:
             - secretRef:
                 name: helpdesk-db-secret
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
