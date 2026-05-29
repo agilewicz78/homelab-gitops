@@ -65,13 +65,13 @@ data:
     ]
 
     SEED_USERS = [
-        ("Anna Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
-        ("Piotr Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
-        ("Magdalena Zielińska", "magdalena.zielinska@incoprp.local", "Sprzedaż", "user"),
-        ("Tomasz Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
-        ("Karolina Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
-        ("Joanna Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
-        ("Helpdesk Admin", "admin@incoprp.local", "IT", "admin"),
+        ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
+        ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
+        ("Magdalena", "Zielińska", "magdalena.zielinska@incoprp.local", "Sprzedaż", "user"),
+        ("Tomasz", "Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
+        ("Karolina", "Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
+        ("Joanna", "Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
+        ("Helpdesk", "Admin", "admin@incoprp.local", "IT", "admin"),
     ]
 
     SEED_TICKETS = [
@@ -155,7 +155,8 @@ data:
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id SERIAL PRIMARY KEY,
-                        full_name TEXT NOT NULL,
+                        first_name TEXT NOT NULL,
+                        last_name TEXT NOT NULL,
                         email TEXT UNIQUE NOT NULL,
                         department TEXT NOT NULL,
                         role TEXT NOT NULL DEFAULT 'user',
@@ -163,6 +164,32 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
+
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT")
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
+                cur.execute("""
+                    SELECT EXISTS (
+                      SELECT 1
+                      FROM information_schema.columns
+                      WHERE table_name = 'users' AND column_name = 'full_name'
+                    )
+                """)
+                has_full_name = cur.fetchone()[0]
+                if has_full_name:
+                    cur.execute("""
+                        UPDATE users
+                        SET
+                          first_name = COALESCE(NULLIF(first_name, ''), split_part(full_name, ' ', 1)),
+                          last_name = COALESCE(
+                            NULLIF(last_name, ''),
+                            NULLIF(trim(substr(full_name, length(split_part(full_name, ' ', 1)) + 1)), ''),
+                            '-'
+                          )
+                        WHERE first_name IS NULL OR first_name = '' OR last_name IS NULL OR last_name = ''
+                    """)
+                    cur.execute("ALTER TABLE users DROP COLUMN IF EXISTS full_name")
+                cur.execute("UPDATE users SET first_name = 'Nieznane' WHERE first_name IS NULL OR first_name = ''")
+                cur.execute("UPDATE users SET last_name = '-' WHERE last_name IS NULL OR last_name = ''")
 
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
@@ -200,12 +227,12 @@ data:
                 """)
 
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
-                for full_name, email, department, role in SEED_USERS:
+                for first_name, last_name, email, department, role in SEED_USERS:
                     cur.execute("""
-                        INSERT INTO users (full_name, email, department, role, password_hash)
-                        VALUES (%s, %s, %s, %s, %s)
+                        INSERT INTO users (first_name, last_name, email, department, role, password_hash)
+                        VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (email) DO NOTHING
-                    """, (full_name, email, department, role, password_hash))
+                    """, (first_name, last_name, email, department, role, password_hash))
 
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
@@ -245,7 +272,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.full_name, u.email, u.department, u.role
+            SELECT u.first_name, u.last_name, u.email, u.department, u.role
             FROM user_sessions s
             JOIN users u ON u.email = s.user_email
             WHERE s.sid = %s
@@ -259,10 +286,12 @@ data:
         if not row:
             return None
         return {
-            "name": row[0],
-            "email": row[1],
-            "department": row[2],
-            "role": row[3],
+            "first_name": row[0],
+            "last_name": row[1],
+            "name": f"{row[0]} {row[1]}".strip(),
+            "email": row[2],
+            "department": row[3],
+            "role": row[4],
         }
 
     def current_user():
@@ -497,8 +526,16 @@ data:
               <h3>Dane użytkownika</h3>
               <p id="profileMessage" class="success hidden">Profil został zapisany.</p>
               <form id="profileForm">
-                <label>Imię i nazwisko</label>
-                <input name="full_name" value="${{esc(me.name)}}" required>
+                <div class="grid">
+                  <div>
+                    <label>Imię</label>
+                    <input name="first_name" value="${{esc(me.first_name)}}" required>
+                  </div>
+                  <div>
+                    <label>Nazwisko</label>
+                    <input name="last_name" value="${{esc(me.last_name)}}" required>
+                  </div>
+                </div>
 
                 <label>E-mail</label>
                 <input value="${{esc(me.email)}}" disabled>
@@ -576,7 +613,7 @@ data:
 
           const rows = data.users.map(u => `
             <tr>
-              <td><strong>${{esc(u.full_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
+              <td><strong>${{esc(u.first_name)}} ${{esc(u.last_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
               <td>${{esc(u.department)}}</td>
               <td><span class="pill">${{esc(u.role)}}</span></td>
               <td class="muted">${{esc(u.created_at)}}</td>
@@ -611,7 +648,7 @@ data:
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
 
-          let user = {{ full_name: "", email: "", department: meta.departments[0], role: "user" }};
+          let user = {{ first_name: "", last_name: "", email: "", department: meta.departments[0], role: "user" }};
           const editing = !!encodedEmail;
 
           if (editing) {{
@@ -628,8 +665,16 @@ data:
               <p id="adminUserMessage" class="success hidden">Zapisano użytkownika.</p>
               <p id="adminUserError" class="error hidden">Nie udało się zapisać użytkownika.</p>
               <form id="adminUserForm">
-                <label>Imię i nazwisko</label>
-                <input name="full_name" value="${{esc(user.full_name)}}" required>
+                <div class="grid">
+                  <div>
+                    <label>Imię</label>
+                    <input name="first_name" value="${{esc(user.first_name)}}" required>
+                  </div>
+                  <div>
+                    <label>Nazwisko</label>
+                    <input name="last_name" value="${{esc(user.last_name)}}" required>
+                  </div>
+                </div>
 
                 <label>E-mail</label>
                 <input name="email" type="email" value="${{esc(user.email)}}" ${{editing ? "disabled" : "required"}} placeholder="jan.kowalski@incoprp.local">
@@ -973,7 +1018,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT full_name, email, department, role, password_hash
+            SELECT first_name, last_name, email, department, role, password_hash
             FROM users
             WHERE lower(email) = %s
         """, (email,))
@@ -983,7 +1028,7 @@ data:
             conn.close()
             return jsonify({"error": "invalid credentials"}), 401
 
-        full_name, user_email, department, role, password_hash = user
+        first_name, last_name, user_email, department, role, password_hash = user
         if not check_password_hash(password_hash, password):
             cur.close()
             conn.close()
@@ -998,7 +1043,9 @@ data:
         return jsonify({
             "sid": sid,
             "user": {
-                "name": full_name,
+                "first_name": first_name,
+                "last_name": last_name,
+                "name": f"{first_name} {last_name}".strip(),
                 "email": user_email,
                 "department": department,
                 "role": role,
@@ -1026,11 +1073,12 @@ data:
     @api_login_required
     def api_update_profile(user):
         payload = request.get_json(silent=True) or {}
-        full_name = clean(payload.get("full_name"))
+        first_name = clean(payload.get("first_name"))
+        last_name = clean(payload.get("last_name"))
         department = clean(payload.get("department"))
 
-        if not full_name:
-            return jsonify({"error": "full_name is required"}), 400
+        if not first_name or not last_name:
+            return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "invalid department"}), 400
 
@@ -1038,9 +1086,9 @@ data:
         cur = conn.cursor()
         cur.execute("""
             UPDATE users
-            SET full_name = %s, department = %s
+            SET first_name = %s, last_name = %s, department = %s
             WHERE email = %s
-        """, (full_name, department, user["email"]))
+        """, (first_name, last_name, department, user["email"]))
         conn.commit()
         cur.close()
         conn.close()
@@ -1087,9 +1135,9 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT full_name, email, department, role, created_at
+            SELECT first_name, last_name, email, department, role, created_at
             FROM users
-            ORDER BY lower(full_name), lower(email)
+            ORDER BY lower(last_name), lower(first_name), lower(email)
         """)
         rows = cur.fetchall()
         cur.close()
@@ -1097,11 +1145,13 @@ data:
         return jsonify({
             "users": [
                 {
-                    "full_name": r[0],
-                    "email": r[1],
-                    "department": r[2],
-                    "role": r[3],
-                    "created_at": str(r[4]),
+                    "first_name": r[0],
+                    "last_name": r[1],
+                    "full_name": f"{r[0]} {r[1]}".strip(),
+                    "email": r[2],
+                    "department": r[3],
+                    "role": r[4],
+                    "created_at": str(r[5]),
                 }
                 for r in rows
             ]
@@ -1115,7 +1165,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT full_name, email, department, role, created_at
+            SELECT first_name, last_name, email, department, role, created_at
             FROM users
             WHERE lower(email) = %s
         """, (email,))
@@ -1125,11 +1175,13 @@ data:
         if not row:
             return jsonify({"error": "user not found"}), 404
         return jsonify({
-            "full_name": row[0],
-            "email": row[1],
-            "department": row[2],
-            "role": row[3],
-            "created_at": str(row[4]),
+            "first_name": row[0],
+            "last_name": row[1],
+            "full_name": f"{row[0]} {row[1]}".strip(),
+            "email": row[2],
+            "department": row[3],
+            "role": row[4],
+            "created_at": str(row[5]),
         })
 
     @app.post("/api/admin/users")
@@ -1137,14 +1189,15 @@ data:
     @api_admin_required
     def api_admin_create_user(user):
         payload = request.get_json(silent=True) or {}
-        full_name = clean(payload.get("full_name"))
+        first_name = clean(payload.get("first_name"))
+        last_name = clean(payload.get("last_name"))
         email = clean(payload.get("email")).lower()
         department = clean(payload.get("department"))
         role = clean(payload.get("role")) or "user"
         password = str(payload.get("password") or "")
 
-        if not full_name or not email:
-            return jsonify({"error": "Imię i nazwisko oraz e-mail są wymagane."}), 400
+        if not first_name or not last_name or not email:
+            return jsonify({"error": "Imię, nazwisko oraz e-mail są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
         if role not in ("user", "admin"):
@@ -1161,9 +1214,9 @@ data:
             return jsonify({"error": "Użytkownik o takim adresie e-mail już istnieje."}), 409
 
         cur.execute("""
-            INSERT INTO users (full_name, email, department, role, password_hash)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (full_name, email, department, role, generate_password_hash(password)))
+            INSERT INTO users (first_name, last_name, email, department, role, password_hash)
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (first_name, last_name, email, department, role, generate_password_hash(password)))
         conn.commit()
         cur.close()
         conn.close()
@@ -1175,12 +1228,13 @@ data:
     def api_admin_update_user(user, email):
         target_email = clean(email).lower()
         payload = request.get_json(silent=True) or {}
-        full_name = clean(payload.get("full_name"))
+        first_name = clean(payload.get("first_name"))
+        last_name = clean(payload.get("last_name"))
         department = clean(payload.get("department"))
         role = clean(payload.get("role")) or "user"
 
-        if not full_name:
-            return jsonify({"error": "Imię i nazwisko jest wymagane."}), 400
+        if not first_name or not last_name:
+            return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
         if role not in ("user", "admin"):
@@ -1206,9 +1260,9 @@ data:
 
         cur.execute("""
             UPDATE users
-            SET full_name = %s, department = %s, role = %s
+            SET first_name = %s, last_name = %s, department = %s, role = %s
             WHERE lower(email) = %s
-        """, (full_name, department, role, target_email))
+        """, (first_name, last_name, department, role, target_email))
         conn.commit()
         cur.close()
         conn.close()
