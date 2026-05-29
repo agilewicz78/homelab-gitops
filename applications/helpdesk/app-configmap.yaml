@@ -407,7 +407,16 @@ data:
       .status-Oczekuje-na-dostawce { color:#ddd6fe; border-color:rgba(168,85,247,.58); background:rgba(168,85,247,.14); }
       .status-Rozwiazane { color:#c7d2fe; border-color:rgba(99,102,241,.55); background:rgba(99,102,241,.14); }
       .status-Zamkniete { color:#e5e7eb; border-color:rgba(156,163,175,.55); background:rgba(156,163,175,.14); }
-      .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; }
+      .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; transition: color .15s ease, opacity .15s ease; }
+      .ticket-title:hover { opacity: .82; }
+      .ticket-title.status-Nowe, .ticket-heading.status-Nowe { color:#22c55e; background:transparent; border-color:transparent; }
+      .ticket-title.status-Otwarte, .ticket-heading.status-Otwarte { color:#fb923c; background:transparent; border-color:transparent; }
+      .ticket-title.status-W-trakcie, .ticket-heading.status-W-trakcie { color:#38bdf8; background:transparent; border-color:transparent; }
+      .ticket-title.status-Oczekuje-na-uzytkownika, .ticket-heading.status-Oczekuje-na-uzytkownika { color:#ef4444; background:transparent; border-color:transparent; }
+      .ticket-title.status-Oczekuje-na-dostawce, .ticket-heading.status-Oczekuje-na-dostawce { color:#a78bfa; background:transparent; border-color:transparent; }
+      .ticket-title.status-Rozwiazane, .ticket-heading.status-Rozwiazane { color:#818cf8; background:transparent; border-color:transparent; }
+      .ticket-title.status-Zamkniete, .ticket-heading.status-Zamkniete { color:#94a3b8; background:transparent; border-color:transparent; }
+      .ticket-title.status-default, .ticket-heading.status-default { color:var(--text); background:transparent; border-color:transparent; }
       .muted { color: var(--muted); }
       .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
       .login-box { width: min(520px, 100%); margin: 0 auto; }
@@ -796,7 +805,7 @@ data:
           const rows = data.tickets.length ? data.tickets.map(t => `
             <tr>
               <td>#${{t.id}}</td>
-              <td><a class="ticket-title" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
+              <td><a class="ticket-title ${{statusClass(t.status)}}" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
               <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
               <td>${{esc(t.category)}}</td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
@@ -896,7 +905,7 @@ data:
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
-              <h2>#${{t.id}} · ${{esc(t.title)}}</h2>
+              <h2 class="ticket-heading ${{statusClass(t.status)}}">#${{t.id}} · ${{esc(t.title)}}</h2>
               <p class="muted">Utworzono: ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>
               <p><strong>Status:</strong> <span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></p>
               <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
