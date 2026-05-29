@@ -373,6 +373,7 @@ data:
       .login-box { width: min(520px, 100%); margin: 0 auto; }
       .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
       .error { color: #fecaca; }
+      .success { color: #bbf7d0; }
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
     """
@@ -457,7 +458,7 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a> · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           return data;
         }}
 
@@ -465,6 +466,87 @@ data:
           await api("/api/logout", {{ method: "POST" }});
           clearSid();
           window.location.href = "/login";
+        }}
+
+        async function renderProfile() {{
+          const me = await loadMe();
+          if (!me) return;
+          const metaRes = await api("/api/meta");
+          const meta = await metaRes.json();
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
+              <h2>Mój profil</h2>
+              <p class="muted">Zmień dane profilu albo hasło zalogowanego użytkownika. Sesja pozostaje osobna dla tej karty przeglądarki.</p>
+            </section>
+
+            <section class="card">
+              <h3>Dane użytkownika</h3>
+              <p id="profileMessage" class="success hidden">Profil został zapisany.</p>
+              <form id="profileForm">
+                <label>Imię i nazwisko</label>
+                <input name="full_name" value="${{esc(me.name)}}" required>
+
+                <label>E-mail</label>
+                <input value="${{esc(me.email)}}" disabled>
+
+                <label>Dział</label>
+                <select name="department">${{meta.departments.map(x => `<option ${{x === me.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
+
+                <button type="submit">Zapisz profil</button>
+              </form>
+            </section>
+
+            <section class="card">
+              <h3>Zmiana hasła</h3>
+              <p id="passwordMessage" class="success hidden">Hasło zostało zmienione.</p>
+              <p id="passwordError" class="error hidden">Nie udało się zmienić hasła.</p>
+              <form id="passwordForm">
+                <label>Obecne hasło</label>
+                <input name="current_password" type="password" required>
+
+                <label>Nowe hasło</label>
+                <input name="new_password" type="password" minlength="8" required>
+
+                <label>Powtórz nowe hasło</label>
+                <input name="confirm_password" type="password" minlength="8" required>
+
+                <button type="submit">Zmień hasło</button>
+              </form>
+            </section>`;
+
+          document.getElementById("profileForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const payload = Object.fromEntries(new FormData(e.target).entries());
+            const res = await api("/api/profile", {{ method: "PUT", body: JSON.stringify(payload) }});
+            if (!res || !res.ok) {{ alert("Nie udało się zapisać profilu."); return; }}
+            document.getElementById("profileMessage").classList.remove("hidden");
+            await loadMe();
+          }});
+
+          document.getElementById("passwordForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const payload = Object.fromEntries(new FormData(e.target).entries());
+            const msg = document.getElementById("passwordMessage");
+            const err = document.getElementById("passwordError");
+            msg.classList.add("hidden");
+            err.classList.add("hidden");
+            if (payload.new_password !== payload.confirm_password) {{
+              err.textContent = "Nowe hasła nie są takie same.";
+              err.classList.remove("hidden");
+              return;
+            }}
+            const res = await api("/api/profile/password", {{ method: "POST", body: JSON.stringify(payload) }});
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              err.textContent = data.error || "Nie udało się zmienić hasła.";
+              err.classList.remove("hidden");
+              return;
+            }}
+            e.target.reset();
+            msg.classList.remove("hidden");
+          }});
         }}
 
         async function renderHome(statusFilters = loadStatusFilters()) {{
@@ -506,6 +588,7 @@ data:
             </section>
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+              <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
               <div style="margin-top:16px">
                 <strong>Filtry statusów:</strong>
                 <div class="status-filter-actions">${{statusButtons}}</div>
@@ -756,6 +839,64 @@ data:
     @api_login_required
     def api_me(user):
         return jsonify(user)
+
+    @app.put("/api/profile")
+    @api_login_required
+    def api_update_profile(user):
+        payload = request.get_json(silent=True) or {}
+        full_name = clean(payload.get("full_name"))
+        department = clean(payload.get("department"))
+
+        if not full_name:
+            return jsonify({"error": "full_name is required"}), 400
+        if department not in DEPARTMENTS:
+            return jsonify({"error": "invalid department"}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE users
+            SET full_name = %s, department = %s
+            WHERE email = %s
+        """, (full_name, department, user["email"]))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"status": "ok"})
+
+    @app.post("/api/profile/password")
+    @api_login_required
+    def api_change_password(user):
+        payload = request.get_json(silent=True) or {}
+        current_password = str(payload.get("current_password") or "")
+        new_password = str(payload.get("new_password") or "")
+        confirm_password = str(payload.get("confirm_password") or "")
+
+        if len(new_password) < 8:
+            return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
+        if new_password != confirm_password:
+            return jsonify({"error": "Nowe hasła nie są takie same."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT password_hash FROM users WHERE email = %s", (user["email"],))
+        row = cur.fetchone()
+        if not row or not check_password_hash(row[0], current_password):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Obecne hasło jest nieprawidłowe."}), 400
+
+        cur.execute("""
+            UPDATE users
+            SET password_hash = %s
+            WHERE email = %s
+        """, (generate_password_hash(new_password), user["email"]))
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        return jsonify({"status": "ok"})
 
     @app.get("/api/meta")
     @api_login_required
