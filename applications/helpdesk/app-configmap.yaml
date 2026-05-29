@@ -354,6 +354,10 @@ data:
       .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
       button, .btn { display: inline-block; margin-top: 14px; border: 0; border-radius: 14px; padding: 12px 18px; font-weight: 700; color: white; background: linear-gradient(135deg, #0284c7, #22c55e); cursor: pointer; text-decoration: none; }
       .btn-secondary { background: rgba(31,41,55,.9); border: 1px solid var(--border); }
+      .status-filter-btn { margin-top: 0; color: var(--muted); transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
+      .status-filter-btn:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text); }
+      .status-filter-btn.active { color: white; background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
+      .status-filter-btn.active::before { content: "✓ "; }
       .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; }
       .muted { color: var(--muted); }
       .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
@@ -441,8 +445,8 @@ data:
           const scope = me.role === "admin" ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
           const filteredLabel = statusFilter ? ` · status: ${{statusFilter}}` : "";
 
-          const statusButtons = [`<button class="btn-secondary" onclick="renderHome('')">Wszystkie</button>`]
-            .concat(data.statuses.map(s => `<button class="btn-secondary" onclick="renderHome('${{esc(s)}}')">${{esc(s)}}</button>`))
+          const statusButtons = [`<button class="btn-secondary status-filter-btn${{statusFilter === "" ? " active" : ""}}" onclick="renderHome('')">Wszystkie</button>`]
+            .concat(data.statuses.map(s => `<button class="btn-secondary status-filter-btn${{s === statusFilter ? " active" : ""}}" onclick="renderHome('${{esc(s)}}')">${{esc(s)}}</button>`))
             .join(" ");
 
           const rows = data.tickets.length ? data.tickets.map(t => `
