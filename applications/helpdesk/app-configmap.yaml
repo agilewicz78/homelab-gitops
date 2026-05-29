@@ -428,15 +428,24 @@ data:
           window.location.href = "/login";
         }}
 
-        async function renderHome() {{
+        async function renderHome(statusFilter = sessionStorage.getItem("helpdesk_status_filter") || "") {{
           const me = await loadMe();
           if (!me) return;
-          const res = await api("/api/tickets");
+
+          sessionStorage.setItem("helpdesk_status_filter", statusFilter);
+
+          const query = statusFilter ? `?status=${{encodeURIComponent(statusFilter)}}` : "";
+          const res = await api(`/api/tickets${{query}}`);
           if (!res) return;
           const data = await res.json();
           const scope = me.role === "admin" ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
+          const filteredLabel = statusFilter ? ` · status: ${{statusFilter}}` : "";
 
-          const rows = data.tickets.map(t => `
+          const statusButtons = [`<button class="btn-secondary" onclick="renderHome('')">Wszystkie</button>`]
+            .concat(data.statuses.map(s => `<button class="btn-secondary" onclick="renderHome('${{esc(s)}}')">${{esc(s)}}</button>`))
+            .join(" ");
+
+          const rows = data.tickets.length ? data.tickets.map(t => `
             <tr>
               <td>#${{t.id}}</td>
               <td><a class="ticket-title" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
@@ -445,7 +454,7 @@ data:
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
               <td><span class="pill">${{esc(t.status)}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
-            </tr>`).join("");
+            </tr>`).join("") : `<tr><td colspan="7" class="muted">Brak zgłoszeń dla wybranego statusu.</td></tr>`;
 
           appEl.innerHTML = `
             <section class="stats">
@@ -455,9 +464,15 @@ data:
               <div class="stat"><div class="num">${{data.stats.high}}</div><div class="label">Wysoki / Krytyczny</div></div>
               <div class="stat"><div class="num">${{data.stats.resolved}}</div><div class="label">Rozwiązane / Zamknięte</div></div>
             </section>
-            <section class="card"><button onclick="renderNewTicket()">Nowe zgłoszenie</button></section>
             <section class="card">
-              <h2>${{scope}}</h2>
+              <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+              <div style="margin-top:16px">
+                <strong>Filtr statusu:</strong>
+                <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">${{statusButtons}}</div>
+              </div>
+            </section>
+            <section class="card">
+              <h2>${{scope}}${{filteredLabel}}</h2>
               <table>
                 <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Utworzono</th></tr></thead>
                 <tbody>${{rows}}</tbody>
@@ -714,15 +729,29 @@ data:
     @app.get("/api/tickets")
     @api_login_required
     def api_tickets(user):
+        status_filter = clean(request.args.get("status"))
+        if status_filter and status_filter not in STATUSES:
+            return jsonify({"error": "invalid status filter"}), 400
+
         conn = get_conn()
         cur = conn.cursor()
 
-        if is_admin(user):
-            where_sql = ""
-            where_params = ()
-        else:
-            where_sql = "WHERE requester_email = %s"
-            where_params = (user["email"],)
+        base_clauses = []
+        base_params = []
+
+        if not is_admin(user):
+            base_clauses.append("requester_email = %s")
+            base_params.append(user["email"])
+
+        base_where_sql = "WHERE " + " AND ".join(base_clauses) if base_clauses else ""
+
+        filtered_clauses = list(base_clauses)
+        filtered_params = list(base_params)
+        if status_filter:
+            filtered_clauses.append("status = %s")
+            filtered_params.append(status_filter)
+
+        filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
 
         cur.execute(f"""
             SELECT
@@ -732,17 +761,17 @@ data:
               COUNT(*) FILTER (WHERE priority IN ('Wysoki', 'Krytyczny')),
               COUNT(*) FILTER (WHERE status IN ('Rozwiązane', 'Zamknięte'))
             FROM tickets
-            {where_sql}
-        """, where_params)
+            {base_where_sql}
+        """, tuple(base_params))
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
 
         cur.execute(f"""
             SELECT id, title, requester_name, requester_email, department, category,
                    priority, status, created_at, updated_at
             FROM tickets
-            {where_sql}
+            {filtered_where_sql}
             ORDER BY id DESC
-        """, where_params)
+        """, tuple(filtered_params))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -771,6 +800,8 @@ data:
                 "resolved": resolved_count,
             },
             "tickets": tickets,
+            "statuses": STATUSES,
+            "selected_status": status_filter,
         })
 
     @app.post("/api/tickets")
