@@ -1481,7 +1481,8 @@ data:
             conn.close()
             return jsonify({"error": "invalid credentials"}), 401
 
-        first_name, last_name, user_email, department, role, password_hash = user
+        first_name, last_name, user_email, department, role, password_hash, roles = user
+        roles = list(roles or ["user"])
         if not check_password_hash(password_hash, password):
             cur.close()
             conn.close()
@@ -1501,8 +1502,8 @@ data:
                 "name": f"{first_name} {last_name}".strip(),
                 "email": user_email,
                 "department": department,
-                "role": role_label(list(roles or ["user"])),
-                "roles": list(roles or ["user"]),
+                "role": role_label(roles),
+                "roles": roles,
             }
         })
 
