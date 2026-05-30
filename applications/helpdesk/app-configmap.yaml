@@ -902,7 +902,7 @@ data:
         }}
 
         async function renderHome(statusFilters = loadStatusFilters(), fromLive = false) {{
-          currentView = { name: "home", ticketId: null };
+          currentView = {{ name: "home", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
 
@@ -959,7 +959,7 @@ data:
         }}
 
         async function renderNewTicket() {{
-          currentView = { name: "new-ticket", ticketId: null };
+          currentView = {{ name: "new-ticket", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
           const metaRes = await api("/api/meta");
@@ -1001,7 +1001,7 @@ data:
         }}
 
         async function renderTicket(id, fromLive = false) {{
-          currentView = { name: "ticket", ticketId: Number(id) };
+          currentView = {{ name: "ticket", ticketId: Number(id) }};
           const me = await loadMe();
           if (!me) return;
           const res = await api(`/api/tickets/${{id}}`);
