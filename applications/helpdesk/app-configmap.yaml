@@ -4,2019 +4,1033 @@ metadata:
   name: helpdesk-app
   namespace: helpdesk
 data:
-  app.py: |
-    import os
-    import time
-    import html
-    from datetime import datetime, timedelta
-    import uuid
-    import json
-    import psycopg2
-    from functools import wraps
-    from flask import Flask, request, redirect, Response, jsonify
-    from flask_sock import Sock
-    from werkzeug.security import generate_password_hash, check_password_hash
-
-    app = Flask(__name__)
-    app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
-    sock = Sock(app)
-    active_ws_clients = set()
-    last_live_event = {"id": str(uuid.uuid4()), "type": "system", "message": "System gotowy", "ticket_id": None}
-
-
-    DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
-    DB_PORT = os.getenv("DB_PORT", "5432")
-    DB_NAME = os.getenv("POSTGRES_DB", "helpdeskdb")
-    DB_USER = os.getenv("POSTGRES_USER", "helpdeskuser")
-    DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-
-    INITIAL_PASSWORD = "Incoprp123!"
-
-    DEPARTMENTS = [
-        "HR",
-        "Finanse",
-        "Sprzedaż",
-        "Marketing",
-        "Obsługa klienta",
-        "Administracja",
-        "IT",
-        "Zarząd",
-        "Logistyka",
-        "Księgowość",
-    ]
-
-    CATEGORIES = [
-        "Komputer i laptop",
-        "Poczta e-mail",
-        "Drukarki i skanery",
-        "Microsoft 365 / Office",
-        "Sieć i Wi-Fi",
-        "VPN i praca zdalna",
-        "Konta i hasła",
-        "Telefon / Teams / wideokonferencje",
-        "Dostępy do systemów",
-        "Sprzęt biurowy",
-        "Inne",
-    ]
-
-    PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
-
-    STATUSES = [
-        "Nowe",
-        "Otwarte",
-        "W trakcie",
-        "Oczekuje na użytkownika",
-        "Oczekuje na dostawcę",
-        "Rozwiązane",
-        "Zamknięte",
-    ]
-
-    SLA_HOURS = {
-        "Krytyczny": 4,
-        "Wysoki": 8,
-        "Normalny": 48,
-        "Niski": 120,
-    }
-
-    SEED_USERS = [
-        ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
-        ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
-        ("Magdalena", "Zielińska", "magdalena.zielinska@incoprp.local", "Sprzedaż", "user"),
-        ("Tomasz", "Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
-        ("Karolina", "Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
-        ("Joanna", "Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
-        ("Helpdesk", "Agent", "agent@incoprp.local", "IT", "agent"),
-        ("Helpdesk", "Admin", "admin@incoprp.local", "IT", "admin"),
-    ]
-
-    SEED_TICKETS = [
-        (
-            "Outlook nie odbiera poczty",
-            "Od rana Outlook nie synchronizuje nowych wiadomości. Webmail działa, ale aplikacja pokazuje błąd połączenia.",
-            "Anna Kowalska",
-            "anna.kowalska@incoprp.local",
-            "HR",
-            "Poczta e-mail",
-            "Wysoki",
-            "Otwarte",
-        ),
-        (
-            "Drukarka w księgowości nie drukuje faktur",
-            "Drukarka pokazuje zadania w kolejce, ale nic nie wychodzi. Problem dotyczy faktur PDF.",
-            "Joanna Lewandowska",
-            "joanna.lewandowska@incoprp.local",
-            "Księgowość",
-            "Drukarki i skanery",
-            "Wysoki",
-            "W trakcie",
-        ),
-        (
-            "Problem z połączeniem VPN z domu",
-            "Po wpisaniu hasła VPN rozłącza się po kilku sekundach. Problem występuje od ostatniej aktualizacji laptopa.",
-            "Piotr Nowak",
-            "piotr.nowak@incoprp.local",
-            "Finanse",
-            "VPN i praca zdalna",
-            "Normalny",
-            "Nowe",
-        ),
-        (
-            "Teams nie wykrywa mikrofonu",
-            "Podczas spotkań w Teams mikrofon nie jest dostępny, mimo że działa w ustawieniach systemu.",
-            "Tomasz Wiśniewski",
-            "tomasz.wisniewski@incoprp.local",
-            "Marketing",
-            "Telefon / Teams / wideokonferencje",
-            "Normalny",
-            "Oczekuje na użytkownika",
-        ),
-        (
-            "Brak dostępu do folderu Sprzedaż",
-            "Po zmianie stanowiska użytkownik nie widzi folderu współdzielonego Sprzedaż na dysku sieciowym.",
-            "Magdalena Zielińska",
-            "magdalena.zielinska@incoprp.local",
-            "Sprzedaż",
-            "Dostępy do systemów",
-            "Wysoki",
-            "Otwarte",
-        ),
-        (
-            "Laptop działa bardzo wolno po aktualizacji",
-            "Po ostatniej aktualizacji systemu laptop uruchamia się długo, a Excel i Outlook zawieszają się kilka razy dziennie.",
-            "Karolina Wójcik",
-            "karolina.wojcik@incoprp.local",
-            "Obsługa klienta",
-            "Komputer i laptop",
-            "Normalny",
-            "Nowe",
-        ),
-    ]
-
-    def get_conn():
-        return psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-        )
-
-    def init_db():
-        for _ in range(40):
-            try:
-                conn = get_conn()
-                cur = conn.cursor()
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        id SERIAL PRIMARY KEY,
-                        first_name TEXT NOT NULL,
-                        last_name TEXT NOT NULL,
-                        email TEXT UNIQUE NOT NULL,
-                        department TEXT NOT NULL,
-                        role TEXT NOT NULL DEFAULT 'user',
-                        password_hash TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
-                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT")
-                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
-                cur.execute("""
-                    SELECT EXISTS (
-                      SELECT 1
-                      FROM information_schema.columns
-                      WHERE table_name = 'users' AND column_name = 'full_name'
-                    )
-                """)
-                has_full_name = cur.fetchone()[0]
-                if has_full_name:
-                    cur.execute("""
-                        UPDATE users
-                        SET
-                          first_name = COALESCE(NULLIF(first_name, ''), split_part(full_name, ' ', 1)),
-                          last_name = COALESCE(
-                            NULLIF(last_name, ''),
-                            NULLIF(trim(substr(full_name, length(split_part(full_name, ' ', 1)) + 1)), ''),
-                            '-'
-                          )
-                        WHERE first_name IS NULL OR first_name = '' OR last_name IS NULL OR last_name = ''
-                    """)
-                    cur.execute("ALTER TABLE users DROP COLUMN IF EXISTS full_name")
-                cur.execute("UPDATE users SET first_name = 'Nieznane' WHERE first_name IS NULL OR first_name = ''")
-                cur.execute("UPDATE users SET last_name = '-' WHERE last_name IS NULL OR last_name = ''")
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS user_sessions (
-                        sid TEXT PRIMARY KEY,
-                        user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        last_seen TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS tickets (
-                        id SERIAL PRIMARY KEY,
-                        title TEXT NOT NULL,
-                        description TEXT NOT NULL,
-                        requester_name TEXT NOT NULL,
-                        requester_email TEXT NOT NULL,
-                        department TEXT NOT NULL,
-                        category TEXT NOT NULL,
-                        priority TEXT NOT NULL,
-                        status TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT NOW(),
-                        updated_at TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS comments (
-                        id SERIAL PRIMARY KEY,
-                        ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
-                        author TEXT NOT NULL,
-                        content TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
-                cur.execute("""
-                    ALTER TABLE tickets
-                    ADD COLUMN IF NOT EXISTS assigned_to_email TEXT REFERENCES users(email) ON DELETE SET NULL
-                """)
-                cur.execute("""
-                    ALTER TABLE tickets
-                    ADD COLUMN IF NOT EXISTS sla_due_at TIMESTAMP
-                """)
-                cur.execute("""
-                    UPDATE tickets
-                    SET sla_due_at = created_at + CASE priority
-                        WHEN 'Krytyczny' THEN INTERVAL '4 hours'
-                        WHEN 'Wysoki' THEN INTERVAL '8 hours'
-                        WHEN 'Normalny' THEN INTERVAL '48 hours'
-                        WHEN 'Niski' THEN INTERVAL '120 hours'
-                        ELSE INTERVAL '48 hours'
-                    END
-                    WHERE sla_due_at IS NULL
-                """)
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS ticket_events (
-                        id SERIAL PRIMARY KEY,
-                        ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
-                        actor_email TEXT,
-                        actor_name TEXT,
-                        event_type TEXT NOT NULL,
-                        message TEXT NOT NULL,
-                        created_at TIMESTAMP DEFAULT NOW()
-                    );
-                """)
-
-                password_hash = generate_password_hash(INITIAL_PASSWORD)
-                for first_name, last_name, email, department, role in SEED_USERS:
-                    cur.execute("""
-                        INSERT INTO users (first_name, last_name, email, department, role, password_hash)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        ON CONFLICT (email) DO NOTHING
-                    """, (first_name, last_name, email, department, role, password_hash))
-
-                cur.execute("SELECT COUNT(*) FROM tickets")
-                count = cur.fetchone()[0]
-                if count == 0:
-                    for ticket in SEED_TICKETS:
-                        priority = ticket[6]
-                        sla_due_at = datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
-                        cur.execute("""
-                            INSERT INTO tickets (
-                                title, description, requester_name, requester_email,
-                                department, category, priority, status, sla_due_at
-                            )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """, ticket + (sla_due_at,))
-
-                conn.commit()
-                cur.close()
-                conn.close()
-                return
-            except Exception as e:
-                print(f"Waiting for database: {e}", flush=True)
-                time.sleep(1)
-        raise RuntimeError("Database unavailable")
-
-    init_db()
-
-    def esc(value):
-        return html.escape(str(value or ""))
-
-    def clean(value):
-        return str(value or "").strip()
-
-
-    def sla_due_for_priority(priority):
-        return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
-
-    def sla_state(sla_due_at, status):
-        if not sla_due_at:
-            return "none"
-        if status in ("Rozwiązane", "Zamknięte"):
-            return "done"
-        now = datetime.now()
-        if sla_due_at < now:
-            return "overdue"
-        if sla_due_at - now <= timedelta(hours=4):
-            return "warning"
-        return "ok"
-
-    def event_message(actor_name, text):
-        return f"{actor_name}: {text}"
-
-    def add_ticket_event(cur, ticket_id, user, event_type, message):
-        cur.execute("""
-            INSERT INTO ticket_events (ticket_id, actor_email, actor_name, event_type, message)
-            VALUES (%s, %s, %s, %s, %s)
-        """, (
-            ticket_id,
-            user.get("email") if user else None,
-            user.get("name") if user else "System",
-            event_type,
-            message,
-        ))
-
-    def get_sid_from_request():
-        return request.headers.get("X-Helpdesk-Session", "").strip()
-
-    def get_user_by_sid(sid):
-        if not sid:
-            return None
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT u.first_name, u.last_name, u.email, u.department, u.role
-            FROM user_sessions s
-            JOIN users u ON u.email = s.user_email
-            WHERE s.sid = %s
-        """, (sid,))
-        row = cur.fetchone()
-        if row:
-            cur.execute("UPDATE user_sessions SET last_seen = NOW() WHERE sid = %s", (sid,))
-            conn.commit()
-        cur.close()
-        conn.close()
-        if not row:
-            return None
-        return {
-            "first_name": row[0],
-            "last_name": row[1],
-            "name": f"{row[0]} {row[1]}".strip(),
-            "email": row[2],
-            "department": row[3],
-            "role": row[4],
-        }
-
-    def current_user():
-        return get_user_by_sid(get_sid_from_request())
-
-    def api_login_required(fn):
-        @wraps(fn)
-        def wrapper(*args, **kwargs):
-            user = current_user()
-            if not user:
-                return jsonify({"error": "unauthorized"}), 401
-            return fn(user, *args, **kwargs)
-        return wrapper
-
-    def is_admin(user):
-        return bool(user and user.get("role") == "admin")
-
-    def is_staff(user):
-        return bool(user and user.get("role") in ("agent", "admin"))
-
-    def publish_event(message, event_type="info", ticket_id=None):
-        global last_live_event
-        last_live_event = {
-            "id": str(uuid.uuid4()),
-            "type": event_type,
-            "message": message,
-            "ticket_id": ticket_id,
-            "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-        }
-
-    def api_admin_required(fn):
-        @wraps(fn)
-        def wrapper(user, *args, **kwargs):
-            if not is_admin(user):
-                return jsonify({"error": "admin required"}), 403
-            return fn(user, *args, **kwargs)
-        return wrapper
-
-    def api_staff_required(fn):
-        @wraps(fn)
-        def wrapper(user, *args, **kwargs):
-            if not is_staff(user):
-                return jsonify({"error": "agent or admin required"}), 403
-            return fn(user, *args, **kwargs)
-        return wrapper
-
-    def public_html(body):
-        return f"""
-        <!doctype html>
-        <html lang="pl">
-        <head>
-          <meta charset="utf-8">
-          <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>INCoprp Helpdesk</title>
-          <style>{CSS}</style>
-        </head>
-        <body>
-          <main class="page">
-            <header>
-              <div>
-                <h1>INCoprp Helpdesk</h1>
-                <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
-              </div>
-              <div class="badge">SessionStorage: <strong>per karta</strong></div>
-            </header>
-            {body}
-          </main>
-        </body>
-        </html>
-        """
-
-    CSS = """
-      :root {
-        --bg: #0f172a;
-        --card: #111827;
-        --card2: #1f2937;
-        --text: #f8fafc;
-        --muted: #94a3b8;
-        --accent: #38bdf8;
-        --green: #22c55e;
-        --red: #ef4444;
-        --yellow: #facc15;
-        --border: rgba(148,163,184,.25);
-      }
-      * { box-sizing: border-box; }
-      body {
-        margin: 0;
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        background:
-          radial-gradient(circle at top left, rgba(56,189,248,.16), transparent 35%),
-          radial-gradient(circle at bottom right, rgba(34,197,94,.12), transparent 35%),
-          var(--bg);
-        color: var(--text);
-      }
-      a { color: inherit; }
-      .page { width: min(1220px, 94vw); margin: 0 auto; padding: 42px 0; }
-      header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 24px; }
-      h1 { margin: 0 0 8px; font-size: clamp(34px, 5vw, 56px); line-height: 1; letter-spacing: -.05em; }
-      .subtitle { margin: 0; color: var(--muted); font-size: 18px; }
-      .badge { border: 1px solid var(--border); border-radius: 999px; padding: 10px 14px; color: var(--muted); white-space: nowrap; background: rgba(15,23,42,.65); }
-      .badge strong { color: var(--green); }
-      .card { background: linear-gradient(180deg, rgba(17,24,39,.96), rgba(15,23,42,.96)); border: 1px solid var(--border); border-radius: 22px; padding: 22px; box-shadow: 0 20px 40px rgba(0,0,0,.25); margin-bottom: 18px; }
-      .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
-      .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
-      .stat .num { font-size: 32px; font-weight: 800; }
-      .stat .label { color: var(--muted); font-size: 14px; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
-      th { color: var(--muted); font-size: 13px; text-transform: uppercase; letter-spacing: .08em; }
-      .pill { display: inline-block; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; border: 1px solid var(--border); color: var(--text); background: rgba(31,41,55,.72); }
-      .priority-Krytyczny { color: #fecaca; border-color: rgba(239,68,68,.45); }
-      .priority-Wysoki { color: #fde68a; border-color: rgba(250,204,21,.45); }
-      .priority-Normalny { color: #bae6fd; border-color: rgba(56,189,248,.45); }
-      .priority-Niski { color: #bbf7d0; border-color: rgba(34,197,94,.45); }
-      input, textarea, select { width: 100%; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 12px; font-size: 15px; }
-      textarea { min-height: 120px; resize: vertical; }
-      label { display: block; color: var(--muted); font-size: 13px; margin: 12px 0 6px; }
-      .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-      button, .btn { display: inline-block; margin-top: 14px; border: 0; border-radius: 14px; padding: 12px 18px; font-weight: 700; color: white; background: linear-gradient(135deg, #0284c7, #22c55e); cursor: pointer; text-decoration: none; }
-      .btn-secondary { background: rgba(31,41,55,.9); border: 1px solid var(--border); }
-      .btn-danger { background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.45); color: #fecaca; }
-      .btn-small { margin-top: 0; padding: 8px 11px; border-radius: 10px; font-size: 13px; }
-      .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-      .status-filter-btn { margin-top: 0; color: var(--muted); transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
-      .status-filter-btn:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text); }
-      .status-filter-btn.active { color: white; background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
-      .status-filter-btn.active::before { content: "✓ "; }
-      .status-filter-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; align-items:center; }
-      .status-filter-hint { margin-top:8px; color:var(--muted); font-size:13px; }
-      .status-Nowe { color:#bbf7d0; border-color:rgba(34,197,94,.55); background:rgba(34,197,94,.14); }
-      .status-Otwarte { color:#fed7aa; border-color:rgba(249,115,22,.58); background:rgba(249,115,22,.14); }
-      .status-W-trakcie { color:#bae6fd; border-color:rgba(56,189,248,.55); background:rgba(56,189,248,.14); }
-      .status-Oczekuje-na-uzytkownika { color:#fecaca; border-color:rgba(239,68,68,.58); background:rgba(239,68,68,.14); }
-      .status-Oczekuje-na-dostawce { color:#ddd6fe; border-color:rgba(168,85,247,.58); background:rgba(168,85,247,.14); }
-      .status-Rozwiazane { color:#c7d2fe; border-color:rgba(99,102,241,.55); background:rgba(99,102,241,.14); }
-      .status-Zamkniete { color:#e5e7eb; border-color:rgba(156,163,175,.55); background:rgba(156,163,175,.14); }
-      .ticket-title { font-weight: 800; text-decoration: none; color: var(--text); background: none; padding: 0; margin: 0; transition: color .15s ease, opacity .15s ease; }
-      .ticket-title:hover { opacity: .82; }
-      .ticket-title.status-Nowe, .ticket-heading.status-Nowe { color:#22c55e; background:transparent; border-color:transparent; }
-      .ticket-title.status-Otwarte, .ticket-heading.status-Otwarte { color:#fb923c; background:transparent; border-color:transparent; }
-      .ticket-title.status-W-trakcie, .ticket-heading.status-W-trakcie { color:#38bdf8; background:transparent; border-color:transparent; }
-      .ticket-title.status-Oczekuje-na-uzytkownika, .ticket-heading.status-Oczekuje-na-uzytkownika { color:#ef4444; background:transparent; border-color:transparent; }
-      .ticket-title.status-Oczekuje-na-dostawce, .ticket-heading.status-Oczekuje-na-dostawce { color:#a78bfa; background:transparent; border-color:transparent; }
-      .ticket-title.status-Rozwiazane, .ticket-heading.status-Rozwiazane { color:#818cf8; background:transparent; border-color:transparent; }
-      .ticket-title.status-Zamkniete, .ticket-heading.status-Zamkniete { color:#94a3b8; background:transparent; border-color:transparent; }
-      .ticket-title.status-default, .ticket-heading.status-default { color:var(--text); background:transparent; border-color:transparent; }
-      .muted { color: var(--muted); }
-      .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
-      .login-box { width: min(520px, 100%); margin: 0 auto; }
-      .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
-      .error { color: #fecaca; }
-      .success { color: #bbf7d0; }
-      .live-panel { border: 1px solid var(--border); border-radius: 18px; padding: 12px 14px; background: rgba(15,23,42,.65); color: var(--muted); min-width: 280px; }
-      .live-panel .live-row { display:flex; justify-content:space-between; gap:12px; margin:4px 0; }
-      .live-panel .live-value { color: var(--text); font-weight: 800; }
-      .live-panel .ws-connected { color: #22c55e; }
-      .live-panel .ws-disconnected { color: #ef4444; }
-      .header-actions { display:flex; flex-direction:column; gap:10px; align-items:flex-end; }
-      .toast { position: fixed; right: 24px; bottom: 24px; z-index: 9999; min-width: 280px; max-width: 440px; padding: 16px 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(2,132,199,.96), rgba(34,197,94,.96)); color: #fff; box-shadow: 0 18px 40px rgba(0,0,0,.35); font-weight: 700; opacity: 0; transform: translateY(16px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
-      .toast.show { opacity: 1; transform: translateY(0); }
-      .toast small { display: block; margin-top: 4px; opacity: .85; font-weight: 500; }
-      .hidden { display: none; }
-      @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
-    """
-
-    SPA_HTML = f"""
-    <!doctype html>
-    <html lang="pl">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>INCoprp Helpdesk</title>
-      <style>{CSS}</style>
-    </head>
-    <body>
-      <main class="page">
-        <header>
-          <div>
-            <h1>INCoprp Helpdesk</h1>
-            <p class="subtitle">Centrum zgłoszeń IT dla pracowników biurowych.</p>
-          </div>
-          <div class="header-actions">
-            <div id="userBadge" class="badge">Ładowanie...</div>
-            <div id="livePanel" class="live-panel">
-              <div class="live-row"><span>WebSocket</span><span id="wsStatus" class="live-value ws-disconnected">disconnected</span></div>
-              <div class="live-row"><span>Aktywni</span><span id="wsClients" class="live-value">-</span></div>
-              <div class="live-row"><span>Czas serwera</span><span id="wsTime" class="live-value">-</span></div>
-              <div class="live-row"><span>Ostatnie zdarzenie</span><span id="wsEvent" class="live-value">-</span></div>
-            </div>
-          </div>
-        </header>
-        <div id="app"></div>
-      </main>
-
-      <div id="toast" class="toast"></div>
-
-      <script>
-        const appEl = document.getElementById("app");
-        const userBadge = document.getElementById("userBadge");
-        const wsStatus = document.getElementById("wsStatus");
-        const wsClients = document.getElementById("wsClients");
-        const wsTime = document.getElementById("wsTime");
-        const wsEvent = document.getElementById("wsEvent");
-        let liveSocket = null;
-        let liveReconnectTimer = null;
-        let lastLiveEventId = null;
-        let currentView = {{ name: "home", ticketId: null }};
-        let suppressNextLiveRefresh = false;
-
-        function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
-        function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
-        function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
-
-        async function api(path, options = {{}}) {{
-          const headers = options.headers || {{}};
-          headers["X-Helpdesk-Session"] = getSid();
-          if (options.body && !headers["Content-Type"]) headers["Content-Type"] = "application/json";
-          const res = await fetch(path, {{ ...options, headers }});
-          if (res.status === 401) {{
-            clearSid();
-            window.location.href = "/login";
-            return null;
-          }}
-          return res;
-        }}
-
-        function esc(value) {{
-          return String(value ?? "").replace(/[&<>"']/g, ch => ({{
-            "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
-          }}[ch]));
-        }}
-
-
-        function showToast(message, details = "") {{
-          const toast = document.getElementById("toast");
-          if (!toast) return;
-
-          const small = details ? "<small>" + esc(details) + "</small>" : "";
-          toast.innerHTML = "<div>" + esc(message) + "</div>" + small;
-
-          toast.classList.add("show");
-
-          clearTimeout(window.__helpdeskToastTimer);
-          window.__helpdeskToastTimer = setTimeout(() => {{
-            toast.classList.remove("show");
-          }}, 4200);
-        }}
-
-        function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
-        function statusClass(status) {{
-          return "status-" + String(status || "")
-            .normalize("NFD")
-            .replace(/[\u0300-\u036f]/g, "")
-            .replaceAll("ł", "l")
-            .replaceAll("Ł", "L")
-            .replace(/[^a-zA-Z0-9]+/g, "-")
-            .replace(/^-|-$/g, "");
-        }}
-        function setWsStatus(text, connected) {{
-          wsStatus.textContent = text;
-          wsStatus.className = connected ? "live-value ws-connected" : "live-value ws-disconnected";
-        }}
-
-        function connectLive() {{
-          const sid = getSid();
-          if (!sid) return;
-          if (liveSocket && (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING)) return;
-
-          const scheme = window.location.protocol === "https:" ? "wss" : "ws";
-          liveSocket = new WebSocket(`${{scheme}}://${{window.location.host}}/ws`);
-          setWsStatus("connecting", false);
-
-          liveSocket.onopen = () => {{
-            setWsStatus("connected", true);
-            liveSocket.send(JSON.stringify({{ type: "auth", sid }}));
-          }};
-
-          liveSocket.onmessage = (event) => {{
-            const data = JSON.parse(event.data);
-            handleLivePayload(data);
-          }};
-
-          liveSocket.onclose = () => {{
-            setWsStatus("disconnected", false);
-            if (getSid()) {{
-              clearTimeout(liveReconnectTimer);
-              liveReconnectTimer = setTimeout(connectLive, 2000);
-            }}
-          }};
-
-          liveSocket.onerror = () => {{
-            try {{ liveSocket.close(); }} catch (e) {{}}
-          }};
-        }}
-
-        async function handleLivePayload(data) {{
-          wsClients.textContent = data.active_clients ?? "-";
-          wsTime.textContent = data.server_time ?? "-";
-
-          const liveEvent = data.event || null;
-          wsEvent.textContent = liveEvent?.message || data.message || "-";
-
-          if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
-          lastLiveEventId = liveEvent.id;
-
-          if (!["ticket_created", "status_changed", "comment_added", "assignment_changed"].includes(liveEvent.type)) return;
-
-          if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
-            showToast(
-              "Zmieniono status zgłoszenia #" + liveEvent.ticket_id,
-              liveEvent.message || ""
-            );
-          }}
-
-          if (suppressNextLiveRefresh) {{
-            suppressNextLiveRefresh = false;
-            return;
-          }}
-
-          if (currentView.name === "ticket" && Number(currentView.ticketId) === Number(liveEvent.ticket_id)) {{
-            await renderTicket(liveEvent.ticket_id, true);
-            return;
-          }}
-
-          if (currentView.name === "home") {{
-            await renderHome(loadStatusFilters(), true);
-          }}
-        }}
-
-        function disconnectLive() {{
-          clearTimeout(liveReconnectTimer);
-          if (liveSocket) {{
-            try {{ liveSocket.close(); }} catch (e) {{}}
-          }}
-          liveSocket = null;
-          setWsStatus("disconnected", false);
-          wsClients.textContent = "-";
-          wsTime.textContent = "-";
-          wsEvent.textContent = "-";
-        }}
-
-        function loadStatusFilters() {{
-          try {{ return JSON.parse(sessionStorage.getItem("helpdesk_status_filters") || "[]"); }}
-          catch {{ return []; }}
-        }}
-        function saveStatusFilters(filters) {{
-          sessionStorage.setItem("helpdesk_status_filters", JSON.stringify(filters));
-        }}
-        function toggleStatusFilter(status) {{
-          const filters = loadStatusFilters();
-          const next = filters.includes(status) ? filters.filter(s => s !== status) : filters.concat([status]);
-          saveStatusFilters(next);
-          renderHome(next);
-        }}
-        function clearStatusFilters() {{
-          saveStatusFilters([]);
-          renderHome([]);
-        }}
-
-        async function loadMe() {{
-          const res = await api("/api/me");
-          if (!res) return null;
-          const data = await res.json();
-          const adminLink = data.role === "admin" ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
-          connectLive();
-          return data;
-        }}
-
-        async function logout() {{
-          await api("/api/logout", {{ method: "POST" }});
-          clearSid();
-          disconnectLive();
-          window.location.href = "/login";
-        }}
-
-        async function renderProfile() {{
-          const me = await loadMe();
-          if (!me) return;
-          const metaRes = await api("/api/meta");
-          const meta = await metaRes.json();
-
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
-              <h2>Mój profil</h2>
-              <p class="muted">Zmień dane profilu albo hasło zalogowanego użytkownika. Sesja pozostaje osobna dla tej karty przeglądarki.</p>
-            </section>
-
-            <section class="card">
-              <h3>Dane użytkownika</h3>
-              <p id="profileMessage" class="success hidden">Profil został zapisany.</p>
-              <form id="profileForm">
-                <div class="grid">
-                  <div>
-                    <label>Imię</label>
-                    <input name="first_name" value="${{esc(me.first_name)}}" required>
-                  </div>
-                  <div>
-                    <label>Nazwisko</label>
-                    <input name="last_name" value="${{esc(me.last_name)}}" required>
-                  </div>
-                </div>
-
-                <label>E-mail</label>
-                <input value="${{esc(me.email)}}" disabled>
-
-                <label>Dział</label>
-                <select name="department">${{meta.departments.map(x => `<option ${{x === me.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-
-                <button type="submit">Zapisz profil</button>
-              </form>
-            </section>
-
-            <section class="card">
-              <h3>Zmiana hasła</h3>
-              <p id="passwordMessage" class="success hidden">Hasło zostało zmienione.</p>
-              <p id="passwordError" class="error hidden">Nie udało się zmienić hasła.</p>
-              <form id="passwordForm">
-                <label>Obecne hasło</label>
-                <input name="current_password" type="password" required>
-
-                <label>Nowe hasło</label>
-                <input name="new_password" type="password" minlength="8" required>
-
-                <label>Powtórz nowe hasło</label>
-                <input name="confirm_password" type="password" minlength="8" required>
-
-                <button type="submit">Zmień hasło</button>
-              </form>
-            </section>`;
-
-          document.getElementById("profileForm").addEventListener("submit", async (e) => {{
-            e.preventDefault();
-            const payload = Object.fromEntries(new FormData(e.target).entries());
-            const res = await api("/api/profile", {{ method: "PUT", body: JSON.stringify(payload) }});
-            if (!res || !res.ok) {{ alert("Nie udało się zapisać profilu."); return; }}
-            document.getElementById("profileMessage").classList.remove("hidden");
-            await loadMe();
-          }});
-
-          document.getElementById("passwordForm").addEventListener("submit", async (e) => {{
-            e.preventDefault();
-            const payload = Object.fromEntries(new FormData(e.target).entries());
-            const msg = document.getElementById("passwordMessage");
-            const err = document.getElementById("passwordError");
-            msg.classList.add("hidden");
-            err.classList.add("hidden");
-            if (payload.new_password !== payload.confirm_password) {{
-              err.textContent = "Nowe hasła nie są takie same.";
-              err.classList.remove("hidden");
-              return;
-            }}
-            const res = await api("/api/profile/password", {{ method: "POST", body: JSON.stringify(payload) }});
-            if (!res || !res.ok) {{
-              const data = res ? await res.json().catch(() => ({{}})) : {{}};
-              err.textContent = data.error || "Nie udało się zmienić hasła.";
-              err.classList.remove("hidden");
-              return;
-            }}
-            e.target.reset();
-            msg.classList.remove("hidden");
-          }});
-        }}
-
-        async function renderAdminUsers() {{
-          const me = await loadMe();
-          if (!me) return;
-          if (me.role !== "admin") {{
-            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Tylko administrator może zarządzać użytkownikami.</p></section>`;
-            return;
-          }}
-
-          const res = await api("/api/admin/users");
-          if (!res) return;
-          if (!res.ok) {{ appEl.innerHTML = `<section class="card"><h2>Błąd pobierania użytkowników</h2></section>`; return; }}
-          const data = await res.json();
-
-          const rows = data.users.map(u => `
-            <tr>
-              <td><strong>${{esc(u.first_name)}} ${{esc(u.last_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
-              <td>${{esc(u.department)}}</td>
-              <td><span class="pill">${{esc(u.role)}}</span></td>
-              <td class="muted">${{esc(u.created_at)}}</td>
-              <td>
-                <div class="actions">
-                  <button class="btn-secondary btn-small" onclick="renderAdminUserForm('${{encodeURIComponent(u.email)}}')">Edytuj</button>
-                  <button class="btn-secondary btn-small" onclick="renderAdminPasswordForm('${{encodeURIComponent(u.email)}}')">Hasło</button>
-                  <button class="btn-danger btn-small" onclick="deleteAdminUser('${{encodeURIComponent(u.email)}}')">Usuń</button>
-                </div>
-              </td>
-            </tr>`).join("");
-
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
-              <h2>Zarządzanie użytkownikami</h2>
-              <p class="muted">Panel administratora: dodawanie użytkowników, edycja profilu, reset hasła i usuwanie kont.</p>
-              <button onclick="renderAdminUserForm()">Dodaj użytkownika</button>
-            </section>
-            <section class="card">
-              <h3>Użytkownicy INCoprp</h3>
-              <table>
-                <thead><tr><th>Użytkownik</th><th>Dział</th><th>Rola</th><th>Utworzono</th><th>Akcje</th></tr></thead>
-                <tbody>${{rows}}</tbody>
-              </table>
-            </section>`;
-        }}
-
-        async function renderAdminUserForm(encodedEmail = null) {{
-          const me = await loadMe();
-          if (!me || me.role !== "admin") return;
-          const metaRes = await api("/api/meta");
-          const meta = await metaRes.json();
-
-          let user = {{ first_name: "", last_name: "", email: "", department: meta.departments[0], role: "user" }};
-          const editing = !!encodedEmail;
-
-          if (editing) {{
-            const email = decodeURIComponent(encodedEmail);
-            const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`);
-            if (!res || !res.ok) {{ alert("Nie udało się pobrać użytkownika."); return; }}
-            user = await res.json();
-          }}
-
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderAdminUsers()">← Użytkownicy</button>
-              <h2>${{editing ? "Edytuj użytkownika" : "Dodaj użytkownika"}}</h2>
-              <p id="adminUserMessage" class="success hidden">Zapisano użytkownika.</p>
-              <p id="adminUserError" class="error hidden">Nie udało się zapisać użytkownika.</p>
-              <form id="adminUserForm">
-                <div class="grid">
-                  <div>
-                    <label>Imię</label>
-                    <input name="first_name" value="${{esc(user.first_name)}}" required>
-                  </div>
-                  <div>
-                    <label>Nazwisko</label>
-                    <input name="last_name" value="${{esc(user.last_name)}}" required>
-                  </div>
-                </div>
-
-                <label>E-mail</label>
-                <input name="email" type="email" value="${{esc(user.email)}}" ${{editing ? "disabled" : "required"}} placeholder="jan.kowalski@incoprp.local">
-
-                <label>Dział</label>
-                <select name="department">${{meta.departments.map(x => `<option ${{x === user.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-
-                <label>Rola</label>
-                <select name="role">
-                  <option value="user" ${{user.role === "user" ? "selected" : ""}}>user</option>
-                  <option value="agent" ${{user.role === "agent" ? "selected" : ""}}>agent</option>
-                  <option value="admin" ${{user.role === "admin" ? "selected" : ""}}>admin</option>
-                </select>
-
-                ${{editing ? "" : `
-                  <label>Hasło startowe</label>
-                  <input name="password" type="password" minlength="8" required placeholder="minimum 8 znaków">
-                `}}
-
-                <button type="submit">Zapisz</button>
-                <button type="button" class="btn-secondary" onclick="renderAdminUsers()">Anuluj</button>
-              </form>
-            </section>`;
-
-          document.getElementById("adminUserForm").addEventListener("submit", async (e) => {{
-            e.preventDefault();
-            const payload = Object.fromEntries(new FormData(e.target).entries());
-            const endpoint = editing ? `/api/admin/users/${{encodeURIComponent(user.email)}}` : "/api/admin/users";
-            const method = editing ? "PUT" : "POST";
-            const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
-            const msg = document.getElementById("adminUserMessage");
-            const err = document.getElementById("adminUserError");
-            msg.classList.add("hidden");
-            err.classList.add("hidden");
-            if (!res || !res.ok) {{
-              const data = res ? await res.json().catch(() => ({{}})) : {{}};
-              err.textContent = data.error || "Nie udało się zapisać użytkownika.";
-              err.classList.remove("hidden");
-              return;
-            }}
-            msg.classList.remove("hidden");
-            setTimeout(renderAdminUsers, 500);
-          }});
-        }}
-
-        async function renderAdminPasswordForm(encodedEmail) {{
-          const me = await loadMe();
-          if (!me || me.role !== "admin") return;
-          const email = decodeURIComponent(encodedEmail);
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderAdminUsers()">← Użytkownicy</button>
-              <h2>Reset hasła</h2>
-              <p class="muted">Ustaw nowe hasło dla konta: <strong>${{esc(email)}}</strong></p>
-              <p id="adminPasswordMessage" class="success hidden">Hasło zostało zmienione.</p>
-              <p id="adminPasswordError" class="error hidden">Nie udało się zmienić hasła.</p>
-              <form id="adminPasswordForm">
-                <label>Nowe hasło</label>
-                <input name="new_password" type="password" minlength="8" required>
-                <label>Powtórz nowe hasło</label>
-                <input name="confirm_password" type="password" minlength="8" required>
-                <button type="submit">Zmień hasło</button>
-                <button type="button" class="btn-secondary" onclick="renderAdminUsers()">Anuluj</button>
-              </form>
-            </section>`;
-          document.getElementById("adminPasswordForm").addEventListener("submit", async (e) => {{
-            e.preventDefault();
-            const payload = Object.fromEntries(new FormData(e.target).entries());
-            const msg = document.getElementById("adminPasswordMessage");
-            const err = document.getElementById("adminPasswordError");
-            msg.classList.add("hidden");
-            err.classList.add("hidden");
-            if (payload.new_password !== payload.confirm_password) {{
-              err.textContent = "Hasła nie są takie same.";
-              err.classList.remove("hidden");
-              return;
-            }}
-            const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}/password`, {{ method: "POST", body: JSON.stringify(payload) }});
-            if (!res || !res.ok) {{
-              const data = res ? await res.json().catch(() => ({{}})) : {{}};
-              err.textContent = data.error || "Nie udało się zmienić hasła.";
-              err.classList.remove("hidden");
-              return;
-            }}
-            e.target.reset();
-            msg.classList.remove("hidden");
-          }});
-        }}
-
-        async function deleteAdminUser(encodedEmail) {{
-          const email = decodeURIComponent(encodedEmail);
-          if (!confirm(`Usunąć użytkownika ${{email}}? Tej operacji nie można cofnąć.`)) return;
-          const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`, {{ method: "DELETE" }});
-          if (!res || !res.ok) {{
-            const data = res ? await res.json().catch(() => ({{}})) : {{}};
-            alert(data.error || "Nie udało się usunąć użytkownika.");
-            return;
-          }}
-          await renderAdminUsers();
-        }}
-
-        async function renderHome(statusFilters = loadStatusFilters(), fromLive = false) {{
-          currentView = {{ name: "home", ticketId: null }};
-          const me = await loadMe();
-          if (!me) return;
-
-          const filters = Array.isArray(statusFilters) ? statusFilters : [];
-          saveStatusFilters(filters);
-
-          const query = filters.length ? `?statuses=${{encodeURIComponent(filters.join(","))}}` : "";
-          const res = await api(`/api/tickets${{query}}`);
-          if (!res) return;
-          const data = await res.json();
-          const scope = canWorkTickets(me) ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
-          const filteredLabel = filters.length ? ` · statusy: ${{filters.join(", ")}}` : "";
-
-          const statusButtons = [`<button class="btn-secondary status-filter-btn${{filters.length === 0 ? " active" : ""}}" onclick="clearStatusFilters()">Wszystkie</button>`]
-            .concat(data.statuses.map(s => `<button class="btn-secondary status-filter-btn ${{statusClass(s)}}${{filters.includes(s) ? " active" : ""}}" onclick="toggleStatusFilter('${{esc(s)}}')">${{esc(s)}}</button>`))
-            .join(" ");
-
-          const rows = data.tickets.length ? data.tickets.map(t => `
-            <tr>
-              <td>#${{t.id}}</td>
-              <td><a class="ticket-title ${{statusClass(t.status)}}" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
-              <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
-              <td>${{esc(t.category)}}</td>
-              <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
-              <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
-              <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</td>
-              <td><span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span><br><span class="muted">${{esc(t.sla_due_at || "")}}</span></td>
-              <td class="muted">${{esc(t.created_at)}}</td>
-            </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych statusów.</td></tr>`;
-
-          appEl.innerHTML = `
-            <section class="stats">
-              <div class="stat"><div class="num">${{data.stats.total}}</div><div class="label">${{scope}}</div></div>
-              <div class="stat"><div class="num">${{data.stats.new}}</div><div class="label">Nowe</div></div>
-              <div class="stat"><div class="num">${{data.stats.in_progress}}</div><div class="label">W trakcie</div></div>
-              <div class="stat"><div class="num">${{data.stats.high}}</div><div class="label">Wysoki / Krytyczny</div></div>
-              <div class="stat"><div class="num">${{data.stats.resolved}}</div><div class="label">Rozwiązane / Zamknięte</div></div>
-            </section>
-            <section class="card">
-              <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
-              <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
-              ${{me.role === "admin" ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
-              <div style="margin-top:16px">
-                <strong>Filtry statusów:</strong>
-                <div class="status-filter-actions">${{statusButtons}}</div>
-                <div class="status-filter-hint">Możesz zaznaczyć więcej niż jeden status. Kliknij status ponownie, aby go odznaczyć.</div>
-              </div>
-            </section>
-            <section class="card">
-              <h2>${{scope}}${{filteredLabel}}</h2>
-              <table>
-                <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane do</th><th>SLA</th><th>Utworzono</th></tr></thead>
-                <tbody>${{rows}}</tbody>
-              </table>
-            </section>`;
-        }}
-
-        async function renderNewTicket() {{
-          currentView = {{ name: "new-ticket", ticketId: null }};
-          const me = await loadMe();
-          if (!me) return;
-          const metaRes = await api("/api/meta");
-          const meta = await metaRes.json();
-          appEl.innerHTML = `
-            <section class="card">
-              <h2>Nowe zgłoszenie</h2>
-              <form id="ticketForm">
-                <label>Tytuł problemu</label>
-                <input name="title" required placeholder="Np. Outlook nie odbiera poczty">
-                <label>Opis</label>
-                <textarea name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
-                <div class="grid">
-                  <div><label>Zgłaszający</label><input value="${{esc(me.name)}}" disabled></div>
-                  <div><label>E-mail</label><input value="${{esc(me.email)}}" disabled></div>
-                </div>
-                <div class="grid">
-                  <div><label>Dział</label><input value="${{esc(me.department)}}" disabled></div>
-                  <div><label>Kategoria</label><select name="category">${{meta.categories.map(x => `<option>${{esc(x)}}</option>`).join("")}}</select></div>
-                </div>
-                <label>Priorytet</label>
-                <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-                <button type="submit">Utwórz zgłoszenie</button>
-                <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
-              </form>
-            </section>`;
-          document.getElementById("ticketForm").addEventListener("submit", createTicket);
-        }}
-
-        async function createTicket(event) {{
-          event.preventDefault();
-          const form = event.target;
-          const payload = Object.fromEntries(new FormData(form).entries());
-          suppressNextLiveRefresh = true;
-          const res = await api("/api/tickets", {{ method: "POST", body: JSON.stringify(payload) }});
-          if (!res) return;
-          if (!res.ok) {{ alert("Nie udało się utworzyć zgłoszenia."); return; }}
-          await renderHome();
-        }}
-
-        async function renderTicket(id, fromLive = false) {{
-          currentView = {{ name: "ticket", ticketId: Number(id) }};
-          const me = await loadMe();
-          if (!me) return;
-          const res = await api(`/api/tickets/${{id}}`);
-          if (!res) return;
-          if (!res.ok) {{ appEl.innerHTML = `<section class="card"><h2>Brak dostępu albo brak zgłoszenia</h2></section>`; return; }}
-          const data = await res.json();
-          const t = data.ticket;
-          const comments = data.comments.map(c => `
-            <div class="comment"><div class="muted">${{esc(c.author)}} · ${{esc(c.created_at)}}</div><div>${{esc(c.content)}}</div></div>
-          `).join("") || `<p class="muted">Brak komentarzy.</p>`;
-
-          const statusPanel = canWorkTickets(me) ? `
-            <section class="card">
-              <h3>Zmień status</h3>
-              <form id="statusForm">
-                <label>Status</label>
-                <select name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
-                <button type="submit">Zapisz status</button>
-              </form>
-            </section>` : "";
-
-          const assignmentPanel = canWorkTickets(me) ? `
-            <section class="card">
-              <h3>Przypisanie zgłoszenia</h3>
-              <form id="assignmentForm">
-                <label>Agent</label>
-                <select name="assigned_to_email">
-                  <option value="">Nieprzypisane</option>
-                  ${{data.meta.agents.map(a => `<option value="${{esc(a.email)}}" ${{a.email === t.assigned_to_email ? "selected" : ""}}>${{esc(a.name)}} (${{esc(a.role)}})</option>`).join("")}}
-                </select>
-                <button type="submit">Zapisz przypisanie</button>
-              </form>
-            </section>` : "";
-
-          const eventHistory = (data.events || []).length
-            ? `<div class="timeline">${{data.events.map(e => `
-                <div class="event-item">
-                  <strong>${{esc(e.actor_name || "System")}}</strong>
-                  <span class="muted"> · ${{esc(e.created_at)}} · ${{esc(e.event_type)}}</span>
-                  <div>${{esc(e.message)}}</div>
-                </div>`).join("")}}</div>`
-            : `<p class="muted">Brak historii zmian.</p>`;
-
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
-              <h2 class="ticket-heading ${{statusClass(t.status)}}">#${{t.id}} · ${{esc(t.title)}}</h2>
-              <p class="muted">Utworzono: ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>
-              <p><strong>Status:</strong> <span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></p>
-              <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
-              <p><strong>SLA:</strong> <span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span> <span class="muted">${{esc(t.sla_due_at || "")}}</span></p>
-              <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</p>
-              <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
-              <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
-              <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
-              <h3>Opis</h3><p>${{esc(t.description)}}</p>
-            </section>
-            ${{statusPanel}}
-            ${{assignmentPanel}}
-            <section class="card">
-              <h3>Historia zmian</h3>
-              ${{eventHistory}}
-            </section>
-            <section class="card">
-              <h3>Komentarze</h3>
-              ${{comments}}
-              <form id="commentForm">
-                <label>Komentarz</label>
-                <textarea name="content" required></textarea>
-                <button type="submit">Dodaj komentarz</button>
-              </form>
-            </section>`;
-
-          const commentForm = document.getElementById("commentForm");
-          commentForm.addEventListener("submit", async (e) => {{
-            e.preventDefault();
-            const payload = Object.fromEntries(new FormData(commentForm).entries());
-            suppressNextLiveRefresh = true;
-            await api(`/api/tickets/${{id}}/comments`, {{ method: "POST", body: JSON.stringify(payload) }});
-            await renderTicket(id);
-          }});
-
-          const statusForm = document.getElementById("statusForm");
-          if (statusForm) {{
-            statusForm.addEventListener("submit", async (e) => {{
-              e.preventDefault();
-              const payload = Object.fromEntries(new FormData(statusForm).entries());
-              const newStatus = payload.status || "";
-              suppressNextLiveRefresh = true;
-              const res = await api(`/api/tickets/${{id}}/status`, {{ method: "POST", body: JSON.stringify(payload) }});
-              if (!res || !res.ok) {{
-                suppressNextLiveRefresh = false;
-                alert("Nie udało się zmienić statusu.");
-                return;
-              }}
-              showToast(
-                "Status zgłoszenia #" + id + " został zmieniony",
-                "Nowy status: " + newStatus
-              );
-              await renderTicket(id);
-            }});
-          }}
-
-          const assignmentForm = document.getElementById("assignmentForm");
-          if (assignmentForm) {{
-            assignmentForm.addEventListener("submit", async (e) => {{
-              e.preventDefault();
-              const payload = Object.fromEntries(new FormData(assignmentForm).entries());
-              suppressNextLiveRefresh = true;
-              const res = await api(`/api/tickets/${{id}}/assign`, {{ method: "POST", body: JSON.stringify(payload) }});
-              if (!res || !res.ok) {{
-                suppressNextLiveRefresh = false;
-                alert("Nie udało się zmienić przypisania.");
-                return;
-              }}
-              showToast("Zmieniono przypisanie zgłoszenia #" + id, payload.assigned_to_email || "Nieprzypisane");
-              await renderTicket(id);
-            }});
-          }}
-        }}
-
-        renderHome();
-      </script>
-    </body>
-    </html>
-    """
-
-    LOGIN_HTML = f"""
-    <!doctype html>
-    <html lang="pl">
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1">
-      <title>INCoprp Helpdesk — Logowanie</title>
-      <style>{CSS}</style>
-    </head>
-    <body>
-      <main class="page">
-        <header>
-          <div>
-            <h1>INCoprp Helpdesk</h1>
-            <p class="subtitle">Logowanie do systemu zgłoszeń IT.</p>
-          </div>
-          <div class="badge">Sesja: <strong>ukryta w sessionStorage</strong></div>
-        </header>
-        <section class="card login-box">
-          <h2>Logowanie</h2>
-          <p id="error" class="error hidden">Nieprawidłowy e-mail albo hasło.</p>
-          <form id="loginForm">
-            <label>E-mail</label>
-            <input name="email" type="email" required placeholder="anna.kowalska@incoprp.local">
-            <label>Hasło</label>
-            <input name="password" type="password" required placeholder="Incoprp123!">
-            <button type="submit">Zaloguj</button>
-          </form>
-          <p class="muted">
-            Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
-            agent@incoprp.local, admin@incoprp.local. Hasło startowe: Incoprp123!
-          </p>
-        </section>
-      </main>
-      <script>
-        document.getElementById("loginForm").addEventListener("submit", async (event) => {{
-          event.preventDefault();
-          const payload = Object.fromEntries(new FormData(event.target).entries());
-          const res = await fetch("/api/login", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify(payload)
-          }});
-          if (!res.ok) {{
-            document.getElementById("error").classList.remove("hidden");
-            return;
-          }}
-          const data = await res.json();
-          sessionStorage.setItem("helpdesk_sid", data.sid);
-          window.location.href = "/";
-        }});
-      </script>
-    </body>
-    </html>
-    """
-
-    @sock.route("/ws")
-    def websocket(ws):
-        client_id = id(ws)
-        user = None
-        try:
-            raw = ws.receive()
-            auth = json.loads(raw or "{}")
-            sid = clean(auth.get("sid"))
-            user = get_user_by_sid(sid)
-            if not user:
-                ws.send(json.dumps({"error": "unauthorized"}))
-                return
-
-            active_ws_clients.add(client_id)
-            publish_event(f"{user['name']} połączony z live helpdesk", "presence")
-
-            while True:
-                ws.send(json.dumps({
-                    "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "active_clients": len(active_ws_clients),
-                    "user": {
-                        "name": user["name"],
-                        "email": user["email"],
-                        "role": user["role"],
-                    },
-                    "event": last_live_event,
-                }))
-                time.sleep(1)
-        except Exception:
-            pass
-        finally:
-            active_ws_clients.discard(client_id)
-
-    @app.get("/healthz")
-    def healthz():
-        return {"status": "ok"}
-
-    @app.get("/login")
-    def login_page():
-        return Response(LOGIN_HTML, mimetype="text/html")
-
-    @app.get("/")
-    def spa_page():
-        return Response(SPA_HTML, mimetype="text/html")
-
-    @app.post("/api/login")
-    def api_login():
-        payload = request.get_json(silent=True) or {}
-        email = clean(payload.get("email")).lower()
-        password = str(payload.get("password") or "")
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT first_name, last_name, email, department, role, password_hash
-            FROM users
-            WHERE lower(email) = %s
-        """, (email,))
-        user = cur.fetchone()
-        if not user:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "invalid credentials"}), 401
-
-        first_name, last_name, user_email, department, role, password_hash = user
-        if not check_password_hash(password_hash, password):
-            cur.close()
-            conn.close()
-            return jsonify({"error": "invalid credentials"}), 401
-
-        sid = str(uuid.uuid4())
-        cur.execute("INSERT INTO user_sessions (sid, user_email) VALUES (%s, %s)", (sid, user_email))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({
-            "sid": sid,
-            "user": {
-                "first_name": first_name,
-                "last_name": last_name,
-                "name": f"{first_name} {last_name}".strip(),
-                "email": user_email,
-                "department": department,
-                "role": role,
-            }
-        })
-
-    @app.post("/api/logout")
-    def api_logout():
-        sid = get_sid_from_request()
-        if sid:
-            conn = get_conn()
-            cur = conn.cursor()
-            cur.execute("DELETE FROM user_sessions WHERE sid = %s", (sid,))
-            conn.commit()
-            cur.close()
-            conn.close()
-        return jsonify({"status": "ok"})
-
-    @app.get("/api/me")
-    @api_login_required
-    def api_me(user):
-        return jsonify(user)
-
-    @app.put("/api/profile")
-    @api_login_required
-    def api_update_profile(user):
-        payload = request.get_json(silent=True) or {}
-        first_name = clean(payload.get("first_name"))
-        last_name = clean(payload.get("last_name"))
-        department = clean(payload.get("department"))
-
-        if not first_name or not last_name:
-            return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
-        if department not in DEPARTMENTS:
-            return jsonify({"error": "invalid department"}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            UPDATE users
-            SET first_name = %s, last_name = %s, department = %s
-            WHERE email = %s
-        """, (first_name, last_name, department, user["email"]))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({"status": "ok"})
-
-    @app.post("/api/profile/password")
-    @api_login_required
-    def api_change_password(user):
-        payload = request.get_json(silent=True) or {}
-        current_password = str(payload.get("current_password") or "")
-        new_password = str(payload.get("new_password") or "")
-        confirm_password = str(payload.get("confirm_password") or "")
-
-        if len(new_password) < 8:
-            return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
-        if new_password != confirm_password:
-            return jsonify({"error": "Nowe hasła nie są takie same."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT password_hash FROM users WHERE email = %s", (user["email"],))
-        row = cur.fetchone()
-        if not row or not check_password_hash(row[0], current_password):
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Obecne hasło jest nieprawidłowe."}), 400
-
-        cur.execute("""
-            UPDATE users
-            SET password_hash = %s
-            WHERE email = %s
-        """, (generate_password_hash(new_password), user["email"]))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        return jsonify({"status": "ok"})
-
-    @app.get("/api/admin/users")
-    @api_login_required
-    @api_admin_required
-    def api_admin_users(user):
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT first_name, last_name, email, department, role, created_at
-            FROM users
-            ORDER BY lower(last_name), lower(first_name), lower(email)
-        """)
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        return jsonify({
-            "users": [
-                {
-                    "first_name": r[0],
-                    "last_name": r[1],
-                    "full_name": f"{r[0]} {r[1]}".strip(),
-                    "email": r[2],
-                    "department": r[3],
-                    "role": r[4],
-                    "created_at": str(r[5]),
-                }
-                for r in rows
-            ]
-        })
-
-    @app.get("/api/admin/users/<path:email>")
-    @api_login_required
-    @api_admin_required
-    def api_admin_get_user(user, email):
-        email = clean(email).lower()
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT first_name, last_name, email, department, role, created_at
-            FROM users
-            WHERE lower(email) = %s
-        """, (email,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if not row:
-            return jsonify({"error": "user not found"}), 404
-        return jsonify({
-            "first_name": row[0],
-            "last_name": row[1],
-            "full_name": f"{row[0]} {row[1]}".strip(),
-            "email": row[2],
-            "department": row[3],
-            "role": row[4],
-            "created_at": str(row[5]),
-        })
-
-    @app.post("/api/admin/users")
-    @api_login_required
-    @api_admin_required
-    def api_admin_create_user(user):
-        payload = request.get_json(silent=True) or {}
-        first_name = clean(payload.get("first_name"))
-        last_name = clean(payload.get("last_name"))
-        email = clean(payload.get("email")).lower()
-        department = clean(payload.get("department"))
-        role = clean(payload.get("role")) or "user"
-        password = str(payload.get("password") or "")
-
-        if not first_name or not last_name or not email:
-            return jsonify({"error": "Imię, nazwisko oraz e-mail są wymagane."}), 400
-        if department not in DEPARTMENTS:
-            return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "agent", "admin"):
-            return jsonify({"error": "Nieprawidłowa rola."}), 400
-        if len(password) < 8:
-            return jsonify({"error": "Hasło musi mieć co najmniej 8 znaków."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (email,))
-        if cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Użytkownik o takim adresie e-mail już istnieje."}), 409
-
-        cur.execute("""
-            INSERT INTO users (first_name, last_name, email, department, role, password_hash)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (first_name, last_name, email, department, role, generate_password_hash(password)))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"status": "ok"}), 201
-
-    @app.put("/api/admin/users/<path:email>")
-    @api_login_required
-    @api_admin_required
-    def api_admin_update_user(user, email):
-        target_email = clean(email).lower()
-        payload = request.get_json(silent=True) or {}
-        first_name = clean(payload.get("first_name"))
-        last_name = clean(payload.get("last_name"))
-        department = clean(payload.get("department"))
-        role = clean(payload.get("role")) or "user"
-
-        if not first_name or not last_name:
-            return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
-        if department not in DEPARTMENTS:
-            return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "agent", "admin"):
-            return jsonify({"error": "Nieprawidłowa rola."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
-        row = cur.fetchone()
-        if not row:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-
-        old_role = row[0]
-        if target_email == user["email"].lower() and old_role == "admin" and role != "admin":
-            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            admin_count = cur.fetchone()[0]
-            if admin_count <= 1:
-                cur.close()
-                conn.close()
-                return jsonify({"error": "Nie można odebrać roli ostatniemu administratorowi."}), 400
-
-        cur.execute("""
-            UPDATE users
-            SET first_name = %s, last_name = %s, department = %s, role = %s
-            WHERE lower(email) = %s
-        """, (first_name, last_name, department, role, target_email))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"status": "ok"})
-
-    @app.post("/api/admin/users/<path:email>/password")
-    @api_login_required
-    @api_admin_required
-    def api_admin_reset_password(user, email):
-        target_email = clean(email).lower()
-        payload = request.get_json(silent=True) or {}
-        new_password = str(payload.get("new_password") or "")
-        confirm_password = str(payload.get("confirm_password") or "")
-
-        if len(new_password) < 8:
-            return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
-        if new_password != confirm_password:
-            return jsonify({"error": "Nowe hasła nie są takie same."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (target_email,))
-        if not cur.fetchone():
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-        cur.execute("UPDATE users SET password_hash = %s WHERE lower(email) = %s", (generate_password_hash(new_password), target_email))
-        cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"status": "ok"})
-
-    @app.delete("/api/admin/users/<path:email>")
-    @api_login_required
-    @api_admin_required
-    def api_admin_delete_user(user, email):
-        target_email = clean(email).lower()
-        if target_email == user["email"].lower():
-            return jsonify({"error": "Nie możesz usunąć własnego konta."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
-        row = cur.fetchone()
-        if not row:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-
-        if row[0] == "admin":
-            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
-            admin_count = cur.fetchone()[0]
-            if admin_count <= 1:
-                cur.close()
-                conn.close()
-                return jsonify({"error": "Nie można usunąć ostatniego administratora."}), 400
-
-        cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
-        cur.execute("DELETE FROM users WHERE lower(email) = %s", (target_email,))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return jsonify({"status": "ok"})
-
-    @app.get("/api/meta")
-    @api_login_required
-    def api_meta(user):
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT first_name, last_name, email, role
-            FROM users
-            WHERE role IN ('agent', 'admin')
-            ORDER BY last_name, first_name
-        """)
-        agents = [
-            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
-            for r in cur.fetchall()
-        ]
-        cur.close()
-        conn.close()
-        return jsonify({
-            "departments": DEPARTMENTS,
-            "categories": CATEGORIES,
-            "priorities": PRIORITIES,
-            "statuses": STATUSES,
-            "roles": ["user", "agent", "admin"],
-            "agents": agents,
-        })
-
-    @app.get("/api/tickets")
-    @api_login_required
-    def api_tickets(user):
-        raw_statuses = clean(request.args.get("statuses")) or clean(request.args.get("status"))
-        status_filters = []
-        if raw_statuses:
-            status_filters = [s.strip() for s in raw_statuses.split(",") if s.strip()]
-            invalid = [s for s in status_filters if s not in STATUSES]
-            if invalid:
-                return jsonify({"error": "invalid status filter", "invalid": invalid}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-
-        base_clauses = []
-        base_params = []
-
-        if not is_staff(user):
-            base_clauses.append("requester_email = %s")
-            base_params.append(user["email"])
-
-        base_where_sql = "WHERE " + " AND ".join(base_clauses) if base_clauses else ""
-
-        filtered_clauses = list(base_clauses)
-        filtered_params = list(base_params)
-        if status_filters:
-            placeholders = ",".join(["%s"] * len(status_filters))
-            filtered_clauses.append(f"status IN ({placeholders})")
-            filtered_params.extend(status_filters)
-
-        filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
-
-        cur.execute(f"""
-            SELECT
-              COUNT(*),
-              COUNT(*) FILTER (WHERE status = 'Nowe'),
-              COUNT(*) FILTER (WHERE status = 'W trakcie'),
-              COUNT(*) FILTER (WHERE priority IN ('Wysoki', 'Krytyczny')),
-              COUNT(*) FILTER (WHERE status IN ('Rozwiązane', 'Zamknięte'))
-            FROM tickets
-            {base_where_sql}
-        """, tuple(base_params))
-        total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
-
-        cur.execute(f"""
-            SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category,
-                   t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
-                   COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
-                   t.sla_due_at
-            FROM tickets t
-            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
-            {filtered_where_sql}
-            ORDER BY t.id DESC
-        """, tuple(filtered_params))
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        tickets = []
-        for row in rows:
-            tickets.append({
-                "id": row[0],
-                "title": row[1],
-                "requester_name": row[2],
-                "requester_email": row[3],
-                "department": row[4],
-                "category": row[5],
-                "priority": row[6],
-                "status": row[7],
-                "created_at": str(row[8]),
-                "updated_at": str(row[9]),
-                "assigned_to_email": row[10],
-                "assigned_to_name": row[11],
-                "sla_due_at": str(row[12]) if row[12] else "",
-                "sla_state": sla_state(row[12], row[7]),
-            })
-
-        return jsonify({
-            "stats": {
-                "total": total,
-                "new": new_count,
-                "in_progress": in_progress,
-                "high": high_count,
-                "resolved": resolved_count,
-            },
-            "tickets": tickets,
-            "statuses": STATUSES,
-            "selected_statuses": status_filters,
-        })
-
-    @app.post("/api/tickets")
-    @api_login_required
-    def api_create_ticket(user):
-        payload = request.get_json(silent=True) or {}
-        title = clean(payload.get("title"))
-        description = clean(payload.get("description"))
-        category = clean(payload.get("category"))
-        priority = clean(payload.get("priority")) or "Normalny"
-
-        if not title or not description:
-            return jsonify({"error": "title and description are required"}), 400
-        if priority not in PRIORITIES:
-            return jsonify({"error": "Nieprawidłowy priorytet."}), 400
-
-        conn = get_conn()
-        cur = conn.cursor()
-        sla_due_at = sla_due_for_priority(priority)
-        cur.execute("""
-            INSERT INTO tickets (
-                title, description, requester_name, requester_email,
-                department, category, priority, status, sla_due_at
-            )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)
-            RETURNING id
-        """, (
-            title, description, user["name"], user["email"],
-            user["department"], category, priority, sla_due_at,
-        ))
-        ticket_id = cur.fetchone()[0]
-        add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
-        conn.commit()
-        cur.close()
-        conn.close()
-        publish_event(f"{user['name']} utworzył zgłoszenie #{ticket_id}: {title}", "ticket_created", ticket_id)
-        return jsonify({"id": ticket_id}), 201
-
-    def can_view_ticket(user, ticket_id):
-        if is_staff(user):
-            return True
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT requester_email FROM tickets WHERE id = %s", (ticket_id,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        return bool(row and row[0] == user["email"])
-
-    @app.get("/api/tickets/<int:ticket_id>")
-    @api_login_required
-    def api_ticket_detail(user, ticket_id):
-        if not can_view_ticket(user, ticket_id):
-            return jsonify({"error": "forbidden"}), 403
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            SELECT t.id, t.title, t.description, t.requester_name, t.requester_email, t.department,
-                   t.category, t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
-                   COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
-                   t.sla_due_at
-            FROM tickets t
-            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
-            WHERE t.id = %s
-        """, (ticket_id,))
-        row = cur.fetchone()
-        if not row:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "not found"}), 404
-
-        cur.execute("""
-            SELECT author, content, created_at
-            FROM comments
-            WHERE ticket_id = %s
-            ORDER BY id ASC
-        """, (ticket_id,))
-        comment_rows = cur.fetchall()
-
-        cur.execute("""
-            SELECT actor_name, event_type, message, created_at
-            FROM ticket_events
-            WHERE ticket_id = %s
-            ORDER BY id ASC
-        """, (ticket_id,))
-        event_rows = cur.fetchall()
-        cur.close()
-        conn.close()
-
-        ticket = {
-            "id": row[0],
-            "title": row[1],
-            "description": row[2],
-            "requester_name": row[3],
-            "requester_email": row[4],
-            "department": row[5],
-            "category": row[6],
-            "priority": row[7],
-            "status": row[8],
-            "created_at": str(row[9]),
-            "updated_at": str(row[10]),
-            "assigned_to_email": row[11],
-            "assigned_to_name": row[12],
-            "sla_due_at": str(row[13]) if row[13] else "",
-            "sla_state": sla_state(row[13], row[8]),
-        }
-        comments = [
-            {"author": c[0], "content": c[1], "created_at": str(c[2])}
-            for c in comment_rows
-        ]
-        events = [
-            {"actor_name": e[0], "event_type": e[1], "message": e[2], "created_at": str(e[3])}
-            for e in event_rows
-        ]
-
-        conn2 = get_conn()
-        cur2 = conn2.cursor()
-        cur2.execute("""
-            SELECT first_name, last_name, email, role
-            FROM users
-            WHERE role IN ('agent', 'admin')
-            ORDER BY last_name, first_name
-        """)
-        agents = [
-            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
-            for r in cur2.fetchall()
-        ]
-        cur2.close()
-        conn2.close()
-
-        return jsonify({
-            "ticket": ticket,
-            "comments": comments,
-            "events": events,
-            "meta": {"statuses": STATUSES, "agents": agents},
-        })
-
-    @app.post("/api/tickets/<int:ticket_id>/status")
-    @api_login_required
-    def api_update_status(user, ticket_id):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
-        payload = request.get_json(silent=True) or {}
-        status = clean(payload.get("status")) or "Nowe"
-        if status not in STATUSES:
-            return jsonify({"error": "Nieprawidłowy status."}), 400
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT status FROM tickets WHERE id = %s", (ticket_id,))
-        row = cur.fetchone()
-        if not row:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "not found"}), 404
-        old_status = row[0]
-        cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
-        add_ticket_event(cur, ticket_id, user, "status_changed", f"Status zmieniony z {old_status} na {status}")
-        conn.commit()
-        cur.close()
-        conn.close()
-        publish_event(f"{user['name']} zmienił status zgłoszenia #{ticket_id} z {old_status} na {status}", "status_changed", ticket_id)
-        return jsonify({"status": "ok"})
-
-
-    @app.post("/api/tickets/<int:ticket_id>/assign")
-    @api_login_required
-    def api_assign_ticket(user, ticket_id):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
-
-        payload = request.get_json(silent=True) or {}
-        assigned_to_email = clean(payload.get("assigned_to_email")).lower()
-
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT assigned_to_email FROM tickets WHERE id = %s", (ticket_id,))
-        ticket_row = cur.fetchone()
-        if not ticket_row:
-            cur.close()
-            conn.close()
-            return jsonify({"error": "not found"}), 404
-
-        old_assigned = ticket_row[0]
-
-        assigned_to_name = "Nieprzypisane"
-        if assigned_to_email:
-            cur.execute("""
-                SELECT first_name, last_name, email, role
-                FROM users
-                WHERE lower(email) = %s AND role IN ('agent', 'admin')
-            """, (assigned_to_email,))
-            agent_row = cur.fetchone()
-            if not agent_row:
-                cur.close()
-                conn.close()
-                return jsonify({"error": "Można przypisać tylko do agenta lub admina."}), 400
-            assigned_to_email = agent_row[2]
-            assigned_to_name = f"{agent_row[0]} {agent_row[1]}".strip()
-
-        cur.execute("""
-            UPDATE tickets
-            SET assigned_to_email = %s, updated_at = NOW()
-            WHERE id = %s
-        """, (assigned_to_email or None, ticket_id))
-
-        add_ticket_event(
-            cur,
-            ticket_id,
-            user,
-            "assignment_changed",
-            f"Przypisanie zmienione z {old_assigned or 'Nieprzypisane'} na {assigned_to_name}"
-        )
-        conn.commit()
-        cur.close()
-        conn.close()
-
-        publish_event(f"{user['name']} przypisał zgłoszenie #{ticket_id} do: {assigned_to_name}", "assignment_changed", ticket_id)
-        return jsonify({"status": "ok"})
-
-    @app.post("/api/tickets/<int:ticket_id>/comments")
-    @api_login_required
-    def api_add_comment(user, ticket_id):
-        if not can_view_ticket(user, ticket_id):
-            return jsonify({"error": "forbidden"}), 403
-        payload = request.get_json(silent=True) or {}
-        content = clean(payload.get("content"))
-        if not content:
-            return jsonify({"error": "content is required"}), 400
-        conn = get_conn()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO comments (ticket_id, author, content)
-            VALUES (%s, %s, %s)
-        """, (ticket_id, user["name"], content))
-        cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
-        add_ticket_event(cur, ticket_id, user, "comment_added", f"Dodano komentarz: {content[:120]}")
-        conn.commit()
-        cur.close()
-        conn.close()
-        publish_event(f"{user['name']} dodał komentarz do zgłoszenia #{ticket_id}", "comment_added", ticket_id)
-        return jsonify({"status": "ok"})
+  app.py: "import os\nimport time\nimport html\nfrom datetime import datetime, timedelta\n\
+    import uuid\nimport json\nimport psycopg2\nfrom functools import wraps\nfrom flask\
+    \ import Flask, request, redirect, Response, jsonify\nfrom flask_sock import Sock\n\
+    from werkzeug.security import generate_password_hash, check_password_hash\n\n\
+    app = Flask(__name__)\napp.secret_key = os.getenv(\"FLASK_SECRET_KEY\", \"change-me\"\
+    )\nsock = Sock(app)\nactive_ws_clients = set()\nlast_live_event = {\"id\": str(uuid.uuid4()),\
+    \ \"type\": \"system\", \"message\": \"System gotowy\", \"ticket_id\": None}\n\
+    \n\nDB_HOST = os.getenv(\"DB_HOST\", \"helpdesk-postgres\")\nDB_PORT = os.getenv(\"\
+    DB_PORT\", \"5432\")\nDB_NAME = os.getenv(\"POSTGRES_DB\", \"helpdeskdb\")\nDB_USER\
+    \ = os.getenv(\"POSTGRES_USER\", \"helpdeskuser\")\nDB_PASSWORD = os.getenv(\"\
+    POSTGRES_PASSWORD\")\n\nINITIAL_PASSWORD = \"Incoprp123!\"\n\nDEPARTMENTS = [\n\
+    \    \"HR\",\n    \"Finanse\",\n    \"Sprzedaż\",\n    \"Marketing\",\n    \"\
+    Obsługa klienta\",\n    \"Administracja\",\n    \"IT\",\n    \"Zarząd\",\n   \
+    \ \"Logistyka\",\n    \"Księgowość\",\n]\n\nCATEGORIES = [\n    \"Komputer i laptop\"\
+    ,\n    \"Poczta e-mail\",\n    \"Drukarki i skanery\",\n    \"Microsoft 365 /\
+    \ Office\",\n    \"Sieć i Wi-Fi\",\n    \"VPN i praca zdalna\",\n    \"Konta i\
+    \ hasła\",\n    \"Telefon / Teams / wideokonferencje\",\n    \"Dostępy do systemów\"\
+    ,\n    \"Sprzęt biurowy\",\n    \"Inne\",\n]\n\nPRIORITIES = [\"Niski\", \"Normalny\"\
+    , \"Wysoki\", \"Krytyczny\"]\n\nSTATUSES = [\n    \"Nowe\",\n    \"Otwarte\",\n\
+    \    \"W trakcie\",\n    \"Oczekuje na użytkownika\",\n    \"Oczekuje na dostawcę\"\
+    ,\n    \"Rozwiązane\",\n    \"Zamknięte\",\n]\n\nSLA_HOURS = {\n    \"Krytyczny\"\
+    : 4,\n    \"Wysoki\": 8,\n    \"Normalny\": 48,\n    \"Niski\": 120,\n}\n\nSEED_USERS\
+    \ = [\n    (\"Anna\", \"Kowalska\", \"anna.kowalska@incoprp.local\", \"HR\", \"\
+    user\"),\n    (\"Piotr\", \"Nowak\", \"piotr.nowak@incoprp.local\", \"Finanse\"\
+    , \"user\"),\n    (\"Magdalena\", \"Zielińska\", \"magdalena.zielinska@incoprp.local\"\
+    , \"Sprzedaż\", \"user\"),\n    (\"Tomasz\", \"Wiśniewski\", \"tomasz.wisniewski@incoprp.local\"\
+    , \"Marketing\", \"user\"),\n    (\"Karolina\", \"Wójcik\", \"karolina.wojcik@incoprp.local\"\
+    , \"Obsługa klienta\", \"user\"),\n    (\"Joanna\", \"Lewandowska\", \"joanna.lewandowska@incoprp.local\"\
+    , \"Księgowość\", \"user\"),\n    (\"Helpdesk\", \"Agent\", \"agent@incoprp.local\"\
+    , \"IT\", \"agent\"),\n    (\"Helpdesk\", \"Admin\", \"admin@incoprp.local\",\
+    \ \"IT\", \"admin\"),\n]\n\nSEED_TICKETS = [\n    (\n        \"Outlook nie odbiera\
+    \ poczty\",\n        \"Od rana Outlook nie synchronizuje nowych wiadomości. Webmail\
+    \ działa, ale aplikacja pokazuje błąd połączenia.\",\n        \"Anna Kowalska\"\
+    ,\n        \"anna.kowalska@incoprp.local\",\n        \"HR\",\n        \"Poczta\
+    \ e-mail\",\n        \"Wysoki\",\n        \"Otwarte\",\n    ),\n    (\n      \
+    \  \"Drukarka w księgowości nie drukuje faktur\",\n        \"Drukarka pokazuje\
+    \ zadania w kolejce, ale nic nie wychodzi. Problem dotyczy faktur PDF.\",\n  \
+    \      \"Joanna Lewandowska\",\n        \"joanna.lewandowska@incoprp.local\",\n\
+    \        \"Księgowość\",\n        \"Drukarki i skanery\",\n        \"Wysoki\"\
+    ,\n        \"W trakcie\",\n    ),\n    (\n        \"Problem z połączeniem VPN\
+    \ z domu\",\n        \"Po wpisaniu hasła VPN rozłącza się po kilku sekundach.\
+    \ Problem występuje od ostatniej aktualizacji laptopa.\",\n        \"Piotr Nowak\"\
+    ,\n        \"piotr.nowak@incoprp.local\",\n        \"Finanse\",\n        \"VPN\
+    \ i praca zdalna\",\n        \"Normalny\",\n        \"Nowe\",\n    ),\n    (\n\
+    \        \"Teams nie wykrywa mikrofonu\",\n        \"Podczas spotkań w Teams mikrofon\
+    \ nie jest dostępny, mimo że działa w ustawieniach systemu.\",\n        \"Tomasz\
+    \ Wiśniewski\",\n        \"tomasz.wisniewski@incoprp.local\",\n        \"Marketing\"\
+    ,\n        \"Telefon / Teams / wideokonferencje\",\n        \"Normalny\",\n  \
+    \      \"Oczekuje na użytkownika\",\n    ),\n    (\n        \"Brak dostępu do\
+    \ folderu Sprzedaż\",\n        \"Po zmianie stanowiska użytkownik nie widzi folderu\
+    \ współdzielonego Sprzedaż na dysku sieciowym.\",\n        \"Magdalena Zielińska\"\
+    ,\n        \"magdalena.zielinska@incoprp.local\",\n        \"Sprzedaż\",\n   \
+    \     \"Dostępy do systemów\",\n        \"Wysoki\",\n        \"Otwarte\",\n  \
+    \  ),\n    (\n        \"Laptop działa bardzo wolno po aktualizacji\",\n      \
+    \  \"Po ostatniej aktualizacji systemu laptop uruchamia się długo, a Excel i Outlook\
+    \ zawieszają się kilka razy dziennie.\",\n        \"Karolina Wójcik\",\n     \
+    \   \"karolina.wojcik@incoprp.local\",\n        \"Obsługa klienta\",\n       \
+    \ \"Komputer i laptop\",\n        \"Normalny\",\n        \"Nowe\",\n    ),\n]\n\
+    \ndef get_conn():\n    return psycopg2.connect(\n        host=DB_HOST,\n     \
+    \   port=DB_PORT,\n        dbname=DB_NAME,\n        user=DB_USER,\n        password=DB_PASSWORD,\n\
+    \    )\n\ndef init_db():\n    for _ in range(40):\n        try:\n            conn\
+    \ = get_conn()\n            cur = conn.cursor()\n\n            cur.execute(\"\"\
+    \"\n                CREATE TABLE IF NOT EXISTS users (\n                    id\
+    \ SERIAL PRIMARY KEY,\n                    first_name TEXT NOT NULL,\n       \
+    \             last_name TEXT NOT NULL,\n                    email TEXT UNIQUE\
+    \ NOT NULL,\n                    department TEXT NOT NULL,\n                 \
+    \   role TEXT NOT NULL DEFAULT 'user',\n                    password_hash TEXT\
+    \ NOT NULL,\n                    created_at TIMESTAMP DEFAULT NOW()\n        \
+    \        );\n            \"\"\")\n\n            cur.execute(\"ALTER TABLE users\
+    \ ADD COLUMN IF NOT EXISTS first_name TEXT\")\n            cur.execute(\"ALTER\
+    \ TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT\")\n            cur.execute(\"\
+    \"\"\n                SELECT EXISTS (\n                  SELECT 1\n          \
+    \        FROM information_schema.columns\n                  WHERE table_name =\
+    \ 'users' AND column_name = 'full_name'\n                )\n            \"\"\"\
+    )\n            has_full_name = cur.fetchone()[0]\n            if has_full_name:\n\
+    \                cur.execute(\"\"\"\n                    UPDATE users\n      \
+    \              SET\n                      first_name = COALESCE(NULLIF(first_name,\
+    \ ''), split_part(full_name, ' ', 1)),\n                      last_name = COALESCE(\n\
+    \                        NULLIF(last_name, ''),\n                        NULLIF(trim(substr(full_name,\
+    \ length(split_part(full_name, ' ', 1)) + 1)), ''),\n                        '-'\n\
+    \                      )\n                    WHERE first_name IS NULL OR first_name\
+    \ = '' OR last_name IS NULL OR last_name = ''\n                \"\"\")\n     \
+    \           cur.execute(\"ALTER TABLE users DROP COLUMN IF EXISTS full_name\"\
+    )\n            cur.execute(\"UPDATE users SET first_name = 'Nieznane' WHERE first_name\
+    \ IS NULL OR first_name = ''\")\n            cur.execute(\"UPDATE users SET last_name\
+    \ = '-' WHERE last_name IS NULL OR last_name = ''\")\n\n            cur.execute(\"\
+    \"\"\n                CREATE TABLE IF NOT EXISTS user_sessions (\n           \
+    \         sid TEXT PRIMARY KEY,\n                    user_email TEXT NOT NULL\
+    \ REFERENCES users(email) ON DELETE CASCADE,\n                    created_at TIMESTAMP\
+    \ DEFAULT NOW(),\n                    last_seen TIMESTAMP DEFAULT NOW()\n    \
+    \            );\n            \"\"\")\n\n            cur.execute(\"\"\"\n     \
+    \           CREATE TABLE IF NOT EXISTS tickets (\n                    id SERIAL\
+    \ PRIMARY KEY,\n                    title TEXT NOT NULL,\n                   \
+    \ description TEXT NOT NULL,\n                    requester_name TEXT NOT NULL,\n\
+    \                    requester_email TEXT NOT NULL,\n                    department\
+    \ TEXT NOT NULL,\n                    category TEXT NOT NULL,\n              \
+    \      priority TEXT NOT NULL,\n                    status TEXT NOT NULL,\n  \
+    \                  created_at TIMESTAMP DEFAULT NOW(),\n                    updated_at\
+    \ TIMESTAMP DEFAULT NOW()\n                );\n            \"\"\")\n\n       \
+    \     cur.execute(\"\"\"\n                CREATE TABLE IF NOT EXISTS comments\
+    \ (\n                    id SERIAL PRIMARY KEY,\n                    ticket_id\
+    \ INTEGER REFERENCES tickets(id) ON DELETE CASCADE,\n                    author\
+    \ TEXT NOT NULL,\n                    content TEXT NOT NULL,\n               \
+    \     created_at TIMESTAMP DEFAULT NOW()\n                );\n            \"\"\
+    \")\n\n            cur.execute(\"\"\"\n                ALTER TABLE tickets\n \
+    \               ADD COLUMN IF NOT EXISTS assigned_to_email TEXT REFERENCES users(email)\
+    \ ON DELETE SET NULL\n            \"\"\")\n            cur.execute(\"\"\"\n  \
+    \              ALTER TABLE tickets\n                ADD COLUMN IF NOT EXISTS sla_due_at\
+    \ TIMESTAMP\n            \"\"\")\n            cur.execute(\"\"\"\n           \
+    \     UPDATE tickets\n                SET sla_due_at = created_at + CASE priority\n\
+    \                    WHEN 'Krytyczny' THEN INTERVAL '4 hours'\n              \
+    \      WHEN 'Wysoki' THEN INTERVAL '8 hours'\n                    WHEN 'Normalny'\
+    \ THEN INTERVAL '48 hours'\n                    WHEN 'Niski' THEN INTERVAL '120\
+    \ hours'\n                    ELSE INTERVAL '48 hours'\n                END\n\
+    \                WHERE sla_due_at IS NULL\n            \"\"\")\n            cur.execute(\"\
+    \"\"\n                CREATE TABLE IF NOT EXISTS ticket_events (\n           \
+    \         id SERIAL PRIMARY KEY,\n                    ticket_id INTEGER REFERENCES\
+    \ tickets(id) ON DELETE CASCADE,\n                    actor_email TEXT,\n    \
+    \                actor_name TEXT,\n                    event_type TEXT NOT NULL,\n\
+    \                    message TEXT NOT NULL,\n                    created_at TIMESTAMP\
+    \ DEFAULT NOW()\n                );\n            \"\"\")\n\n            password_hash\
+    \ = generate_password_hash(INITIAL_PASSWORD)\n            for first_name, last_name,\
+    \ email, department, role in SEED_USERS:\n                cur.execute(\"\"\"\n\
+    \                    INSERT INTO users (first_name, last_name, email, department,\
+    \ role, password_hash)\n                    VALUES (%s, %s, %s, %s, %s, %s)\n\
+    \                    ON CONFLICT (email) DO NOTHING\n                \"\"\", (first_name,\
+    \ last_name, email, department, role, password_hash))\n\n            cur.execute(\"\
+    SELECT COUNT(*) FROM tickets\")\n            count = cur.fetchone()[0]\n     \
+    \       if count == 0:\n                for ticket in SEED_TICKETS:\n        \
+    \            priority = ticket[6]\n                    sla_due_at = datetime.now()\
+    \ + timedelta(hours=SLA_HOURS.get(priority, 48))\n                    cur.execute(\"\
+    \"\"\n                        INSERT INTO tickets (\n                        \
+    \    title, description, requester_name, requester_email,\n                  \
+    \          department, category, priority, status, sla_due_at\n              \
+    \          )\n                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s,\
+    \ %s)\n                    \"\"\", ticket + (sla_due_at,))\n\n            conn.commit()\n\
+    \            cur.close()\n            conn.close()\n            return\n     \
+    \   except Exception as e:\n            print(f\"Waiting for database: {e}\",\
+    \ flush=True)\n            time.sleep(1)\n    raise RuntimeError(\"Database unavailable\"\
+    )\n\ninit_db()\n\ndef esc(value):\n    return html.escape(str(value or \"\"))\n\
+    \ndef clean(value):\n    return str(value or \"\").strip()\n\n\ndef sla_due_for_priority(priority):\n\
+    \    return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))\n\n\
+    def sla_state(sla_due_at, status):\n    if not sla_due_at:\n        return \"\
+    none\"\n    if status in (\"Rozwiązane\", \"Zamknięte\"):\n        return \"done\"\
+    \n    now = datetime.now()\n    if sla_due_at < now:\n        return \"overdue\"\
+    \n    if sla_due_at - now <= timedelta(hours=4):\n        return \"warning\"\n\
+    \    return \"ok\"\n\ndef event_message(actor_name, text):\n    return f\"{actor_name}:\
+    \ {text}\"\n\ndef add_ticket_event(cur, ticket_id, user, event_type, message):\n\
+    \    cur.execute(\"\"\"\n        INSERT INTO ticket_events (ticket_id, actor_email,\
+    \ actor_name, event_type, message)\n        VALUES (%s, %s, %s, %s, %s)\n    \"\
+    \"\", (\n        ticket_id,\n        user.get(\"email\") if user else None,\n\
+    \        user.get(\"name\") if user else \"System\",\n        event_type,\n  \
+    \      message,\n    ))\n\ndef get_sid_from_request():\n    return request.headers.get(\"\
+    X-Helpdesk-Session\", \"\").strip()\n\ndef get_user_by_sid(sid):\n    if not sid:\n\
+    \        return None\n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\
+    \"\"\n        SELECT u.first_name, u.last_name, u.email, u.department, u.role\n\
+    \        FROM user_sessions s\n        JOIN users u ON u.email = s.user_email\n\
+    \        WHERE s.sid = %s\n    \"\"\", (sid,))\n    row = cur.fetchone()\n   \
+    \ if row:\n        cur.execute(\"UPDATE user_sessions SET last_seen = NOW() WHERE\
+    \ sid = %s\", (sid,))\n        conn.commit()\n    cur.close()\n    conn.close()\n\
+    \    if not row:\n        return None\n    return {\n        \"first_name\": row[0],\n\
+    \        \"last_name\": row[1],\n        \"name\": f\"{row[0]} {row[1]}\".strip(),\n\
+    \        \"email\": row[2],\n        \"department\": row[3],\n        \"role\"\
+    : row[4],\n    }\n\ndef current_user():\n    return get_user_by_sid(get_sid_from_request())\n\
+    \ndef api_login_required(fn):\n    @wraps(fn)\n    def wrapper(*args, **kwargs):\n\
+    \        user = current_user()\n        if not user:\n            return jsonify({\"\
+    error\": \"unauthorized\"}), 401\n        return fn(user, *args, **kwargs)\n \
+    \   return wrapper\n\ndef is_admin(user):\n    return bool(user and user.get(\"\
+    role\") == \"admin\")\n\ndef is_staff(user):\n    return bool(user and user.get(\"\
+    role\") in (\"agent\", \"admin\"))\n\ndef publish_event(message, event_type=\"\
+    info\", ticket_id=None):\n    global last_live_event\n    last_live_event = {\n\
+    \        \"id\": str(uuid.uuid4()),\n        \"type\": event_type,\n        \"\
+    message\": message,\n        \"ticket_id\": ticket_id,\n        \"timestamp\"\
+    : time.strftime(\"%Y-%m-%d %H:%M:%S\"),\n    }\n\ndef api_admin_required(fn):\n\
+    \    @wraps(fn)\n    def wrapper(user, *args, **kwargs):\n        if not is_admin(user):\n\
+    \            return jsonify({\"error\": \"admin required\"}), 403\n        return\
+    \ fn(user, *args, **kwargs)\n    return wrapper\n\ndef api_staff_required(fn):\n\
+    \    @wraps(fn)\n    def wrapper(user, *args, **kwargs):\n        if not is_staff(user):\n\
+    \            return jsonify({\"error\": \"agent or admin required\"}), 403\n \
+    \       return fn(user, *args, **kwargs)\n    return wrapper\n\ndef public_html(body):\n\
+    \    return f\"\"\"\n    <!doctype html>\n    <html lang=\"pl\">\n    <head>\n\
+    \      <meta charset=\"utf-8\">\n      <meta name=\"viewport\" content=\"width=device-width,\
+    \ initial-scale=1\">\n      <title>INCoprp Helpdesk</title>\n      <style>{CSS}</style>\n\
+    \    </head>\n    <body>\n      <main class=\"page\">\n        <header>\n    \
+    \      <div>\n            <h1>INCoprp Helpdesk</h1>\n            <p class=\"subtitle\"\
+    >Centrum zgłoszeń IT dla pracowników biurowych.</p>\n          </div>\n      \
+    \    <div class=\"badge\">SessionStorage: <strong>per karta</strong></div>\n \
+    \       </header>\n        {body}\n      </main>\n    </body>\n    </html>\n \
+    \   \"\"\"\n\nCSS = \"\"\"\n  :root {\n    --bg: #0f172a;\n    --card: #111827;\n\
+    \    --card2: #1f2937;\n    --text: #f8fafc;\n    --muted: #94a3b8;\n    --accent:\
+    \ #38bdf8;\n    --green: #22c55e;\n    --red: #ef4444;\n    --yellow: #facc15;\n\
+    \    --border: rgba(148,163,184,.25);\n  }\n  * { box-sizing: border-box; }\n\
+    \  body {\n    margin: 0;\n    font-family: system-ui, -apple-system, BlinkMacSystemFont,\
+    \ \"Segoe UI\", sans-serif;\n    background:\n      radial-gradient(circle at\
+    \ top left, rgba(56,189,248,.16), transparent 35%),\n      radial-gradient(circle\
+    \ at bottom right, rgba(34,197,94,.12), transparent 35%),\n      var(--bg);\n\
+    \    color: var(--text);\n  }\n  a { color: inherit; }\n  .page { width: min(1220px,\
+    \ 94vw); margin: 0 auto; padding: 42px 0; }\n  header { display: flex; justify-content:\
+    \ space-between; gap: 20px; align-items: flex-start; margin-bottom: 24px; }\n\
+    \  h1 { margin: 0 0 8px; font-size: clamp(34px, 5vw, 56px); line-height: 1; letter-spacing:\
+    \ -.05em; }\n  .subtitle { margin: 0; color: var(--muted); font-size: 18px; }\n\
+    \  .badge { border: 1px solid var(--border); border-radius: 999px; padding: 10px\
+    \ 14px; color: var(--muted); white-space: nowrap; background: rgba(15,23,42,.65);\
+    \ }\n  .badge strong { color: var(--green); }\n  .card { background: linear-gradient(180deg,\
+    \ rgba(17,24,39,.96), rgba(15,23,42,.96)); border: 1px solid var(--border); border-radius:\
+    \ 22px; padding: 22px; box-shadow: 0 20px 40px rgba(0,0,0,.25); margin-bottom:\
+    \ 18px; }\n  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px,\
+    \ 1fr)); gap: 14px; margin-bottom: 18px; }\n  .stat { border: 1px solid var(--border);\
+    \ background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }\n  .stat\
+    \ .num { font-size: 32px; font-weight: 800; }\n  .stat .label { color: var(--muted);\
+    \ font-size: 14px; }\n  table { width: 100%; border-collapse: collapse; }\n  th,\
+    \ td { padding: 12px; border-bottom: 1px solid var(--border); text-align: left;\
+    \ vertical-align: top; }\n  th { color: var(--muted); font-size: 13px; text-transform:\
+    \ uppercase; letter-spacing: .08em; }\n  .pill { display: inline-block; border-radius:\
+    \ 999px; padding: 5px 9px; font-size: 12px; font-weight: 700; border: 1px solid\
+    \ var(--border); color: var(--text); background: rgba(31,41,55,.72); }\n  .priority-Krytyczny\
+    \ { color: #fecaca; border-color: rgba(239,68,68,.45); }\n  .priority-Wysoki {\
+    \ color: #fde68a; border-color: rgba(250,204,21,.45); }\n  .priority-Normalny\
+    \ { color: #bae6fd; border-color: rgba(56,189,248,.45); }\n  .priority-Niski {\
+    \ color: #bbf7d0; border-color: rgba(34,197,94,.45); }\n  input, textarea, select\
+    \ { width: 100%; background: var(--card2); color: var(--text); border: 1px solid\
+    \ var(--border); border-radius: 14px; padding: 12px; font-size: 15px; }\n  textarea\
+    \ { min-height: 120px; resize: vertical; }\n  label { display: block; color: var(--muted);\
+    \ font-size: 13px; margin: 12px 0 6px; }\n  .grid { display: grid; grid-template-columns:\
+    \ repeat(2, minmax(0, 1fr)); gap: 14px; }\n  button, .btn { display: inline-block;\
+    \ margin-top: 14px; border: 0; border-radius: 14px; padding: 12px 18px; font-weight:\
+    \ 700; color: white; background: linear-gradient(135deg, #0284c7, #22c55e); cursor:\
+    \ pointer; text-decoration: none; }\n  .btn-secondary { background: rgba(31,41,55,.9);\
+    \ border: 1px solid var(--border); }\n  .btn-danger { background: rgba(239,68,68,.18);\
+    \ border: 1px solid rgba(239,68,68,.45); color: #fecaca; }\n  .btn-small { margin-top:\
+    \ 0; padding: 8px 11px; border-radius: 10px; font-size: 13px; }\n  .actions {\
+    \ display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }\n  .status-filter-btn\
+    \ { margin-top: 0; color: var(--muted); transition: border-color .15s ease, background\
+    \ .15s ease, color .15s ease, transform .15s ease; }\n  .status-filter-btn:hover\
+    \ { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text);\
+    \ }\n  .status-filter-btn.active { color: white; background: linear-gradient(135deg,\
+    \ #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px\
+    \ rgba(56,189,248,.14); }\n  .status-filter-btn.active::before { content: \"✓\
+    \ \"; }\n  .status-filter-actions { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;\
+    \ align-items:center; }\n  .status-filter-hint { margin-top:8px; color:var(--muted);\
+    \ font-size:13px; }\n  .status-Nowe { color:#bbf7d0; border-color:rgba(34,197,94,.55);\
+    \ background:rgba(34,197,94,.14); }\n  .status-Otwarte { color:#fed7aa; border-color:rgba(249,115,22,.58);\
+    \ background:rgba(249,115,22,.14); }\n  .status-W-trakcie { color:#bae6fd; border-color:rgba(56,189,248,.55);\
+    \ background:rgba(56,189,248,.14); }\n  .status-Oczekuje-na-uzytkownika { color:#fecaca;\
+    \ border-color:rgba(239,68,68,.58); background:rgba(239,68,68,.14); }\n  .status-Oczekuje-na-dostawce\
+    \ { color:#ddd6fe; border-color:rgba(168,85,247,.58); background:rgba(168,85,247,.14);\
+    \ }\n  .status-Rozwiazane { color:#c7d2fe; border-color:rgba(99,102,241,.55);\
+    \ background:rgba(99,102,241,.14); }\n  .status-Zamkniete { color:#e5e7eb; border-color:rgba(156,163,175,.55);\
+    \ background:rgba(156,163,175,.14); }\n  .ticket-title { font-weight: 800; text-decoration:\
+    \ none; color: var(--text); background: none; padding: 0; margin: 0; transition:\
+    \ color .15s ease, opacity .15s ease; }\n  .ticket-title:hover { opacity: .82;\
+    \ }\n  .ticket-title.status-Nowe, .ticket-heading.status-Nowe { color:#22c55e;\
+    \ background:transparent; border-color:transparent; }\n  .ticket-title.status-Otwarte,\
+    \ .ticket-heading.status-Otwarte { color:#fb923c; background:transparent; border-color:transparent;\
+    \ }\n  .ticket-title.status-W-trakcie, .ticket-heading.status-W-trakcie { color:#38bdf8;\
+    \ background:transparent; border-color:transparent; }\n  .ticket-title.status-Oczekuje-na-uzytkownika,\
+    \ .ticket-heading.status-Oczekuje-na-uzytkownika { color:#ef4444; background:transparent;\
+    \ border-color:transparent; }\n  .ticket-title.status-Oczekuje-na-dostawce, .ticket-heading.status-Oczekuje-na-dostawce\
+    \ { color:#a78bfa; background:transparent; border-color:transparent; }\n  .ticket-title.status-Rozwiazane,\
+    \ .ticket-heading.status-Rozwiazane { color:#818cf8; background:transparent; border-color:transparent;\
+    \ }\n  .ticket-title.status-Zamkniete, .ticket-heading.status-Zamkniete { color:#94a3b8;\
+    \ background:transparent; border-color:transparent; }\n  .ticket-title.status-default,\
+    \ .ticket-heading.status-default { color:var(--text); background:transparent;\
+    \ border-color:transparent; }\n  .muted { color: var(--muted); }\n  .comment {\
+    \ border: 1px solid var(--border); border-radius: 16px; padding: 14px; background:\
+    \ rgba(31,41,55,.65); margin-top: 10px; }\n  .login-box { width: min(520px, 100%);\
+    \ margin: 0 auto; }\n  .topbar { display: flex; justify-content: space-between;\
+    \ gap: 12px; align-items: center; margin-bottom: 18px; }\n  .error { color: #fecaca;\
+    \ }\n  .success { color: #bbf7d0; }\n  .live-panel { border: 1px solid var(--border);\
+    \ border-radius: 18px; padding: 12px 14px; background: rgba(15,23,42,.65); color:\
+    \ var(--muted); min-width: 280px; }\n  .live-panel .live-row { display:flex; justify-content:space-between;\
+    \ gap:12px; margin:4px 0; }\n  .live-panel .live-value { color: var(--text); font-weight:\
+    \ 800; }\n  .live-panel .ws-connected { color: #22c55e; }\n  .live-panel .ws-disconnected\
+    \ { color: #ef4444; }\n  .header-actions { display:flex; flex-direction:column;\
+    \ gap:10px; align-items:flex-end; }\n  .toast { position: fixed; right: 24px;\
+    \ bottom: 24px; z-index: 9999; min-width: 280px; max-width: 440px; padding: 16px\
+    \ 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(2,132,199,.96),\
+    \ rgba(34,197,94,.96)); color: #fff; box-shadow: 0 18px 40px rgba(0,0,0,.35);\
+    \ font-weight: 700; opacity: 0; transform: translateY(16px); pointer-events: none;\
+    \ transition: opacity .2s ease, transform .2s ease; }\n  .toast.show { opacity:\
+    \ 1; transform: translateY(0); }\n  .toast small { display: block; margin-top:\
+    \ 4px; opacity: .85; font-weight: 500; }\n  .hidden { display: none; }\n  @media\
+    \ (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns:\
+    \ 1fr; } table { font-size: 14px; } }\n\"\"\"\n\nSPA_HTML = f\"\"\"\n<!doctype\
+    \ html>\n<html lang=\"pl\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"\
+    viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>INCoprp\
+    \ Helpdesk</title>\n  <style>{CSS}</style>\n</head>\n<body>\n  <main class=\"\
+    page\">\n    <header>\n      <div>\n        <h1>INCoprp Helpdesk</h1>\n      \
+    \  <p class=\"subtitle\">Centrum zgłoszeń IT dla pracowników biurowych.</p>\n\
+    \      </div>\n      <div class=\"header-actions\">\n        <div id=\"userBadge\"\
+    \ class=\"badge\">Ładowanie...</div>\n        <div id=\"livePanel\" class=\"live-panel\"\
+    >\n          <div class=\"live-row\"><span>WebSocket</span><span id=\"wsStatus\"\
+    \ class=\"live-value ws-disconnected\">disconnected</span></div>\n          <div\
+    \ class=\"live-row\"><span>Aktywni</span><span id=\"wsClients\" class=\"live-value\"\
+    >-</span></div>\n          <div class=\"live-row\"><span>Czas serwera</span><span\
+    \ id=\"wsTime\" class=\"live-value\">-</span></div>\n          <div class=\"live-row\"\
+    ><span>Ostatnie zdarzenie</span><span id=\"wsEvent\" class=\"live-value\">-</span></div>\n\
+    \        </div>\n      </div>\n    </header>\n    <div id=\"app\"></div>\n  </main>\n\
+    \n  <div id=\"toast\" class=\"toast\"></div>\n\n  <script>\n    const appEl =\
+    \ document.getElementById(\"app\");\n    const userBadge = document.getElementById(\"\
+    userBadge\");\n    const wsStatus = document.getElementById(\"wsStatus\");\n \
+    \   const wsClients = document.getElementById(\"wsClients\");\n    const wsTime\
+    \ = document.getElementById(\"wsTime\");\n    const wsEvent = document.getElementById(\"\
+    wsEvent\");\n    let liveSocket = null;\n    let liveReconnectTimer = null;\n\
+    \    let lastLiveEventId = null;\n    let currentView = {{ name: \"home\", ticketId:\
+    \ null }};\n    let suppressNextLiveRefresh = false;\n\n    function getSid()\
+    \ {{ return sessionStorage.getItem(\"helpdesk_sid\") || \"\"; }}\n    function\
+    \ setSid(sid) {{ sessionStorage.setItem(\"helpdesk_sid\", sid); }}\n    function\
+    \ clearSid() {{ sessionStorage.removeItem(\"helpdesk_sid\"); }}\n\n    async function\
+    \ api(path, options = {{}}) {{\n      const headers = options.headers || {{}};\n\
+    \      headers[\"X-Helpdesk-Session\"] = getSid();\n      if (options.body &&\
+    \ !headers[\"Content-Type\"]) headers[\"Content-Type\"] = \"application/json\"\
+    ;\n      const res = await fetch(path, {{ ...options, headers }});\n      if (res.status\
+    \ === 401) {{\n        clearSid();\n        window.location.href = \"/login\"\
+    ;\n        return null;\n      }}\n      return res;\n    }}\n\n    function esc(value)\
+    \ {{\n      return String(value ?? \"\").replace(/[&<>\"']/g, ch => ({{\n    \
+    \    \"&\": \"&amp;\", \"<\": \"&lt;\", \">\": \"&gt;\", '\"': \"&quot;\", \"\
+    '\": \"&#039;\"\n      }}[ch]));\n    }}\n\n\n    function showToast(message,\
+    \ details = \"\") {{\n      const toast = document.getElementById(\"toast\");\n\
+    \      if (!toast) return;\n\n      const small = details ? \"<small>\" + esc(details)\
+    \ + \"</small>\" : \"\";\n      toast.innerHTML = \"<div>\" + esc(message) + \"\
+    </div>\" + small;\n\n      toast.classList.add(\"show\");\n\n      clearTimeout(window.__helpdeskToastTimer);\n\
+    \      window.__helpdeskToastTimer = setTimeout(() => {{\n        toast.classList.remove(\"\
+    show\");\n      }}, 4200);\n    }}\n\n    function priorityClass(priority) {{\
+    \ return \"priority-\" + String(priority || \"\").replaceAll(\" \", \"-\"); }}\n\
+    \n    function canWorkTickets(user) {{\n      return !!(user && (user.role ===\
+    \ \"agent\" || user.role === \"admin\"));\n    }}\n\n    function slaClass(state)\
+    \ {{\n      const map = {{\n        \"ok\": \"sla-ok\",\n        \"warning\":\
+    \ \"sla-warning\",\n        \"overdue\": \"sla-overdue\",\n        \"done\": \"\
+    sla-done\",\n        \"none\": \"sla-none\"\n      }};\n      return map[state]\
+    \ || \"sla-none\";\n    }}\n\n    function slaLabel(state) {{\n      const map\
+    \ = {{\n        \"ok\": \"SLA OK\",\n        \"warning\": \"Blisko SLA\",\n  \
+    \      \"overdue\": \"SLA przekroczone\",\n        \"done\": \"Zakończone\",\n\
+    \        \"none\": \"Brak SLA\"\n      }};\n      return map[state] || \"Brak\
+    \ SLA\";\n    }}\n\n    function statusClass(status) {{\n      return \"status-\"\
+    \ + String(status || \"\")\n        .normalize(\"NFD\")\n        .replace(/[\\\
+    u0300-\\u036f]/g, \"\")\n        .replaceAll(\"ł\", \"l\")\n        .replaceAll(\"\
+    Ł\", \"L\")\n        .replace(/[^a-zA-Z0-9]+/g, \"-\")\n        .replace(/^-|-$/g,\
+    \ \"\");\n    }}\n    function setWsStatus(text, connected) {{\n      wsStatus.textContent\
+    \ = text;\n      wsStatus.className = connected ? \"live-value ws-connected\"\
+    \ : \"live-value ws-disconnected\";\n    }}\n\n    function connectLive() {{\n\
+    \      const sid = getSid();\n      if (!sid) return;\n      if (liveSocket &&\
+    \ (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING))\
+    \ return;\n\n      const scheme = window.location.protocol === \"https:\" ? \"\
+    wss\" : \"ws\";\n      liveSocket = new WebSocket(`${{scheme}}://${{window.location.host}}/ws`);\n\
+    \      setWsStatus(\"connecting\", false);\n\n      liveSocket.onopen = () =>\
+    \ {{\n        setWsStatus(\"connected\", true);\n        liveSocket.send(JSON.stringify({{\
+    \ type: \"auth\", sid }}));\n      }};\n\n      liveSocket.onmessage = (event)\
+    \ => {{\n        const data = JSON.parse(event.data);\n        handleLivePayload(data);\n\
+    \      }};\n\n      liveSocket.onclose = () => {{\n        setWsStatus(\"disconnected\"\
+    , false);\n        if (getSid()) {{\n          clearTimeout(liveReconnectTimer);\n\
+    \          liveReconnectTimer = setTimeout(connectLive, 2000);\n        }}\n \
+    \     }};\n\n      liveSocket.onerror = () => {{\n        try {{ liveSocket.close();\
+    \ }} catch (e) {{}}\n      }};\n    }}\n\n    async function handleLivePayload(data)\
+    \ {{\n      wsClients.textContent = data.active_clients ?? \"-\";\n      wsTime.textContent\
+    \ = data.server_time ?? \"-\";\n\n      const liveEvent = data.event || null;\n\
+    \      wsEvent.textContent = liveEvent?.message || data.message || \"-\";\n\n\
+    \      if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;\n\
+    \      lastLiveEventId = liveEvent.id;\n\n      if (![\"ticket_created\", \"status_changed\"\
+    , \"comment_added\", \"assignment_changed\"].includes(liveEvent.type)) return;\n\
+    \n      if (liveEvent.type === \"status_changed\" && !suppressNextLiveRefresh)\
+    \ {{\n        showToast(\n          \"Zmieniono status zgłoszenia #\" + liveEvent.ticket_id,\n\
+    \          liveEvent.message || \"\"\n        );\n      }}\n\n      if (suppressNextLiveRefresh)\
+    \ {{\n        suppressNextLiveRefresh = false;\n        return;\n      }}\n\n\
+    \      if (currentView.name === \"ticket\" && Number(currentView.ticketId) ===\
+    \ Number(liveEvent.ticket_id)) {{\n        await renderTicket(liveEvent.ticket_id,\
+    \ true);\n        return;\n      }}\n\n      if (currentView.name === \"home\"\
+    ) {{\n        await renderHome(loadStatusFilters(), true);\n      }}\n    }}\n\
+    \n    function disconnectLive() {{\n      clearTimeout(liveReconnectTimer);\n\
+    \      if (liveSocket) {{\n        try {{ liveSocket.close(); }} catch (e) {{}}\n\
+    \      }}\n      liveSocket = null;\n      setWsStatus(\"disconnected\", false);\n\
+    \      wsClients.textContent = \"-\";\n      wsTime.textContent = \"-\";\n   \
+    \   wsEvent.textContent = \"-\";\n    }}\n\n    function loadStatusFilters() {{\n\
+    \      try {{ return JSON.parse(sessionStorage.getItem(\"helpdesk_status_filters\"\
+    ) || \"[]\"); }}\n      catch {{ return []; }}\n    }}\n    function saveStatusFilters(filters)\
+    \ {{\n      sessionStorage.setItem(\"helpdesk_status_filters\", JSON.stringify(filters));\n\
+    \    }}\n    function toggleStatusFilter(status) {{\n      const filters = loadStatusFilters();\n\
+    \      const next = filters.includes(status) ? filters.filter(s => s !== status)\
+    \ : filters.concat([status]);\n      saveStatusFilters(next);\n      renderHome(next);\n\
+    \    }}\n    function clearStatusFilters() {{\n      saveStatusFilters([]);\n\
+    \      renderHome([]);\n    }}\n\n    async function loadMe() {{\n      const\
+    \ res = await api(\"/api/me\");\n      if (!res) return null;\n      const data\
+    \ = await res.json();\n      const adminLink = data.role === \"admin\" ? ` · <a\
+    \ href=\"#\" onclick=\"renderAdminUsers();return false;\">Użytkownicy</a>` : \"\
+    \";\n      userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong>\
+    \ · ${{esc(data.department)}} · <a href=\"#\" onclick=\"renderProfile();return\
+    \ false;\">Profil</a>${{adminLink}} · <a href=\"#\" onclick=\"logout();return\
+    \ false;\">Wyloguj</a>`;\n      connectLive();\n      return data;\n    }}\n\n\
+    \    async function logout() {{\n      await api(\"/api/logout\", {{ method: \"\
+    POST\" }});\n      clearSid();\n      disconnectLive();\n      window.location.href\
+    \ = \"/login\";\n    }}\n\n    async function renderProfile() {{\n      const\
+    \ me = await loadMe();\n      if (!me) return;\n      const metaRes = await api(\"\
+    /api/meta\");\n      const meta = await metaRes.json();\n\n      appEl.innerHTML\
+    \ = `\n        <section class=\"card\">\n          <button class=\"btn-secondary\"\
+    \ onclick=\"renderHome()\">← Powrót</button>\n          <h2>Mój profil</h2>\n\
+    \          <p class=\"muted\">Zmień dane profilu albo hasło zalogowanego użytkownika.\
+    \ Sesja pozostaje osobna dla tej karty przeglądarki.</p>\n        </section>\n\
+    \n        <section class=\"card\">\n          <h3>Dane użytkownika</h3>\n    \
+    \      <p id=\"profileMessage\" class=\"success hidden\">Profil został zapisany.</p>\n\
+    \          <form id=\"profileForm\">\n            <div class=\"grid\">\n     \
+    \         <div>\n                <label>Imię</label>\n                <input name=\"\
+    first_name\" value=\"${{esc(me.first_name)}}\" required>\n              </div>\n\
+    \              <div>\n                <label>Nazwisko</label>\n              \
+    \  <input name=\"last_name\" value=\"${{esc(me.last_name)}}\" required>\n    \
+    \          </div>\n            </div>\n\n            <label>E-mail</label>\n \
+    \           <input value=\"${{esc(me.email)}}\" disabled>\n\n            <label>Dział</label>\n\
+    \            <select name=\"department\">${{meta.departments.map(x => `<option\
+    \ ${{x === me.department ? \"selected\" : \"\"}}>${{esc(x)}}</option>`).join(\"\
+    \")}}</select>\n\n            <button type=\"submit\">Zapisz profil</button>\n\
+    \          </form>\n        </section>\n\n        <section class=\"card\">\n \
+    \         <h3>Zmiana hasła</h3>\n          <p id=\"passwordMessage\" class=\"\
+    success hidden\">Hasło zostało zmienione.</p>\n          <p id=\"passwordError\"\
+    \ class=\"error hidden\">Nie udało się zmienić hasła.</p>\n          <form id=\"\
+    passwordForm\">\n            <label>Obecne hasło</label>\n            <input name=\"\
+    current_password\" type=\"password\" required>\n\n            <label>Nowe hasło</label>\n\
+    \            <input name=\"new_password\" type=\"password\" minlength=\"8\" required>\n\
+    \n            <label>Powtórz nowe hasło</label>\n            <input name=\"confirm_password\"\
+    \ type=\"password\" minlength=\"8\" required>\n\n            <button type=\"submit\"\
+    >Zmień hasło</button>\n          </form>\n        </section>`;\n\n      document.getElementById(\"\
+    profileForm\").addEventListener(\"submit\", async (e) => {{\n        e.preventDefault();\n\
+    \        const payload = Object.fromEntries(new FormData(e.target).entries());\n\
+    \        const res = await api(\"/api/profile\", {{ method: \"PUT\", body: JSON.stringify(payload)\
+    \ }});\n        if (!res || !res.ok) {{ alert(\"Nie udało się zapisać profilu.\"\
+    ); return; }}\n        document.getElementById(\"profileMessage\").classList.remove(\"\
+    hidden\");\n        await loadMe();\n      }});\n\n      document.getElementById(\"\
+    passwordForm\").addEventListener(\"submit\", async (e) => {{\n        e.preventDefault();\n\
+    \        const payload = Object.fromEntries(new FormData(e.target).entries());\n\
+    \        const msg = document.getElementById(\"passwordMessage\");\n        const\
+    \ err = document.getElementById(\"passwordError\");\n        msg.classList.add(\"\
+    hidden\");\n        err.classList.add(\"hidden\");\n        if (payload.new_password\
+    \ !== payload.confirm_password) {{\n          err.textContent = \"Nowe hasła nie\
+    \ są takie same.\";\n          err.classList.remove(\"hidden\");\n          return;\n\
+    \        }}\n        const res = await api(\"/api/profile/password\", {{ method:\
+    \ \"POST\", body: JSON.stringify(payload) }});\n        if (!res || !res.ok) {{\n\
+    \          const data = res ? await res.json().catch(() => ({{}})) : {{}};\n \
+    \         err.textContent = data.error || \"Nie udało się zmienić hasła.\";\n\
+    \          err.classList.remove(\"hidden\");\n          return;\n        }}\n\
+    \        e.target.reset();\n        msg.classList.remove(\"hidden\");\n      }});\n\
+    \    }}\n\n    async function renderAdminUsers() {{\n      const me = await loadMe();\n\
+    \      if (!me) return;\n      if (me.role !== \"admin\") {{\n        appEl.innerHTML\
+    \ = `<section class=\"card\"><h2>Brak dostępu</h2><p class=\"muted\">Tylko administrator\
+    \ może zarządzać użytkownikami.</p></section>`;\n        return;\n      }}\n\n\
+    \      const res = await api(\"/api/admin/users\");\n      if (!res) return;\n\
+    \      if (!res.ok) {{ appEl.innerHTML = `<section class=\"card\"><h2>Błąd pobierania\
+    \ użytkowników</h2></section>`; return; }}\n      const data = await res.json();\n\
+    \n      const rows = data.users.map(u => `\n        <tr>\n          <td><strong>${{esc(u.first_name)}}\
+    \ ${{esc(u.last_name)}}</strong><br><span class=\"muted\">${{esc(u.email)}}</span></td>\n\
+    \          <td>${{esc(u.department)}}</td>\n          <td><span class=\"pill\"\
+    >${{esc(u.role)}}</span></td>\n          <td class=\"muted\">${{esc(u.created_at)}}</td>\n\
+    \          <td>\n            <div class=\"actions\">\n              <button class=\"\
+    btn-secondary btn-small\" onclick=\"renderAdminUserForm('${{encodeURIComponent(u.email)}}')\"\
+    >Edytuj</button>\n              <button class=\"btn-secondary btn-small\" onclick=\"\
+    renderAdminPasswordForm('${{encodeURIComponent(u.email)}}')\">Hasło</button>\n\
+    \              <button class=\"btn-danger btn-small\" onclick=\"deleteAdminUser('${{encodeURIComponent(u.email)}}')\"\
+    >Usuń</button>\n            </div>\n          </td>\n        </tr>`).join(\"\"\
+    );\n\n      appEl.innerHTML = `\n        <section class=\"card\">\n          <button\
+    \ class=\"btn-secondary\" onclick=\"renderHome()\">← Powrót</button>\n       \
+    \   <h2>Zarządzanie użytkownikami</h2>\n          <p class=\"muted\">Panel administratora:\
+    \ dodawanie użytkowników, edycja profilu, reset hasła i usuwanie kont.</p>\n \
+    \         <button onclick=\"renderAdminUserForm()\">Dodaj użytkownika</button>\n\
+    \        </section>\n        <section class=\"card\">\n          <h3>Użytkownicy\
+    \ INCoprp</h3>\n          <table>\n            <thead><tr><th>Użytkownik</th><th>Dział</th><th>Rola</th><th>Utworzono</th><th>Akcje</th></tr></thead>\n\
+    \            <tbody>${{rows}}</tbody>\n          </table>\n        </section>`;\n\
+    \    }}\n\n    async function renderAdminUserForm(encodedEmail = null) {{\n  \
+    \    const me = await loadMe();\n      if (!me || me.role !== \"admin\") return;\n\
+    \      const metaRes = await api(\"/api/meta\");\n      const meta = await metaRes.json();\n\
+    \n      let user = {{ first_name: \"\", last_name: \"\", email: \"\", department:\
+    \ meta.departments[0], role: \"user\" }};\n      const editing = !!encodedEmail;\n\
+    \n      if (editing) {{\n        const email = decodeURIComponent(encodedEmail);\n\
+    \        const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`);\n\
+    \        if (!res || !res.ok) {{ alert(\"Nie udało się pobrać użytkownika.\");\
+    \ return; }}\n        user = await res.json();\n      }}\n\n      appEl.innerHTML\
+    \ = `\n        <section class=\"card\">\n          <button class=\"btn-secondary\"\
+    \ onclick=\"renderAdminUsers()\">← Użytkownicy</button>\n          <h2>${{editing\
+    \ ? \"Edytuj użytkownika\" : \"Dodaj użytkownika\"}}</h2>\n          <p id=\"\
+    adminUserMessage\" class=\"success hidden\">Zapisano użytkownika.</p>\n      \
+    \    <p id=\"adminUserError\" class=\"error hidden\">Nie udało się zapisać użytkownika.</p>\n\
+    \          <form id=\"adminUserForm\">\n            <div class=\"grid\">\n   \
+    \           <div>\n                <label>Imię</label>\n                <input\
+    \ name=\"first_name\" value=\"${{esc(user.first_name)}}\" required>\n        \
+    \      </div>\n              <div>\n                <label>Nazwisko</label>\n\
+    \                <input name=\"last_name\" value=\"${{esc(user.last_name)}}\"\
+    \ required>\n              </div>\n            </div>\n\n            <label>E-mail</label>\n\
+    \            <input name=\"email\" type=\"email\" value=\"${{esc(user.email)}}\"\
+    \ ${{editing ? \"disabled\" : \"required\"}} placeholder=\"jan.kowalski@incoprp.local\"\
+    >\n\n            <label>Dział</label>\n            <select name=\"department\"\
+    >${{meta.departments.map(x => `<option ${{x === user.department ? \"selected\"\
+    \ : \"\"}}>${{esc(x)}}</option>`).join(\"\")}}</select>\n\n            <label>Rola</label>\n\
+    \            <select name=\"role\">\n              <option value=\"user\" ${{user.role\
+    \ === \"user\" ? \"selected\" : \"\"}}>user</option>\n              <option value=\"\
+    agent\" ${{user.role === \"agent\" ? \"selected\" : \"\"}}>agent</option>\n  \
+    \            <option value=\"admin\" ${{user.role === \"admin\" ? \"selected\"\
+    \ : \"\"}}>admin</option>\n            </select>\n\n            ${{editing ? \"\
+    \" : `\n              <label>Hasło startowe</label>\n              <input name=\"\
+    password\" type=\"password\" minlength=\"8\" required placeholder=\"minimum 8\
+    \ znaków\">\n            `}}\n\n            <button type=\"submit\">Zapisz</button>\n\
+    \            <button type=\"button\" class=\"btn-secondary\" onclick=\"renderAdminUsers()\"\
+    >Anuluj</button>\n          </form>\n        </section>`;\n\n      document.getElementById(\"\
+    adminUserForm\").addEventListener(\"submit\", async (e) => {{\n        e.preventDefault();\n\
+    \        const payload = Object.fromEntries(new FormData(e.target).entries());\n\
+    \        const endpoint = editing ? `/api/admin/users/${{encodeURIComponent(user.email)}}`\
+    \ : \"/api/admin/users\";\n        const method = editing ? \"PUT\" : \"POST\"\
+    ;\n        const res = await api(endpoint, {{ method, body: JSON.stringify(payload)\
+    \ }});\n        const msg = document.getElementById(\"adminUserMessage\");\n \
+    \       const err = document.getElementById(\"adminUserError\");\n        msg.classList.add(\"\
+    hidden\");\n        err.classList.add(\"hidden\");\n        if (!res || !res.ok)\
+    \ {{\n          const data = res ? await res.json().catch(() => ({{}})) : {{}};\n\
+    \          err.textContent = data.error || \"Nie udało się zapisać użytkownika.\"\
+    ;\n          err.classList.remove(\"hidden\");\n          return;\n        }}\n\
+    \        msg.classList.remove(\"hidden\");\n        setTimeout(renderAdminUsers,\
+    \ 500);\n      }});\n    }}\n\n    async function renderAdminPasswordForm(encodedEmail)\
+    \ {{\n      const me = await loadMe();\n      if (!me || me.role !== \"admin\"\
+    ) return;\n      const email = decodeURIComponent(encodedEmail);\n      appEl.innerHTML\
+    \ = `\n        <section class=\"card\">\n          <button class=\"btn-secondary\"\
+    \ onclick=\"renderAdminUsers()\">← Użytkownicy</button>\n          <h2>Reset hasła</h2>\n\
+    \          <p class=\"muted\">Ustaw nowe hasło dla konta: <strong>${{esc(email)}}</strong></p>\n\
+    \          <p id=\"adminPasswordMessage\" class=\"success hidden\">Hasło zostało\
+    \ zmienione.</p>\n          <p id=\"adminPasswordError\" class=\"error hidden\"\
+    >Nie udało się zmienić hasła.</p>\n          <form id=\"adminPasswordForm\">\n\
+    \            <label>Nowe hasło</label>\n            <input name=\"new_password\"\
+    \ type=\"password\" minlength=\"8\" required>\n            <label>Powtórz nowe\
+    \ hasło</label>\n            <input name=\"confirm_password\" type=\"password\"\
+    \ minlength=\"8\" required>\n            <button type=\"submit\">Zmień hasło</button>\n\
+    \            <button type=\"button\" class=\"btn-secondary\" onclick=\"renderAdminUsers()\"\
+    >Anuluj</button>\n          </form>\n        </section>`;\n      document.getElementById(\"\
+    adminPasswordForm\").addEventListener(\"submit\", async (e) => {{\n        e.preventDefault();\n\
+    \        const payload = Object.fromEntries(new FormData(e.target).entries());\n\
+    \        const msg = document.getElementById(\"adminPasswordMessage\");\n    \
+    \    const err = document.getElementById(\"adminPasswordError\");\n        msg.classList.add(\"\
+    hidden\");\n        err.classList.add(\"hidden\");\n        if (payload.new_password\
+    \ !== payload.confirm_password) {{\n          err.textContent = \"Hasła nie są\
+    \ takie same.\";\n          err.classList.remove(\"hidden\");\n          return;\n\
+    \        }}\n        const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}/password`,\
+    \ {{ method: \"POST\", body: JSON.stringify(payload) }});\n        if (!res ||\
+    \ !res.ok) {{\n          const data = res ? await res.json().catch(() => ({{}}))\
+    \ : {{}};\n          err.textContent = data.error || \"Nie udało się zmienić hasła.\"\
+    ;\n          err.classList.remove(\"hidden\");\n          return;\n        }}\n\
+    \        e.target.reset();\n        msg.classList.remove(\"hidden\");\n      }});\n\
+    \    }}\n\n    async function deleteAdminUser(encodedEmail) {{\n      const email\
+    \ = decodeURIComponent(encodedEmail);\n      if (!confirm(`Usunąć użytkownika\
+    \ ${{email}}? Tej operacji nie można cofnąć.`)) return;\n      const res = await\
+    \ api(`/api/admin/users/${{encodeURIComponent(email)}}`, {{ method: \"DELETE\"\
+    \ }});\n      if (!res || !res.ok) {{\n        const data = res ? await res.json().catch(()\
+    \ => ({{}})) : {{}};\n        alert(data.error || \"Nie udało się usunąć użytkownika.\"\
+    );\n        return;\n      }}\n      await renderAdminUsers();\n    }}\n\n   \
+    \ async function renderHome(statusFilters = loadStatusFilters(), fromLive = false)\
+    \ {{\n      currentView = {{ name: \"home\", ticketId: null }};\n      const me\
+    \ = await loadMe();\n      if (!me) return;\n\n      const filters = Array.isArray(statusFilters)\
+    \ ? statusFilters : [];\n      saveStatusFilters(filters);\n\n      const query\
+    \ = filters.length ? `?statuses=${{encodeURIComponent(filters.join(\",\"))}}`\
+    \ : \"\";\n      const res = await api(`/api/tickets${{query}}`);\n      if (!res)\
+    \ return;\n      const data = await res.json();\n      const scope = canWorkTickets(me)\
+    \ ? \"Wszystkie zgłoszenia\" : \"Moje zgłoszenia\";\n      const filteredLabel\
+    \ = filters.length ? ` · statusy: ${{filters.join(\", \")}}` : \"\";\n\n     \
+    \ const statusButtons = [`<button class=\"btn-secondary status-filter-btn${{filters.length\
+    \ === 0 ? \" active\" : \"\"}}\" onclick=\"clearStatusFilters()\">Wszystkie</button>`]\n\
+    \        .concat(data.statuses.map(s => `<button class=\"btn-secondary status-filter-btn\
+    \ ${{statusClass(s)}}${{filters.includes(s) ? \" active\" : \"\"}}\" onclick=\"\
+    toggleStatusFilter('${{esc(s)}}')\">${{esc(s)}}</button>`))\n        .join(\"\
+    \ \");\n\n      const rows = data.tickets.length ? data.tickets.map(t => `\n \
+    \       <tr>\n          <td>#${{t.id}}</td>\n          <td><a class=\"ticket-title\
+    \ ${{statusClass(t.status)}}\" href=\"#\" onclick=\"renderTicket(${{t.id}});return\
+    \ false;\">${{esc(t.title)}}</a></td>\n          <td>${{esc(t.requester_name)}}<br><span\
+    \ class=\"muted\">${{esc(t.department)}}</span></td>\n          <td>${{esc(t.category)}}</td>\n\
+    \          <td><span class=\"pill ${{priorityClass(t.priority)}}\">${{esc(t.priority)}}</span></td>\n\
+    \          <td><span class=\"pill ${{statusClass(t.status)}}\">${{esc(t.status)}}</span></td>\n\
+    \          <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class=\"\
+    muted\">Nieprzypisane</span>'}}</td>\n          <td><span class=\"pill ${{slaClass(t.sla_state)}}\"\
+    >${{slaLabel(t.sla_state)}}</span><br><span class=\"muted\">${{esc(t.sla_due_at\
+    \ || \"\")}}</span></td>\n          <td class=\"muted\">${{esc(t.created_at)}}</td>\n\
+    \        </tr>`).join(\"\") : `<tr><td colspan=\"9\" class=\"muted\">Brak zgłoszeń\
+    \ dla wybranych statusów.</td></tr>`;\n\n      appEl.innerHTML = `\n        <section\
+    \ class=\"stats\">\n          <div class=\"stat\"><div class=\"num\">${{data.stats.total}}</div><div\
+    \ class=\"label\">${{scope}}</div></div>\n          <div class=\"stat\"><div class=\"\
+    num\">${{data.stats.new}}</div><div class=\"label\">Nowe</div></div>\n       \
+    \   <div class=\"stat\"><div class=\"num\">${{data.stats.in_progress}}</div><div\
+    \ class=\"label\">W trakcie</div></div>\n          <div class=\"stat\"><div class=\"\
+    num\">${{data.stats.high}}</div><div class=\"label\">Wysoki / Krytyczny</div></div>\n\
+    \          <div class=\"stat\"><div class=\"num\">${{data.stats.resolved}}</div><div\
+    \ class=\"label\">Rozwiązane / Zamknięte</div></div>\n        </section>\n   \
+    \     <section class=\"card\">\n          <button onclick=\"renderNewTicket()\"\
+    >Nowe zgłoszenie</button>\n          <button class=\"btn-secondary\" onclick=\"\
+    renderProfile()\">Mój profil</button>\n          ${{me.role === \"admin\" ? `<button\
+    \ class=\"btn-secondary\" onclick=\"renderAdminUsers()\">Zarządzanie użytkownikami</button>`\
+    \ : \"\"}}\n          <div style=\"margin-top:16px\">\n            <strong>Filtry\
+    \ statusów:</strong>\n            <div class=\"status-filter-actions\">${{statusButtons}}</div>\n\
+    \            <div class=\"status-filter-hint\">Możesz zaznaczyć więcej niż jeden\
+    \ status. Kliknij status ponownie, aby go odznaczyć.</div>\n          </div>\n\
+    \        </section>\n        <section class=\"card\">\n          <h2>${{scope}}${{filteredLabel}}</h2>\n\
+    \          <table>\n            <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane\
+    \ do</th><th>SLA</th><th>Utworzono</th></tr></thead>\n            <tbody>${{rows}}</tbody>\n\
+    \          </table>\n        </section>`;\n    }}\n\n    async function renderNewTicket()\
+    \ {{\n      currentView = {{ name: \"new-ticket\", ticketId: null }};\n      const\
+    \ me = await loadMe();\n      if (!me) return;\n      const metaRes = await api(\"\
+    /api/meta\");\n      const meta = await metaRes.json();\n      appEl.innerHTML\
+    \ = `\n        <section class=\"card\">\n          <h2>Nowe zgłoszenie</h2>\n\
+    \          <form id=\"ticketForm\">\n            <label>Tytuł problemu</label>\n\
+    \            <input name=\"title\" required placeholder=\"Np. Outlook nie odbiera\
+    \ poczty\">\n            <label>Opis</label>\n            <textarea name=\"description\"\
+    \ required placeholder=\"Opisz problem, komunikat błędu, od kiedy występuje...\"\
+    ></textarea>\n            <div class=\"grid\">\n              <div><label>Zgłaszający</label><input\
+    \ value=\"${{esc(me.name)}}\" disabled></div>\n              <div><label>E-mail</label><input\
+    \ value=\"${{esc(me.email)}}\" disabled></div>\n            </div>\n         \
+    \   <div class=\"grid\">\n              <div><label>Dział</label><input value=\"\
+    ${{esc(me.department)}}\" disabled></div>\n              <div><label>Kategoria</label><select\
+    \ name=\"category\">${{meta.categories.map(x => `<option>${{esc(x)}}</option>`).join(\"\
+    \")}}</select></div>\n            </div>\n            <label>Priorytet</label>\n\
+    \            <select name=\"priority\">${{meta.priorities.map(x => `<option ${{x\
+    \ === \"Normalny\" ? \"selected\" : \"\"}}>${{esc(x)}}</option>`).join(\"\")}}</select>\n\
+    \            <button type=\"submit\">Utwórz zgłoszenie</button>\n            <button\
+    \ type=\"button\" class=\"btn-secondary\" onclick=\"renderHome()\">Anuluj</button>\n\
+    \          </form>\n        </section>`;\n      document.getElementById(\"ticketForm\"\
+    ).addEventListener(\"submit\", createTicket);\n    }}\n\n    async function createTicket(event)\
+    \ {{\n      event.preventDefault();\n      const form = event.target;\n      const\
+    \ payload = Object.fromEntries(new FormData(form).entries());\n      suppressNextLiveRefresh\
+    \ = true;\n      const res = await api(\"/api/tickets\", {{ method: \"POST\",\
+    \ body: JSON.stringify(payload) }});\n      if (!res) return;\n      if (!res.ok)\
+    \ {{ alert(\"Nie udało się utworzyć zgłoszenia.\"); return; }}\n      await renderHome();\n\
+    \    }}\n\n    async function renderTicket(id, fromLive = false) {{\n      currentView\
+    \ = {{ name: \"ticket\", ticketId: Number(id) }};\n      const me = await loadMe();\n\
+    \      if (!me) return;\n      const res = await api(`/api/tickets/${{id}}`);\n\
+    \      if (!res) return;\n      if (!res.ok) {{ appEl.innerHTML = `<section class=\"\
+    card\"><h2>Brak dostępu albo brak zgłoszenia</h2></section>`; return; }}\n   \
+    \   const data = await res.json();\n      const t = data.ticket;\n      const\
+    \ comments = data.comments.map(c => `\n        <div class=\"comment\"><div class=\"\
+    muted\">${{esc(c.author)}} · ${{esc(c.created_at)}}</div><div>${{esc(c.content)}}</div></div>\n\
+    \      `).join(\"\") || `<p class=\"muted\">Brak komentarzy.</p>`;\n\n      const\
+    \ statusPanel = canWorkTickets(me) ? `\n        <section class=\"card\">\n   \
+    \       <h3>Zmień status</h3>\n          <form id=\"statusForm\">\n          \
+    \  <label>Status</label>\n            <select name=\"status\">${{data.meta.statuses.map(s\
+    \ => `<option ${{s === t.status ? \"selected\" : \"\"}}>${{esc(s)}}</option>`).join(\"\
+    \")}}</select>\n            <button type=\"submit\">Zapisz status</button>\n \
+    \         </form>\n        </section>` : \"\";\n\n      const assignmentPanel\
+    \ = canWorkTickets(me) ? `\n        <section class=\"card\">\n          <h3>Przypisanie\
+    \ zgłoszenia</h3>\n          <form id=\"assignmentForm\">\n            <label>Agent</label>\n\
+    \            <select name=\"assigned_to_email\">\n              <option value=\"\
+    \">Nieprzypisane</option>\n              ${{data.meta.agents.map(a => `<option\
+    \ value=\"${{esc(a.email)}}\" ${{a.email === t.assigned_to_email ? \"selected\"\
+    \ : \"\"}}>${{esc(a.name)}} (${{esc(a.role)}})</option>`).join(\"\")}}\n     \
+    \       </select>\n            <button type=\"submit\">Zapisz przypisanie</button>\n\
+    \          </form>\n        </section>` : \"\";\n\n      const eventHistory =\
+    \ (data.events || []).length\n        ? `<div class=\"timeline\">${{data.events.map(e\
+    \ => `\n            <div class=\"event-item\">\n              <strong>${{esc(e.actor_name\
+    \ || \"System\")}}</strong>\n              <span class=\"muted\"> · ${{esc(e.created_at)}}\
+    \ · ${{esc(e.event_type)}}</span>\n              <div>${{esc(e.message)}}</div>\n\
+    \            </div>`).join(\"\")}}</div>`\n        : `<p class=\"muted\">Brak\
+    \ historii zmian.</p>`;\n\n      appEl.innerHTML = `\n        <section class=\"\
+    card\">\n          <button class=\"btn-secondary\" onclick=\"renderHome()\">←\
+    \ Powrót</button>\n          <h2 class=\"ticket-heading ${{statusClass(t.status)}}\"\
+    >#${{t.id}} · ${{esc(t.title)}}</h2>\n          <p class=\"muted\">Utworzono:\
+    \ ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>\n        \
+    \  <p><strong>Status:</strong> <span class=\"pill ${{statusClass(t.status)}}\"\
+    >${{esc(t.status)}}</span></p>\n          <p><strong>Priorytet:</strong> <span\
+    \ class=\"pill ${{priorityClass(t.priority)}}\">${{esc(t.priority)}}</span></p>\n\
+    \          <p><strong>SLA:</strong> <span class=\"pill ${{slaClass(t.sla_state)}}\"\
+    >${{slaLabel(t.sla_state)}}</span> <span class=\"muted\">${{esc(t.sla_due_at ||\
+    \ \"\")}}</span></p>\n          <p><strong>Przypisane do:</strong> ${{t.assigned_to_name\
+    \ ? esc(t.assigned_to_name) : '<span class=\"muted\">Nieprzypisane</span>'}}</p>\n\
+    \          <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>\n         \
+    \ <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>\n\
+    \          <p><strong>Dział:</strong> ${{esc(t.department)}}</p>\n          <h3>Opis</h3><p>${{esc(t.description)}}</p>\n\
+    \        </section>\n        ${{statusPanel}}\n        ${{assignmentPanel}}\n\
+    \        <section class=\"card\">\n          <h3>Historia zmian</h3>\n       \
+    \   ${{eventHistory}}\n        </section>\n        <section class=\"card\">\n\
+    \          <h3>Komentarze</h3>\n          ${{comments}}\n          <form id=\"\
+    commentForm\">\n            <label>Komentarz</label>\n            <textarea name=\"\
+    content\" required></textarea>\n            <button type=\"submit\">Dodaj komentarz</button>\n\
+    \          </form>\n        </section>`;\n\n      const commentForm = document.getElementById(\"\
+    commentForm\");\n      commentForm.addEventListener(\"submit\", async (e) => {{\n\
+    \        e.preventDefault();\n        const payload = Object.fromEntries(new FormData(commentForm).entries());\n\
+    \        suppressNextLiveRefresh = true;\n        await api(`/api/tickets/${{id}}/comments`,\
+    \ {{ method: \"POST\", body: JSON.stringify(payload) }});\n        await renderTicket(id);\n\
+    \      }});\n\n      const statusForm = document.getElementById(\"statusForm\"\
+    );\n      if (statusForm) {{\n        statusForm.addEventListener(\"submit\",\
+    \ async (e) => {{\n          e.preventDefault();\n          const payload = Object.fromEntries(new\
+    \ FormData(statusForm).entries());\n          const newStatus = payload.status\
+    \ || \"\";\n          suppressNextLiveRefresh = true;\n          const res = await\
+    \ api(`/api/tickets/${{id}}/status`, {{ method: \"POST\", body: JSON.stringify(payload)\
+    \ }});\n          if (!res || !res.ok) {{\n            suppressNextLiveRefresh\
+    \ = false;\n            alert(\"Nie udało się zmienić statusu.\");\n         \
+    \   return;\n          }}\n          showToast(\n            \"Status zgłoszenia\
+    \ #\" + id + \" został zmieniony\",\n            \"Nowy status: \" + newStatus\n\
+    \          );\n          await renderTicket(id);\n        }});\n      }}\n\n \
+    \     const assignmentForm = document.getElementById(\"assignmentForm\");\n  \
+    \    if (assignmentForm) {{\n        assignmentForm.addEventListener(\"submit\"\
+    , async (e) => {{\n          e.preventDefault();\n          const payload = Object.fromEntries(new\
+    \ FormData(assignmentForm).entries());\n          suppressNextLiveRefresh = true;\n\
+    \          const res = await api(`/api/tickets/${{id}}/assign`, {{ method: \"\
+    POST\", body: JSON.stringify(payload) }});\n          if (!res || !res.ok) {{\n\
+    \            suppressNextLiveRefresh = false;\n            alert(\"Nie udało się\
+    \ zmienić przypisania.\");\n            return;\n          }}\n          showToast(\"\
+    Zmieniono przypisanie zgłoszenia #\" + id, payload.assigned_to_email || \"Nieprzypisane\"\
+    );\n          await renderTicket(id);\n        }});\n      }}\n    }}\n\n    renderHome();\n\
+    \  </script>\n</body>\n</html>\n\"\"\"\n\nLOGIN_HTML = f\"\"\"\n<!doctype html>\n\
+    <html lang=\"pl\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\"\
+    \ content=\"width=device-width, initial-scale=1\">\n  <title>INCoprp Helpdesk\
+    \ — Logowanie</title>\n  <style>{CSS}</style>\n</head>\n<body>\n  <main class=\"\
+    page\">\n    <header>\n      <div>\n        <h1>INCoprp Helpdesk</h1>\n      \
+    \  <p class=\"subtitle\">Logowanie do systemu zgłoszeń IT.</p>\n      </div>\n\
+    \      <div class=\"badge\">Sesja: <strong>ukryta w sessionStorage</strong></div>\n\
+    \    </header>\n    <section class=\"card login-box\">\n      <h2>Logowanie</h2>\n\
+    \      <p id=\"error\" class=\"error hidden\">Nieprawidłowy e-mail albo hasło.</p>\n\
+    \      <form id=\"loginForm\">\n        <label>E-mail</label>\n        <input\
+    \ name=\"email\" type=\"email\" required placeholder=\"anna.kowalska@incoprp.local\"\
+    >\n        <label>Hasło</label>\n        <input name=\"password\" type=\"password\"\
+    \ required placeholder=\"Incoprp123!\">\n        <button type=\"submit\">Zaloguj</button>\n\
+    \      </form>\n      <p class=\"muted\">\n        Konta testowe: anna.kowalska@incoprp.local,\
+    \ piotr.nowak@incoprp.local,\n        agent@incoprp.local, admin@incoprp.local.\
+    \ Hasło startowe: Incoprp123!\n      </p>\n    </section>\n  </main>\n  <script>\n\
+    \    document.getElementById(\"loginForm\").addEventListener(\"submit\", async\
+    \ (event) => {{\n      event.preventDefault();\n      const payload = Object.fromEntries(new\
+    \ FormData(event.target).entries());\n      const res = await fetch(\"/api/login\"\
+    , {{\n        method: \"POST\",\n        headers: {{ \"Content-Type\": \"application/json\"\
+    \ }},\n        body: JSON.stringify(payload)\n      }});\n      if (!res.ok) {{\n\
+    \        document.getElementById(\"error\").classList.remove(\"hidden\");\n  \
+    \      return;\n      }}\n      const data = await res.json();\n      sessionStorage.setItem(\"\
+    helpdesk_sid\", data.sid);\n      window.location.href = \"/\";\n    }});\n  </script>\n\
+    </body>\n</html>\n\"\"\"\n\n@sock.route(\"/ws\")\ndef websocket(ws):\n    client_id\
+    \ = id(ws)\n    user = None\n    try:\n        raw = ws.receive()\n        auth\
+    \ = json.loads(raw or \"{}\")\n        sid = clean(auth.get(\"sid\"))\n      \
+    \  user = get_user_by_sid(sid)\n        if not user:\n            ws.send(json.dumps({\"\
+    error\": \"unauthorized\"}))\n            return\n\n        active_ws_clients.add(client_id)\n\
+    \        publish_event(f\"{user['name']} połączony z live helpdesk\", \"presence\"\
+    )\n\n        while True:\n            ws.send(json.dumps({\n                \"\
+    server_time\": time.strftime(\"%Y-%m-%d %H:%M:%S\"),\n                \"active_clients\"\
+    : len(active_ws_clients),\n                \"user\": {\n                    \"\
+    name\": user[\"name\"],\n                    \"email\": user[\"email\"],\n   \
+    \                 \"role\": user[\"role\"],\n                },\n            \
+    \    \"event\": last_live_event,\n            }))\n            time.sleep(1)\n\
+    \    except Exception:\n        pass\n    finally:\n        active_ws_clients.discard(client_id)\n\
+    \n@app.get(\"/healthz\")\ndef healthz():\n    return {\"status\": \"ok\"}\n\n\
+    @app.get(\"/login\")\ndef login_page():\n    return Response(LOGIN_HTML, mimetype=\"\
+    text/html\")\n\n@app.get(\"/\")\ndef spa_page():\n    return Response(SPA_HTML,\
+    \ mimetype=\"text/html\")\n\n@app.post(\"/api/login\")\ndef api_login():\n   \
+    \ payload = request.get_json(silent=True) or {}\n    email = clean(payload.get(\"\
+    email\")).lower()\n    password = str(payload.get(\"password\") or \"\")\n\n \
+    \   conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\"\"\n     \
+    \   SELECT first_name, last_name, email, department, role, password_hash\n   \
+    \     FROM users\n        WHERE lower(email) = %s\n    \"\"\", (email,))\n   \
+    \ user = cur.fetchone()\n    if not user:\n        cur.close()\n        conn.close()\n\
+    \        return jsonify({\"error\": \"invalid credentials\"}), 401\n\n    first_name,\
+    \ last_name, user_email, department, role, password_hash = user\n    if not check_password_hash(password_hash,\
+    \ password):\n        cur.close()\n        conn.close()\n        return jsonify({\"\
+    error\": \"invalid credentials\"}), 401\n\n    sid = str(uuid.uuid4())\n    cur.execute(\"\
+    INSERT INTO user_sessions (sid, user_email) VALUES (%s, %s)\", (sid, user_email))\n\
+    \    conn.commit()\n    cur.close()\n    conn.close()\n\n    return jsonify({\n\
+    \        \"sid\": sid,\n        \"user\": {\n            \"first_name\": first_name,\n\
+    \            \"last_name\": last_name,\n            \"name\": f\"{first_name}\
+    \ {last_name}\".strip(),\n            \"email\": user_email,\n            \"department\"\
+    : department,\n            \"role\": role,\n        }\n    })\n\n@app.post(\"\
+    /api/logout\")\ndef api_logout():\n    sid = get_sid_from_request()\n    if sid:\n\
+    \        conn = get_conn()\n        cur = conn.cursor()\n        cur.execute(\"\
+    DELETE FROM user_sessions WHERE sid = %s\", (sid,))\n        conn.commit()\n \
+    \       cur.close()\n        conn.close()\n    return jsonify({\"status\": \"\
+    ok\"})\n\n@app.get(\"/api/me\")\n@api_login_required\ndef api_me(user):\n    return\
+    \ jsonify(user)\n\n@app.put(\"/api/profile\")\n@api_login_required\ndef api_update_profile(user):\n\
+    \    payload = request.get_json(silent=True) or {}\n    first_name = clean(payload.get(\"\
+    first_name\"))\n    last_name = clean(payload.get(\"last_name\"))\n    department\
+    \ = clean(payload.get(\"department\"))\n\n    if not first_name or not last_name:\n\
+    \        return jsonify({\"error\": \"Imię i nazwisko są wymagane.\"}), 400\n\
+    \    if department not in DEPARTMENTS:\n        return jsonify({\"error\": \"\
+    invalid department\"}), 400\n\n    conn = get_conn()\n    cur = conn.cursor()\n\
+    \    cur.execute(\"\"\"\n        UPDATE users\n        SET first_name = %s, last_name\
+    \ = %s, department = %s\n        WHERE email = %s\n    \"\"\", (first_name, last_name,\
+    \ department, user[\"email\"]))\n    conn.commit()\n    cur.close()\n    conn.close()\n\
+    \n    return jsonify({\"status\": \"ok\"})\n\n@app.post(\"/api/profile/password\"\
+    )\n@api_login_required\ndef api_change_password(user):\n    payload = request.get_json(silent=True)\
+    \ or {}\n    current_password = str(payload.get(\"current_password\") or \"\"\
+    )\n    new_password = str(payload.get(\"new_password\") or \"\")\n    confirm_password\
+    \ = str(payload.get(\"confirm_password\") or \"\")\n\n    if len(new_password)\
+    \ < 8:\n        return jsonify({\"error\": \"Nowe hasło musi mieć co najmniej\
+    \ 8 znaków.\"}), 400\n    if new_password != confirm_password:\n        return\
+    \ jsonify({\"error\": \"Nowe hasła nie są takie same.\"}), 400\n\n    conn = get_conn()\n\
+    \    cur = conn.cursor()\n    cur.execute(\"SELECT password_hash FROM users WHERE\
+    \ email = %s\", (user[\"email\"],))\n    row = cur.fetchone()\n    if not row\
+    \ or not check_password_hash(row[0], current_password):\n        cur.close()\n\
+    \        conn.close()\n        return jsonify({\"error\": \"Obecne hasło jest\
+    \ nieprawidłowe.\"}), 400\n\n    cur.execute(\"\"\"\n        UPDATE users\n  \
+    \      SET password_hash = %s\n        WHERE email = %s\n    \"\"\", (generate_password_hash(new_password),\
+    \ user[\"email\"]))\n    conn.commit()\n    cur.close()\n    conn.close()\n\n\
+    \    return jsonify({\"status\": \"ok\"})\n\n@app.get(\"/api/admin/users\")\n\
+    @api_login_required\n@api_admin_required\ndef api_admin_users(user):\n    conn\
+    \ = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\"\"\n        SELECT\
+    \ first_name, last_name, email, department, role, created_at\n        FROM users\n\
+    \        ORDER BY lower(last_name), lower(first_name), lower(email)\n    \"\"\"\
+    )\n    rows = cur.fetchall()\n    cur.close()\n    conn.close()\n    return jsonify({\n\
+    \        \"users\": [\n            {\n                \"first_name\": r[0],\n\
+    \                \"last_name\": r[1],\n                \"full_name\": f\"{r[0]}\
+    \ {r[1]}\".strip(),\n                \"email\": r[2],\n                \"department\"\
+    : r[3],\n                \"role\": r[4],\n                \"created_at\": str(r[5]),\n\
+    \            }\n            for r in rows\n        ]\n    })\n\n@app.get(\"/api/admin/users/<path:email>\"\
+    )\n@api_login_required\n@api_admin_required\ndef api_admin_get_user(user, email):\n\
+    \    email = clean(email).lower()\n    conn = get_conn()\n    cur = conn.cursor()\n\
+    \    cur.execute(\"\"\"\n        SELECT first_name, last_name, email, department,\
+    \ role, created_at\n        FROM users\n        WHERE lower(email) = %s\n    \"\
+    \"\", (email,))\n    row = cur.fetchone()\n    cur.close()\n    conn.close()\n\
+    \    if not row:\n        return jsonify({\"error\": \"user not found\"}), 404\n\
+    \    return jsonify({\n        \"first_name\": row[0],\n        \"last_name\"\
+    : row[1],\n        \"full_name\": f\"{row[0]} {row[1]}\".strip(),\n        \"\
+    email\": row[2],\n        \"department\": row[3],\n        \"role\": row[4],\n\
+    \        \"created_at\": str(row[5]),\n    })\n\n@app.post(\"/api/admin/users\"\
+    )\n@api_login_required\n@api_admin_required\ndef api_admin_create_user(user):\n\
+    \    payload = request.get_json(silent=True) or {}\n    first_name = clean(payload.get(\"\
+    first_name\"))\n    last_name = clean(payload.get(\"last_name\"))\n    email =\
+    \ clean(payload.get(\"email\")).lower()\n    department = clean(payload.get(\"\
+    department\"))\n    role = clean(payload.get(\"role\")) or \"user\"\n    password\
+    \ = str(payload.get(\"password\") or \"\")\n\n    if not first_name or not last_name\
+    \ or not email:\n        return jsonify({\"error\": \"Imię, nazwisko oraz e-mail\
+    \ są wymagane.\"}), 400\n    if department not in DEPARTMENTS:\n        return\
+    \ jsonify({\"error\": \"Nieprawidłowy dział.\"}), 400\n    if role not in (\"\
+    user\", \"agent\", \"admin\"):\n        return jsonify({\"error\": \"Nieprawidłowa\
+    \ rola.\"}), 400\n    if len(password) < 8:\n        return jsonify({\"error\"\
+    : \"Hasło musi mieć co najmniej 8 znaków.\"}), 400\n\n    conn = get_conn()\n\
+    \    cur = conn.cursor()\n    cur.execute(\"SELECT 1 FROM users WHERE lower(email)\
+    \ = %s\", (email,))\n    if cur.fetchone():\n        cur.close()\n        conn.close()\n\
+    \        return jsonify({\"error\": \"Użytkownik o takim adresie e-mail już istnieje.\"\
+    }), 409\n\n    cur.execute(\"\"\"\n        INSERT INTO users (first_name, last_name,\
+    \ email, department, role, password_hash)\n        VALUES (%s, %s, %s, %s, %s,\
+    \ %s)\n    \"\"\", (first_name, last_name, email, department, role, generate_password_hash(password)))\n\
+    \    conn.commit()\n    cur.close()\n    conn.close()\n    return jsonify({\"\
+    status\": \"ok\"}), 201\n\n@app.put(\"/api/admin/users/<path:email>\")\n@api_login_required\n\
+    @api_admin_required\ndef api_admin_update_user(user, email):\n    target_email\
+    \ = clean(email).lower()\n    payload = request.get_json(silent=True) or {}\n\
+    \    first_name = clean(payload.get(\"first_name\"))\n    last_name = clean(payload.get(\"\
+    last_name\"))\n    department = clean(payload.get(\"department\"))\n    role =\
+    \ clean(payload.get(\"role\")) or \"user\"\n\n    if not first_name or not last_name:\n\
+    \        return jsonify({\"error\": \"Imię i nazwisko są wymagane.\"}), 400\n\
+    \    if department not in DEPARTMENTS:\n        return jsonify({\"error\": \"\
+    Nieprawidłowy dział.\"}), 400\n    if role not in (\"user\", \"agent\", \"admin\"\
+    ):\n        return jsonify({\"error\": \"Nieprawidłowa rola.\"}), 400\n\n    conn\
+    \ = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"SELECT role FROM users\
+    \ WHERE lower(email) = %s\", (target_email,))\n    row = cur.fetchone()\n    if\
+    \ not row:\n        cur.close()\n        conn.close()\n        return jsonify({\"\
+    error\": \"Nie znaleziono użytkownika.\"}), 404\n\n    old_role = row[0]\n   \
+    \ if target_email == user[\"email\"].lower() and old_role == \"admin\" and role\
+    \ != \"admin\":\n        cur.execute(\"SELECT COUNT(*) FROM users WHERE role =\
+    \ 'admin'\")\n        admin_count = cur.fetchone()[0]\n        if admin_count\
+    \ <= 1:\n            cur.close()\n            conn.close()\n            return\
+    \ jsonify({\"error\": \"Nie można odebrać roli ostatniemu administratorowi.\"\
+    }), 400\n\n    cur.execute(\"\"\"\n        UPDATE users\n        SET first_name\
+    \ = %s, last_name = %s, department = %s, role = %s\n        WHERE lower(email)\
+    \ = %s\n    \"\"\", (first_name, last_name, department, role, target_email))\n\
+    \    conn.commit()\n    cur.close()\n    conn.close()\n    return jsonify({\"\
+    status\": \"ok\"})\n\n@app.post(\"/api/admin/users/<path:email>/password\")\n\
+    @api_login_required\n@api_admin_required\ndef api_admin_reset_password(user, email):\n\
+    \    target_email = clean(email).lower()\n    payload = request.get_json(silent=True)\
+    \ or {}\n    new_password = str(payload.get(\"new_password\") or \"\")\n    confirm_password\
+    \ = str(payload.get(\"confirm_password\") or \"\")\n\n    if len(new_password)\
+    \ < 8:\n        return jsonify({\"error\": \"Nowe hasło musi mieć co najmniej\
+    \ 8 znaków.\"}), 400\n    if new_password != confirm_password:\n        return\
+    \ jsonify({\"error\": \"Nowe hasła nie są takie same.\"}), 400\n\n    conn = get_conn()\n\
+    \    cur = conn.cursor()\n    cur.execute(\"SELECT 1 FROM users WHERE lower(email)\
+    \ = %s\", (target_email,))\n    if not cur.fetchone():\n        cur.close()\n\
+    \        conn.close()\n        return jsonify({\"error\": \"Nie znaleziono użytkownika.\"\
+    }), 404\n    cur.execute(\"UPDATE users SET password_hash = %s WHERE lower(email)\
+    \ = %s\", (generate_password_hash(new_password), target_email))\n    cur.execute(\"\
+    DELETE FROM user_sessions WHERE lower(user_email) = %s\", (target_email,))\n \
+    \   conn.commit()\n    cur.close()\n    conn.close()\n    return jsonify({\"status\"\
+    : \"ok\"})\n\n@app.delete(\"/api/admin/users/<path:email>\")\n@api_login_required\n\
+    @api_admin_required\ndef api_admin_delete_user(user, email):\n    target_email\
+    \ = clean(email).lower()\n    if target_email == user[\"email\"].lower():\n  \
+    \      return jsonify({\"error\": \"Nie możesz usunąć własnego konta.\"}), 400\n\
+    \n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"SELECT role\
+    \ FROM users WHERE lower(email) = %s\", (target_email,))\n    row = cur.fetchone()\n\
+    \    if not row:\n        cur.close()\n        conn.close()\n        return jsonify({\"\
+    error\": \"Nie znaleziono użytkownika.\"}), 404\n\n    if row[0] == \"admin\"\
+    :\n        cur.execute(\"SELECT COUNT(*) FROM users WHERE role = 'admin'\")\n\
+    \        admin_count = cur.fetchone()[0]\n        if admin_count <= 1:\n     \
+    \       cur.close()\n            conn.close()\n            return jsonify({\"\
+    error\": \"Nie można usunąć ostatniego administratora.\"}), 400\n\n    cur.execute(\"\
+    DELETE FROM user_sessions WHERE lower(user_email) = %s\", (target_email,))\n \
+    \   cur.execute(\"DELETE FROM users WHERE lower(email) = %s\", (target_email,))\n\
+    \    conn.commit()\n    cur.close()\n    conn.close()\n    return jsonify({\"\
+    status\": \"ok\"})\n\n@app.get(\"/api/meta\")\n@api_login_required\ndef api_meta(user):\n\
+    \    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\"\"\n    \
+    \    SELECT first_name, last_name, email, role\n        FROM users\n        WHERE\
+    \ role IN ('agent', 'admin')\n        ORDER BY last_name, first_name\n    \"\"\
+    \")\n    agents = [\n        {\"name\": f\"{r[0]} {r[1]}\".strip(), \"email\"\
+    : r[2], \"role\": r[3]}\n        for r in cur.fetchall()\n    ]\n    cur.close()\n\
+    \    conn.close()\n    return jsonify({\n        \"departments\": DEPARTMENTS,\n\
+    \        \"categories\": CATEGORIES,\n        \"priorities\": PRIORITIES,\n  \
+    \      \"statuses\": STATUSES,\n        \"roles\": [\"user\", \"agent\", \"admin\"\
+    ],\n        \"agents\": agents,\n    })\n\n@app.get(\"/api/tickets\")\n@api_login_required\n\
+    def api_tickets(user):\n    raw_statuses = clean(request.args.get(\"statuses\"\
+    )) or clean(request.args.get(\"status\"))\n    status_filters = []\n    if raw_statuses:\n\
+    \        status_filters = [s.strip() for s in raw_statuses.split(\",\") if s.strip()]\n\
+    \        invalid = [s for s in status_filters if s not in STATUSES]\n        if\
+    \ invalid:\n            return jsonify({\"error\": \"invalid status filter\",\
+    \ \"invalid\": invalid}), 400\n\n    conn = get_conn()\n    cur = conn.cursor()\n\
+    \n    base_clauses = []\n    base_params = []\n\n    if not is_staff(user):\n\
+    \        base_clauses.append(\"requester_email = %s\")\n        base_params.append(user[\"\
+    email\"])\n\n    base_where_sql = \"WHERE \" + \" AND \".join(base_clauses) if\
+    \ base_clauses else \"\"\n\n    filtered_clauses = list(base_clauses)\n    filtered_params\
+    \ = list(base_params)\n    if status_filters:\n        placeholders = \",\".join([\"\
+    %s\"] * len(status_filters))\n        filtered_clauses.append(f\"status IN ({placeholders})\"\
+    )\n        filtered_params.extend(status_filters)\n\n    filtered_where_sql =\
+    \ \"WHERE \" + \" AND \".join(filtered_clauses) if filtered_clauses else \"\"\n\
+    \n    cur.execute(f\"\"\"\n        SELECT\n          COUNT(*),\n          COUNT(*)\
+    \ FILTER (WHERE status = 'Nowe'),\n          COUNT(*) FILTER (WHERE status = 'W\
+    \ trakcie'),\n          COUNT(*) FILTER (WHERE priority IN ('Wysoki', 'Krytyczny')),\n\
+    \          COUNT(*) FILTER (WHERE status IN ('Rozwiązane', 'Zamknięte'))\n   \
+    \     FROM tickets\n        {base_where_sql}\n    \"\"\", tuple(base_params))\n\
+    \    total, new_count, in_progress, high_count, resolved_count = cur.fetchone()\n\
+    \n    cur.execute(f\"\"\"\n        SELECT t.id, t.title, t.requester_name, t.requester_email,\
+    \ t.department, t.category,\n               t.priority, t.status, t.created_at,\
+    \ t.updated_at, t.assigned_to_email,\n               COALESCE(NULLIF(trim(concat(u.first_name,\
+    \ ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,\n       \
+    \        t.sla_due_at\n        FROM tickets t\n        LEFT JOIN users u ON lower(u.email)\
+    \ = lower(t.assigned_to_email)\n        {filtered_where_sql}\n        ORDER BY\
+    \ t.id DESC\n    \"\"\", tuple(filtered_params))\n    rows = cur.fetchall()\n\
+    \    cur.close()\n    conn.close()\n\n    tickets = []\n    for row in rows:\n\
+    \        tickets.append({\n            \"id\": row[0],\n            \"title\"\
+    : row[1],\n            \"requester_name\": row[2],\n            \"requester_email\"\
+    : row[3],\n            \"department\": row[4],\n            \"category\": row[5],\n\
+    \            \"priority\": row[6],\n            \"status\": row[7],\n        \
+    \    \"created_at\": str(row[8]),\n            \"updated_at\": str(row[9]),\n\
+    \            \"assigned_to_email\": row[10],\n            \"assigned_to_name\"\
+    : row[11],\n            \"sla_due_at\": str(row[12]) if row[12] else \"\",\n \
+    \           \"sla_state\": sla_state(row[12], row[7]),\n        })\n\n    return\
+    \ jsonify({\n        \"stats\": {\n            \"total\": total,\n           \
+    \ \"new\": new_count,\n            \"in_progress\": in_progress,\n           \
+    \ \"high\": high_count,\n            \"resolved\": resolved_count,\n        },\n\
+    \        \"tickets\": tickets,\n        \"statuses\": STATUSES,\n        \"selected_statuses\"\
+    : status_filters,\n    })\n\n@app.post(\"/api/tickets\")\n@api_login_required\n\
+    def api_create_ticket(user):\n    payload = request.get_json(silent=True) or {}\n\
+    \    title = clean(payload.get(\"title\"))\n    description = clean(payload.get(\"\
+    description\"))\n    category = clean(payload.get(\"category\"))\n    priority\
+    \ = clean(payload.get(\"priority\")) or \"Normalny\"\n\n    if not title or not\
+    \ description:\n        return jsonify({\"error\": \"title and description are\
+    \ required\"}), 400\n    if priority not in PRIORITIES:\n        return jsonify({\"\
+    error\": \"Nieprawidłowy priorytet.\"}), 400\n\n    conn = get_conn()\n    cur\
+    \ = conn.cursor()\n    sla_due_at = sla_due_for_priority(priority)\n    cur.execute(\"\
+    \"\"\n        INSERT INTO tickets (\n            title, description, requester_name,\
+    \ requester_email,\n            department, category, priority, status, sla_due_at\n\
+    \        )\n        VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)\n        RETURNING\
+    \ id\n    \"\"\", (\n        title, description, user[\"name\"], user[\"email\"\
+    ],\n        user[\"department\"], category, priority, sla_due_at,\n    ))\n  \
+    \  ticket_id = cur.fetchone()[0]\n    add_ticket_event(cur, ticket_id, user, \"\
+    ticket_created\", f\"Utworzono zgłoszenie: {title}\")\n    conn.commit()\n   \
+    \ cur.close()\n    conn.close()\n    publish_event(f\"{user['name']} utworzył\
+    \ zgłoszenie #{ticket_id}: {title}\", \"ticket_created\", ticket_id)\n    return\
+    \ jsonify({\"id\": ticket_id}), 201\n\ndef can_view_ticket(user, ticket_id):\n\
+    \    if is_staff(user):\n        return True\n    conn = get_conn()\n    cur =\
+    \ conn.cursor()\n    cur.execute(\"SELECT requester_email FROM tickets WHERE id\
+    \ = %s\", (ticket_id,))\n    row = cur.fetchone()\n    cur.close()\n    conn.close()\n\
+    \    return bool(row and row[0] == user[\"email\"])\n\n@app.get(\"/api/tickets/<int:ticket_id>\"\
+    )\n@api_login_required\ndef api_ticket_detail(user, ticket_id):\n    if not can_view_ticket(user,\
+    \ ticket_id):\n        return jsonify({\"error\": \"forbidden\"}), 403\n\n   \
+    \ conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\"\"\n       \
+    \ SELECT t.id, t.title, t.description, t.requester_name, t.requester_email, t.department,\n\
+    \               t.category, t.priority, t.status, t.created_at, t.updated_at,\
+    \ t.assigned_to_email,\n               COALESCE(NULLIF(trim(concat(u.first_name,\
+    \ ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,\n       \
+    \        t.sla_due_at\n        FROM tickets t\n        LEFT JOIN users u ON lower(u.email)\
+    \ = lower(t.assigned_to_email)\n        WHERE t.id = %s\n    \"\"\", (ticket_id,))\n\
+    \    row = cur.fetchone()\n    if not row:\n        cur.close()\n        conn.close()\n\
+    \        return jsonify({\"error\": \"not found\"}), 404\n\n    cur.execute(\"\
+    \"\"\n        SELECT author, content, created_at\n        FROM comments\n    \
+    \    WHERE ticket_id = %s\n        ORDER BY id ASC\n    \"\"\", (ticket_id,))\n\
+    \    comment_rows = cur.fetchall()\n\n    cur.execute(\"\"\"\n        SELECT actor_name,\
+    \ event_type, message, created_at\n        FROM ticket_events\n        WHERE ticket_id\
+    \ = %s\n        ORDER BY id ASC\n    \"\"\", (ticket_id,))\n    event_rows = cur.fetchall()\n\
+    \    cur.close()\n    conn.close()\n\n    ticket = {\n        \"id\": row[0],\n\
+    \        \"title\": row[1],\n        \"description\": row[2],\n        \"requester_name\"\
+    : row[3],\n        \"requester_email\": row[4],\n        \"department\": row[5],\n\
+    \        \"category\": row[6],\n        \"priority\": row[7],\n        \"status\"\
+    : row[8],\n        \"created_at\": str(row[9]),\n        \"updated_at\": str(row[10]),\n\
+    \        \"assigned_to_email\": row[11],\n        \"assigned_to_name\": row[12],\n\
+    \        \"sla_due_at\": str(row[13]) if row[13] else \"\",\n        \"sla_state\"\
+    : sla_state(row[13], row[8]),\n    }\n    comments = [\n        {\"author\": c[0],\
+    \ \"content\": c[1], \"created_at\": str(c[2])}\n        for c in comment_rows\n\
+    \    ]\n    events = [\n        {\"actor_name\": e[0], \"event_type\": e[1], \"\
+    message\": e[2], \"created_at\": str(e[3])}\n        for e in event_rows\n   \
+    \ ]\n\n    conn2 = get_conn()\n    cur2 = conn2.cursor()\n    cur2.execute(\"\"\
+    \"\n        SELECT first_name, last_name, email, role\n        FROM users\n  \
+    \      WHERE role IN ('agent', 'admin')\n        ORDER BY last_name, first_name\n\
+    \    \"\"\")\n    agents = [\n        {\"name\": f\"{r[0]} {r[1]}\".strip(), \"\
+    email\": r[2], \"role\": r[3]}\n        for r in cur2.fetchall()\n    ]\n    cur2.close()\n\
+    \    conn2.close()\n\n    return jsonify({\n        \"ticket\": ticket,\n    \
+    \    \"comments\": comments,\n        \"events\": events,\n        \"meta\": {\"\
+    statuses\": STATUSES, \"agents\": agents},\n    })\n\n@app.post(\"/api/tickets/<int:ticket_id>/status\"\
+    )\n@api_login_required\ndef api_update_status(user, ticket_id):\n    if not is_staff(user):\n\
+    \        return jsonify({\"error\": \"forbidden\"}), 403\n    payload = request.get_json(silent=True)\
+    \ or {}\n    status = clean(payload.get(\"status\")) or \"Nowe\"\n    if status\
+    \ not in STATUSES:\n        return jsonify({\"error\": \"Nieprawidłowy status.\"\
+    }), 400\n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"SELECT\
+    \ status FROM tickets WHERE id = %s\", (ticket_id,))\n    row = cur.fetchone()\n\
+    \    if not row:\n        cur.close()\n        conn.close()\n        return jsonify({\"\
+    error\": \"not found\"}), 404\n    old_status = row[0]\n    cur.execute(\"UPDATE\
+    \ tickets SET status = %s, updated_at = NOW() WHERE id = %s\", (status, ticket_id))\n\
+    \    add_ticket_event(cur, ticket_id, user, \"status_changed\", f\"Status zmieniony\
+    \ z {old_status} na {status}\")\n    conn.commit()\n    cur.close()\n    conn.close()\n\
+    \    publish_event(f\"{user['name']} zmienił status zgłoszenia #{ticket_id} z\
+    \ {old_status} na {status}\", \"status_changed\", ticket_id)\n    return jsonify({\"\
+    status\": \"ok\"})\n\n\n@app.post(\"/api/tickets/<int:ticket_id>/assign\")\n@api_login_required\n\
+    def api_assign_ticket(user, ticket_id):\n    if not is_staff(user):\n        return\
+    \ jsonify({\"error\": \"forbidden\"}), 403\n\n    payload = request.get_json(silent=True)\
+    \ or {}\n    assigned_to_email = clean(payload.get(\"assigned_to_email\")).lower()\n\
+    \n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"SELECT assigned_to_email\
+    \ FROM tickets WHERE id = %s\", (ticket_id,))\n    ticket_row = cur.fetchone()\n\
+    \    if not ticket_row:\n        cur.close()\n        conn.close()\n        return\
+    \ jsonify({\"error\": \"not found\"}), 404\n\n    old_assigned = ticket_row[0]\n\
+    \n    assigned_to_name = \"Nieprzypisane\"\n    if assigned_to_email:\n      \
+    \  cur.execute(\"\"\"\n            SELECT first_name, last_name, email, role\n\
+    \            FROM users\n            WHERE lower(email) = %s AND role IN ('agent',\
+    \ 'admin')\n        \"\"\", (assigned_to_email,))\n        agent_row = cur.fetchone()\n\
+    \        if not agent_row:\n            cur.close()\n            conn.close()\n\
+    \            return jsonify({\"error\": \"Można przypisać tylko do agenta lub\
+    \ admina.\"}), 400\n        assigned_to_email = agent_row[2]\n        assigned_to_name\
+    \ = f\"{agent_row[0]} {agent_row[1]}\".strip()\n\n    cur.execute(\"\"\"\n   \
+    \     UPDATE tickets\n        SET assigned_to_email = %s, updated_at = NOW()\n\
+    \        WHERE id = %s\n    \"\"\", (assigned_to_email or None, ticket_id))\n\n\
+    \    add_ticket_event(\n        cur,\n        ticket_id,\n        user,\n    \
+    \    \"assignment_changed\",\n        f\"Przypisanie zmienione z {old_assigned\
+    \ or 'Nieprzypisane'} na {assigned_to_name}\"\n    )\n    conn.commit()\n    cur.close()\n\
+    \    conn.close()\n\n    publish_event(f\"{user['name']} przypisał zgłoszenie\
+    \ #{ticket_id} do: {assigned_to_name}\", \"assignment_changed\", ticket_id)\n\
+    \    return jsonify({\"status\": \"ok\"})\n\n@app.post(\"/api/tickets/<int:ticket_id>/comments\"\
+    )\n@api_login_required\ndef api_add_comment(user, ticket_id):\n    if not can_view_ticket(user,\
+    \ ticket_id):\n        return jsonify({\"error\": \"forbidden\"}), 403\n    payload\
+    \ = request.get_json(silent=True) or {}\n    content = clean(payload.get(\"content\"\
+    ))\n    if not content:\n        return jsonify({\"error\": \"content is required\"\
+    }), 400\n    conn = get_conn()\n    cur = conn.cursor()\n    cur.execute(\"\"\"\
+    \n        INSERT INTO comments (ticket_id, author, content)\n        VALUES (%s,\
+    \ %s, %s)\n    \"\"\", (ticket_id, user[\"name\"], content))\n    cur.execute(\"\
+    UPDATE tickets SET updated_at = NOW() WHERE id = %s\", (ticket_id,))\n    add_ticket_event(cur,\
+    \ ticket_id, user, \"comment_added\", f\"Dodano komentarz: {content[:120]}\")\n\
+    \    conn.commit()\n    cur.close()\n    conn.close()\n    publish_event(f\"{user['name']}\
+    \ dodał komentarz do zgłoszenia #{ticket_id}\", \"comment_added\", ticket_id)\n\
+    \    return jsonify({\"status\": \"ok\"})\n"
