@@ -78,6 +78,8 @@ data:
         "Niski": 120,
     }
 
+    VALID_ROLES = ["user", "operator", "admin"]
+
     SEED_USERS = [
         ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
         ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
@@ -85,7 +87,7 @@ data:
         ("Tomasz", "Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
         ("Karolina", "Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
         ("Joanna", "Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
-        ("Helpdesk", "Agent", "agent@incoprp.local", "IT", "agent"),
+        ("Helpdesk", "Operator", "operator@incoprp.local", "IT", "operator"),
         ("Helpdesk", "Admin", "admin@incoprp.local", "IT", "admin"),
     ]
 
@@ -206,6 +208,33 @@ data:
                 cur.execute("UPDATE users SET first_name = 'Nieznane' WHERE first_name IS NULL OR first_name = ''")
                 cur.execute("UPDATE users SET last_name = '-' WHERE last_name IS NULL OR last_name = ''")
 
+                cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS roles TEXT[]")
+                cur.execute("UPDATE users SET role = 'operator' WHERE role = 'agent'")
+                cur.execute("""
+                    UPDATE users
+                    SET first_name = 'Helpdesk', last_name = 'Operator'
+                    WHERE email IN ('agent@incoprp.local', 'operator@incoprp.local')
+                      AND lower(first_name) = 'helpdesk'
+                """)
+                cur.execute("""
+                    UPDATE users
+                    SET roles = CASE
+                        WHEN role = 'admin' THEN ARRAY['user','admin','operator']
+                        WHEN role = 'operator' THEN ARRAY['user','operator']
+                        ELSE ARRAY['user']
+                    END
+                    WHERE roles IS NULL OR array_length(roles, 1) IS NULL
+                """)
+                cur.execute("UPDATE users SET roles = ARRAY['user'] WHERE NOT ('user' = ANY(roles))")
+                cur.execute("""
+                    UPDATE users
+                    SET role = CASE
+                        WHEN 'admin' = ANY(roles) THEN 'admin'
+                        WHEN 'operator' = ANY(roles) THEN 'operator'
+                        ELSE 'user'
+                    END
+                """)
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
                         sid TEXT PRIMARY KEY,
@@ -280,6 +309,21 @@ data:
                         ON CONFLICT (email) DO NOTHING
                     """, (first_name, last_name, email, department, role, password_hash))
 
+                    cur.execute("""
+                        UPDATE users
+                        SET roles = CASE
+                            WHEN %s = 'admin' THEN ARRAY['user','admin','operator']
+                            WHEN %s = 'operator' THEN ARRAY['user','operator']
+                            ELSE ARRAY['user']
+                        END,
+                        role = CASE
+                            WHEN %s = 'admin' THEN 'admin'
+                            WHEN %s = 'operator' THEN 'operator'
+                            ELSE 'user'
+                        END
+                        WHERE email = %s AND (roles IS NULL OR array_length(roles, 1) IS NULL)
+                    """, (role, role, role, role, email))
+
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
                 if count == 0:
@@ -351,7 +395,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT u.first_name, u.last_name, u.email, u.department, u.role
+            SELECT u.first_name, u.last_name, u.email, u.department, u.role, u.roles
             FROM user_sessions s
             JOIN users u ON u.email = s.user_email
             WHERE s.sid = %s
@@ -371,6 +415,7 @@ data:
             "email": row[2],
             "department": row[3],
             "role": row[4],
+            "roles": list(row[5] or ["user"]),
         }
 
     def current_user():
@@ -385,11 +430,43 @@ data:
             return fn(user, *args, **kwargs)
         return wrapper
 
+    def has_role(user, role):
+        if not user:
+            return False
+        roles = user.get("roles") or []
+        if isinstance(roles, str):
+            roles = [roles]
+        return role in roles
+
+    def role_label(roles):
+        roles = roles or ["user"]
+        if "admin" in roles:
+            return "admin"
+        if "operator" in roles:
+            return "operator"
+        return "user"
+
+    def normalize_roles(raw_roles):
+        if raw_roles is None:
+            roles = ["user"]
+        elif isinstance(raw_roles, list):
+            roles = [clean(r) for r in raw_roles]
+        else:
+            roles = [clean(raw_roles)]
+        roles = [r for r in roles if r in VALID_ROLES]
+        if "user" not in roles:
+            roles.insert(0, "user")
+        # keep stable order
+        return [r for r in VALID_ROLES if r in roles]
+
     def is_admin(user):
-        return bool(user and user.get("role") == "admin")
+        return has_role(user, "admin")
+
+    def is_operator(user):
+        return has_role(user, "operator")
 
     def is_staff(user):
-        return bool(user and user.get("role") in ("agent", "admin"))
+        return bool(user and (is_operator(user) or is_admin(user)))
 
     def publish_event(message, event_type="info", ticket_id=None):
         global last_live_event
@@ -413,7 +490,7 @@ data:
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
             if not is_staff(user):
-                return jsonify({"error": "agent or admin required"}), 403
+                return jsonify({"error": "operator or admin required"}), 403
             return fn(user, *args, **kwargs)
         return wrapper
 
@@ -621,8 +698,17 @@ data:
 
         function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
 
+        function hasRole(user, role) {{
+          return Array.isArray(user?.roles) && user.roles.includes(role);
+        }}
+        function isAdmin(user) {{ return hasRole(user, "admin"); }}
+        function isOperator(user) {{ return hasRole(user, "operator"); }}
         function canWorkTickets(user) {{
-          return !!(user && (user.role === "agent" || user.role === "admin"));
+          return !!(user && (isOperator(user) || isAdmin(user)));
+        }}
+        function roleBadges(roles) {{
+          const list = Array.isArray(roles) && roles.length ? roles : ["user"];
+          return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
         }}
 
         function slaClass(state) {{
@@ -761,7 +847,7 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-          const adminLink = data.role === "admin" ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
+          const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
           userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           return data;
@@ -866,7 +952,7 @@ data:
         async function renderAdminUsers() {{
           const me = await loadMe();
           if (!me) return;
-          if (me.role !== "admin") {{
+          if (!isAdmin(me)) {{
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Tylko administrator może zarządzać użytkownikami.</p></section>`;
             return;
           }}
@@ -880,7 +966,7 @@ data:
             <tr>
               <td><strong>${{esc(u.first_name)}} ${{esc(u.last_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
               <td>${{esc(u.department)}}</td>
-              <td><span class="pill">${{esc(u.role)}}</span></td>
+              <td>${{roleBadges(u.roles)}}</td>
               <td class="muted">${{esc(u.created_at)}}</td>
               <td>
                 <div class="actions">
@@ -901,7 +987,7 @@ data:
             <section class="card">
               <h3>Użytkownicy INCoprp</h3>
               <table>
-                <thead><tr><th>Użytkownik</th><th>Dział</th><th>Rola</th><th>Utworzono</th><th>Akcje</th></tr></thead>
+                <thead><tr><th>Użytkownik</th><th>Dział</th><th>Role</th><th>Utworzono</th><th>Akcje</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
             </section>`;
@@ -909,7 +995,7 @@ data:
 
         async function renderAdminUserForm(encodedEmail = null) {{
           const me = await loadMe();
-          if (!me || me.role !== "admin") return;
+          if (!me || !isAdmin(me)) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
 
@@ -947,12 +1033,13 @@ data:
                 <label>Dział</label>
                 <select name="department">${{meta.departments.map(x => `<option ${{x === user.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
 
-                <label>Rola</label>
-                <select name="role">
-                  <option value="user" ${{user.role === "user" ? "selected" : ""}}>user</option>
-                  <option value="agent" ${{user.role === "agent" ? "selected" : ""}}>agent</option>
-                  <option value="admin" ${{user.role === "admin" ? "selected" : ""}}>admin</option>
-                </select>
+                <label>Role</label>
+                <div class="card" style="padding:12px;margin-bottom:12px">
+                  <input type="hidden" name="roles" value="user">
+                  <label><input type="checkbox" checked disabled> user <span class="muted">— podstawowa rola każdego konta</span></label>
+                  <label><input type="checkbox" name="roles" value="operator" ${{(user.roles || []).includes("operator") ? "checked" : ""}}> operator <span class="muted">— obsługa i przypisywanie zgłoszeń</span></label>
+                  <label><input type="checkbox" name="roles" value="admin" ${{(user.roles || []).includes("admin") ? "checked" : ""}}> admin <span class="muted">— zarządzanie użytkownikami</span></label>
+                </div>
 
                 ${{editing ? "" : `
                   <label>Hasło startowe</label>
@@ -966,7 +1053,9 @@ data:
 
           document.getElementById("adminUserForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
-            const payload = Object.fromEntries(new FormData(e.target).entries());
+            const formData = new FormData(e.target);
+            const payload = Object.fromEntries(formData.entries());
+            payload.roles = formData.getAll("roles");
             const endpoint = editing ? `/api/admin/users/${{encodeURIComponent(user.email)}}` : "/api/admin/users";
             const method = editing ? "PUT" : "POST";
             const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
@@ -987,7 +1076,7 @@ data:
 
         async function renderAdminPasswordForm(encodedEmail) {{
           const me = await loadMe();
-          if (!me || me.role !== "admin") return;
+          if (!me || !isAdmin(me)) return;
           const email = decodeURIComponent(encodedEmail);
           appEl.innerHTML = `
             <section class="card">
@@ -1084,7 +1173,7 @@ data:
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
-              ${{me.role === "admin" ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
+              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
               <div style="margin-top:16px">
                 <strong>Filtry statusów:</strong>
                 <div class="status-filter-actions">${{statusButtons}}</div>
@@ -1172,7 +1261,7 @@ data:
                 <label>Agent</label>
                 <select name="assigned_to_email">
                   <option value="">Nieprzypisane</option>
-                  ${{data.meta.agents.map(a => `<option value="${{esc(a.email)}}" ${{a.email === t.assigned_to_email ? "selected" : ""}}>${{esc(a.name)}} (${{esc(a.role)}})</option>`).join("")}}
+                  ${{data.meta.operators.map(a => `<option value="${{esc(a.email)}}" ${{a.email === t.assigned_to_email ? "selected" : ""}}>${{esc(a.name)}} (${{esc(a.role)}})</option>`).join("")}}
                 </select>
                 <button type="submit">Zapisz przypisanie</button>
               </form>
@@ -1301,7 +1390,7 @@ data:
           </form>
           <p class="muted">
             Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
-            agent@incoprp.local, admin@incoprp.local. Hasło startowe: Incoprp123!
+            operator@incoprp.local, admin@incoprp.local. Hasło startowe: Incoprp123!
           </p>
         </section>
       </main>
@@ -1351,6 +1440,7 @@ data:
                         "name": user["name"],
                         "email": user["email"],
                         "role": user["role"],
+                        "roles": user.get("roles", ["user"]),
                     },
                     "event": last_live_event,
                 }))
@@ -1381,7 +1471,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT first_name, last_name, email, department, role, password_hash
+            SELECT first_name, last_name, email, department, role, password_hash, roles
             FROM users
             WHERE lower(email) = %s
         """, (email,))
@@ -1411,7 +1501,8 @@ data:
                 "name": f"{first_name} {last_name}".strip(),
                 "email": user_email,
                 "department": department,
-                "role": role,
+                "role": role_label(list(roles or ["user"])),
+                "roles": list(roles or ["user"]),
             }
         })
 
@@ -1498,7 +1589,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT first_name, last_name, email, department, role, created_at
+            SELECT first_name, last_name, email, department, role, roles, created_at
             FROM users
             ORDER BY lower(last_name), lower(first_name), lower(email)
         """)
@@ -1513,8 +1604,9 @@ data:
                     "full_name": f"{r[0]} {r[1]}".strip(),
                     "email": r[2],
                     "department": r[3],
-                    "role": r[4],
-                    "created_at": str(r[5]),
+                    "role": role_label(list(r[5] or ["user"])),
+                    "roles": list(r[5] or ["user"]),
+                    "created_at": str(r[6]),
                 }
                 for r in rows
             ]
@@ -1528,7 +1620,7 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT first_name, last_name, email, department, role, created_at
+            SELECT first_name, last_name, email, department, role, roles, created_at
             FROM users
             WHERE lower(email) = %s
         """, (email,))
@@ -1543,8 +1635,9 @@ data:
             "full_name": f"{row[0]} {row[1]}".strip(),
             "email": row[2],
             "department": row[3],
-            "role": row[4],
-            "created_at": str(row[5]),
+            "role": role_label(list(row[5] or ["user"])),
+            "roles": list(row[5] or ["user"]),
+            "created_at": str(row[6]),
         })
 
     @app.post("/api/admin/users")
@@ -1556,14 +1649,15 @@ data:
         last_name = clean(payload.get("last_name"))
         email = clean(payload.get("email")).lower()
         department = clean(payload.get("department"))
-        role = clean(payload.get("role")) or "user"
+        roles = normalize_roles(payload.get("roles") or payload.get("role") or ["user"])
+        role = role_label(roles)
         password = str(payload.get("password") or "")
 
         if not first_name or not last_name or not email:
             return jsonify({"error": "Imię, nazwisko oraz e-mail są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "agent", "admin"):
+        if not roles:
             return jsonify({"error": "Nieprawidłowa rola."}), 400
         if len(password) < 8:
             return jsonify({"error": "Hasło musi mieć co najmniej 8 znaków."}), 400
@@ -1577,9 +1671,9 @@ data:
             return jsonify({"error": "Użytkownik o takim adresie e-mail już istnieje."}), 409
 
         cur.execute("""
-            INSERT INTO users (first_name, last_name, email, department, role, password_hash)
-            VALUES (%s, %s, %s, %s, %s, %s)
-        """, (first_name, last_name, email, department, role, generate_password_hash(password)))
+            INSERT INTO users (first_name, last_name, email, department, role, roles, password_hash)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """, (first_name, last_name, email, department, role, roles, generate_password_hash(password)))
         conn.commit()
         cur.close()
         conn.close()
@@ -1594,27 +1688,26 @@ data:
         first_name = clean(payload.get("first_name"))
         last_name = clean(payload.get("last_name"))
         department = clean(payload.get("department"))
-        role = clean(payload.get("role")) or "user"
+        roles = normalize_roles(payload.get("roles") or payload.get("role") or ["user"])
+        role = role_label(roles)
 
         if not first_name or not last_name:
             return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "agent", "admin"):
-            return jsonify({"error": "Nieprawidłowa rola."}), 400
 
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
+        cur.execute("SELECT roles FROM users WHERE lower(email) = %s", (target_email,))
         row = cur.fetchone()
         if not row:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
 
-        old_role = row[0]
-        if target_email == user["email"].lower() and old_role == "admin" and role != "admin":
-            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        old_roles = list(row[0] or ["user"])
+        if "admin" in old_roles and "admin" not in roles:
+            cur.execute("SELECT COUNT(*) FROM users WHERE 'admin' = ANY(roles)")
             admin_count = cur.fetchone()[0]
             if admin_count <= 1:
                 cur.close()
@@ -1623,9 +1716,9 @@ data:
 
         cur.execute("""
             UPDATE users
-            SET first_name = %s, last_name = %s, department = %s, role = %s
+            SET first_name = %s, last_name = %s, department = %s, role = %s, roles = %s
             WHERE lower(email) = %s
-        """, (first_name, last_name, department, role, target_email))
+        """, (first_name, last_name, department, role, roles, target_email))
         conn.commit()
         cur.close()
         conn.close()
@@ -1669,15 +1762,15 @@ data:
 
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT role FROM users WHERE lower(email) = %s", (target_email,))
+        cur.execute("SELECT roles FROM users WHERE lower(email) = %s", (target_email,))
         row = cur.fetchone()
         if not row:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
 
-        if row[0] == "admin":
-            cur.execute("SELECT COUNT(*) FROM users WHERE role = 'admin'")
+        if row[0] and "admin" in row[0]:
+            cur.execute("SELECT COUNT(*) FROM users WHERE 'admin' = ANY(roles)")
             admin_count = cur.fetchone()[0]
             if admin_count <= 1:
                 cur.close()
@@ -1697,13 +1790,13 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT first_name, last_name, email, role
+            SELECT first_name, last_name, email, role, roles
             FROM users
-            WHERE role IN ('agent', 'admin')
+            WHERE 'operator' = ANY(roles)
             ORDER BY last_name, first_name
         """)
-        agents = [
-            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
+        operators = [
+            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": role_label(list(r[4] or ["user"])), "roles": list(r[4] or ["user"])}
             for r in cur.fetchall()
         ]
         cur.close()
@@ -1713,8 +1806,9 @@ data:
             "categories": CATEGORIES,
             "priorities": PRIORITIES,
             "statuses": STATUSES,
-            "roles": ["user", "agent", "admin"],
-            "agents": agents,
+            "roles": VALID_ROLES,
+            "operators": operators,
+            "operators": operators,
         })
 
     @app.get("/api/tickets")
@@ -1924,13 +2018,13 @@ data:
         conn2 = get_conn()
         cur2 = conn2.cursor()
         cur2.execute("""
-            SELECT first_name, last_name, email, role
+            SELECT first_name, last_name, email, role, roles
             FROM users
-            WHERE role IN ('agent', 'admin')
+            WHERE 'operator' = ANY(roles)
             ORDER BY last_name, first_name
         """)
-        agents = [
-            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
+        operators = [
+            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": role_label(list(r[4] or ["user"])), "roles": list(r[4] or ["user"])}
             for r in cur2.fetchall()
         ]
         cur2.close()
@@ -1940,7 +2034,7 @@ data:
             "ticket": ticket,
             "comments": comments,
             "events": events,
-            "meta": {"statuses": STATUSES, "agents": agents},
+            "meta": {"statuses": STATUSES, "operators": operators},
         })
 
     @app.post("/api/tickets/<int:ticket_id>/status")
@@ -1993,17 +2087,17 @@ data:
         assigned_to_name = "Nieprzypisane"
         if assigned_to_email:
             cur.execute("""
-                SELECT first_name, last_name, email, role
+                SELECT first_name, last_name, email, roles
                 FROM users
-                WHERE lower(email) = %s AND role IN ('agent', 'admin')
+                WHERE lower(email) = %s AND 'operator' = ANY(roles)
             """, (assigned_to_email,))
-            agent_row = cur.fetchone()
-            if not agent_row:
+            operator_row = cur.fetchone()
+            if not operator_row:
                 cur.close()
                 conn.close()
-                return jsonify({"error": "Można przypisać tylko do agenta lub admina."}), 400
-            assigned_to_email = agent_row[2]
-            assigned_to_name = f"{agent_row[0]} {agent_row[1]}".strip()
+                return jsonify({"error": "Można przypisać tylko do operatora."}), 400
+            assigned_to_email = operator_row[2]
+            assigned_to_name = f"{operator_row[0]} {operator_row[1]}".strip()
 
         cur.execute("""
             UPDATE tickets
