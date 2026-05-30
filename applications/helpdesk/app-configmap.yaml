@@ -488,7 +488,7 @@ data:
         let liveSocket = null;
         let liveReconnectTimer = null;
         let lastLiveEventId = null;
-        let currentView = { name: "home", ticketId: null };
+        let currentView = {{ name: "home", ticketId: null }};
         let suppressNextLiveRefresh = false;
 
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}

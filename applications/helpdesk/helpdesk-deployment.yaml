@@ -46,6 +46,8 @@ spec:
               value: helpdesk-postgres
             - name: DB_PORT
               value: "5432"
+            - name: HOME
+              value: /tmp
           envFrom:
             - secretRef:
                 name: helpdesk-app-secret
