@@ -252,7 +252,14 @@ data:
     \ { color:#ddd6fe; border-color:rgba(168,85,247,.58); background:rgba(168,85,247,.14);\
     \ }\n  .status-Rozwiazane { color:#c7d2fe; border-color:rgba(99,102,241,.55);\
     \ background:rgba(99,102,241,.14); }\n  .status-Zamkniete { color:#e5e7eb; border-color:rgba(156,163,175,.55);\
-    \ background:rgba(156,163,175,.14); }\n  .ticket-title { font-weight: 800; text-decoration:\
+    \ background:rgba(156,163,175,.14); }\n
+  .sla-badge { display: inline-block; border-radius: 999px; padding: 5px 9px; font-size: 12px; font-weight: 800; border: 1px solid var(--border); background: rgba(31,41,55,.72); }
+  .sla-ok { color:#bbf7d0; border-color:rgba(34,197,94,.55); background:rgba(34,197,94,.13); }
+  .sla-warning { color:#fef08a; border-color:rgba(250,204,21,.6); background:rgba(250,204,21,.14); }
+  .sla-overdue { color:#fecaca; border-color:rgba(239,68,68,.6); background:rgba(239,68,68,.15); }
+  .sla-done { color:#c7d2fe; border-color:rgba(129,140,248,.55); background:rgba(129,140,248,.13); }
+  .sla-none { color:#cbd5e1; border-color:rgba(148,163,184,.35); background:rgba(148,163,184,.10); }
+  .ticket-title { font-weight: 800; text-decoration:\
     \ none; color: var(--text); background: none; padding: 0; margin: 0; transition:\
     \ color .15s ease, opacity .15s ease; }\n  .ticket-title:hover { opacity: .82;\
     \ }\n  .ticket-title.status-Nowe, .ticket-heading.status-Nowe { color:#22c55e;\
@@ -571,7 +578,7 @@ data:
     \          <td><span class=\"pill ${{priorityClass(t.priority)}}\">${{esc(t.priority)}}</span></td>\n\
     \          <td><span class=\"pill ${{statusClass(t.status)}}\">${{esc(t.status)}}</span></td>\n\
     \          <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class=\"\
-    muted\">Nieprzypisane</span>'}}</td>\n          <td><span class=\"pill ${{slaClass(t.sla_state)}}\"\
+    muted\">Nieprzypisane</span>'}}</td>\n          <td><span class=\"sla-badge ${{slaClass(t.sla_state)}}\"\
     >${{slaLabel(t.sla_state)}}</span><br><span class=\"muted\">${{esc(t.sla_due_at\
     \ || \"\")}}</span></td>\n          <td class=\"muted\">${{esc(t.created_at)}}</td>\n\
     \        </tr>`).join(\"\") : `<tr><td colspan=\"9\" class=\"muted\">Brak zgłoszeń\
@@ -658,7 +665,7 @@ data:
     \  <p><strong>Status:</strong> <span class=\"pill ${{statusClass(t.status)}}\"\
     >${{esc(t.status)}}</span></p>\n          <p><strong>Priorytet:</strong> <span\
     \ class=\"pill ${{priorityClass(t.priority)}}\">${{esc(t.priority)}}</span></p>\n\
-    \          <p><strong>SLA:</strong> <span class=\"pill ${{slaClass(t.sla_state)}}\"\
+    \          <p><strong>SLA:</strong> <span class=\"sla-badge ${{slaClass(t.sla_state)}}\"\
     >${{slaLabel(t.sla_state)}}</span> <span class=\"muted\">${{esc(t.sla_due_at ||\
     \ \"\")}}</span></p>\n          <p><strong>Przypisane do:</strong> ${{t.assigned_to_name\
     \ ? esc(t.assigned_to_name) : '<span class=\"muted\">Nieprzypisane</span>'}}</p>\n\
