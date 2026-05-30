@@ -1,5 +1,3 @@
-
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -55,8 +53,7 @@ spec:
                 name: helpdesk-db-secret
           volumeMounts:
             - name: app
-              mountPath: /app/app.py
-              subPath: app.py
+              mountPath: /app
               readOnly: true
             - name: venv
               mountPath: /venv
