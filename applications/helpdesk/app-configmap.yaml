@@ -1038,7 +1038,7 @@ data:
               <td>${{esc(t.category)}}</td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
               <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
-              <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : "<span class=\"muted\">Nieprzypisane</span>"}}</td>
+              <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</td>
               <td><span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span><br><span class="muted">${{esc(t.sla_due_at || "")}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
             </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych statusów.</td></tr>`;
@@ -1165,7 +1165,7 @@ data:
               <p><strong>Status:</strong> <span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></p>
               <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
               <p><strong>SLA:</strong> <span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span> <span class="muted">${{esc(t.sla_due_at || "")}}</span></p>
-              <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : "<span class=\"muted\">Nieprzypisane</span>"}}</p>
+              <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</p>
               <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
               <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
               <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
