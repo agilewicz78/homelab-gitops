@@ -8,6 +8,7 @@ data:
     import os
     import time
     import html
+    from datetime import datetime, timedelta
     import uuid
     import json
     import psycopg2
@@ -70,6 +71,13 @@ data:
         "Zamknięte",
     ]
 
+    SLA_HOURS = {
+        "Krytyczny": 4,
+        "Wysoki": 8,
+        "Normalny": 48,
+        "Niski": 120,
+    }
+
     SEED_USERS = [
         ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
         ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
@@ -77,6 +85,7 @@ data:
         ("Tomasz", "Wiśniewski", "tomasz.wisniewski@incoprp.local", "Marketing", "user"),
         ("Karolina", "Wójcik", "karolina.wojcik@incoprp.local", "Obsługa klienta", "user"),
         ("Joanna", "Lewandowska", "joanna.lewandowska@incoprp.local", "Księgowość", "user"),
+        ("Helpdesk", "Agent", "agent@incoprp.local", "IT", "agent"),
         ("Helpdesk", "Admin", "admin@incoprp.local", "IT", "admin"),
     ]
 
@@ -232,6 +241,37 @@ data:
                     );
                 """)
 
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS assigned_to_email TEXT REFERENCES users(email) ON DELETE SET NULL
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS sla_due_at TIMESTAMP
+                """)
+                cur.execute("""
+                    UPDATE tickets
+                    SET sla_due_at = created_at + CASE priority
+                        WHEN 'Krytyczny' THEN INTERVAL '4 hours'
+                        WHEN 'Wysoki' THEN INTERVAL '8 hours'
+                        WHEN 'Normalny' THEN INTERVAL '48 hours'
+                        WHEN 'Niski' THEN INTERVAL '120 hours'
+                        ELSE INTERVAL '48 hours'
+                    END
+                    WHERE sla_due_at IS NULL
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ticket_events (
+                        id SERIAL PRIMARY KEY,
+                        ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+                        actor_email TEXT,
+                        actor_name TEXT,
+                        event_type TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for first_name, last_name, email, department, role in SEED_USERS:
                     cur.execute("""
@@ -244,13 +284,15 @@ data:
                 count = cur.fetchone()[0]
                 if count == 0:
                     for ticket in SEED_TICKETS:
+                        priority = ticket[6]
+                        sla_due_at = datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
                         cur.execute("""
                             INSERT INTO tickets (
                                 title, description, requester_name, requester_email,
-                                department, category, priority, status
+                                department, category, priority, status, sla_due_at
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                        """, ticket)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        """, ticket + (sla_due_at,))
 
                 conn.commit()
                 cur.close()
@@ -268,6 +310,37 @@ data:
 
     def clean(value):
         return str(value or "").strip()
+
+
+    def sla_due_for_priority(priority):
+        return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
+
+    def sla_state(sla_due_at, status):
+        if not sla_due_at:
+            return "none"
+        if status in ("Rozwiązane", "Zamknięte"):
+            return "done"
+        now = datetime.now()
+        if sla_due_at < now:
+            return "overdue"
+        if sla_due_at - now <= timedelta(hours=4):
+            return "warning"
+        return "ok"
+
+    def event_message(actor_name, text):
+        return f"{actor_name}: {text}"
+
+    def add_ticket_event(cur, ticket_id, user, event_type, message):
+        cur.execute("""
+            INSERT INTO ticket_events (ticket_id, actor_email, actor_name, event_type, message)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            ticket_id,
+            user.get("email") if user else None,
+            user.get("name") if user else "System",
+            event_type,
+            message,
+        ))
 
     def get_sid_from_request():
         return request.headers.get("X-Helpdesk-Session", "").strip()
@@ -330,6 +403,14 @@ data:
         def wrapper(user, *args, **kwargs):
             if not is_admin(user):
                 return jsonify({"error": "admin required"}), 403
+            return fn(user, *args, **kwargs)
+        return wrapper
+
+    def api_staff_required(fn):
+        @wraps(fn)
+        def wrapper(user, *args, **kwargs):
+            if not is_staff(user):
+                return jsonify({"error": "agent or admin required"}), 403
             return fn(user, *args, **kwargs)
         return wrapper
 
@@ -592,7 +673,7 @@ data:
           if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
           lastLiveEventId = liveEvent.id;
 
-          if (!["ticket_created", "status_changed", "comment_added"].includes(liveEvent.type)) return;
+          if (!["ticket_created", "status_changed", "comment_added", "assignment_changed"].includes(liveEvent.type)) return;
 
           if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
             showToast(
@@ -839,6 +920,7 @@ data:
                 <label>Rola</label>
                 <select name="role">
                   <option value="user" ${{user.role === "user" ? "selected" : ""}}>user</option>
+                  <option value="agent" ${{user.role === "agent" ? "selected" : ""}}>agent</option>
                   <option value="admin" ${{user.role === "admin" ? "selected" : ""}}>admin</option>
                 </select>
 
@@ -941,7 +1023,7 @@ data:
           const res = await api(`/api/tickets${{query}}`);
           if (!res) return;
           const data = await res.json();
-          const scope = me.role === "admin" ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
+          const scope = canWorkTickets(me) ? "Wszystkie zgłoszenia" : "Moje zgłoszenia";
           const filteredLabel = filters.length ? ` · statusy: ${{filters.join(", ")}}` : "";
 
           const statusButtons = [`<button class="btn-secondary status-filter-btn${{filters.length === 0 ? " active" : ""}}" onclick="clearStatusFilters()">Wszystkie</button>`]
@@ -956,8 +1038,10 @@ data:
               <td>${{esc(t.category)}}</td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
               <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
+              <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : "<span class=\"muted\">Nieprzypisane</span>"}}</td>
+              <td><span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span><br><span class="muted">${{esc(t.sla_due_at || "")}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
-            </tr>`).join("") : `<tr><td colspan="7" class="muted">Brak zgłoszeń dla wybranych statusów.</td></tr>`;
+            </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych statusów.</td></tr>`;
 
           appEl.innerHTML = `
             <section class="stats">
@@ -980,7 +1064,7 @@ data:
             <section class="card">
               <h2>${{scope}}${{filteredLabel}}</h2>
               <table>
-                <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Utworzono</th></tr></thead>
+                <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane do</th><th>SLA</th><th>Utworzono</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
             </section>`;
@@ -1041,7 +1125,7 @@ data:
             <div class="comment"><div class="muted">${{esc(c.author)}} · ${{esc(c.created_at)}}</div><div>${{esc(c.content)}}</div></div>
           `).join("") || `<p class="muted">Brak komentarzy.</p>`;
 
-          const statusPanel = me.role === "admin" ? `
+          const statusPanel = canWorkTickets(me) ? `
             <section class="card">
               <h3>Zmień status</h3>
               <form id="statusForm">
@@ -1051,6 +1135,28 @@ data:
               </form>
             </section>` : "";
 
+          const assignmentPanel = canWorkTickets(me) ? `
+            <section class="card">
+              <h3>Przypisanie zgłoszenia</h3>
+              <form id="assignmentForm">
+                <label>Agent</label>
+                <select name="assigned_to_email">
+                  <option value="">Nieprzypisane</option>
+                  ${{data.meta.agents.map(a => `<option value="${{esc(a.email)}}" ${{a.email === t.assigned_to_email ? "selected" : ""}}>${{esc(a.name)}} (${{esc(a.role)}})</option>`).join("")}}
+                </select>
+                <button type="submit">Zapisz przypisanie</button>
+              </form>
+            </section>` : "";
+
+          const eventHistory = (data.events || []).length
+            ? `<div class="timeline">${{data.events.map(e => `
+                <div class="event-item">
+                  <strong>${{esc(e.actor_name || "System")}}</strong>
+                  <span class="muted"> · ${{esc(e.created_at)}} · ${{esc(e.event_type)}}</span>
+                  <div>${{esc(e.message)}}</div>
+                </div>`).join("")}}</div>`
+            : `<p class="muted">Brak historii zmian.</p>`;
+
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
@@ -1058,12 +1164,19 @@ data:
               <p class="muted">Utworzono: ${{esc(t.created_at)}} · Aktualizacja: ${{esc(t.updated_at)}}</p>
               <p><strong>Status:</strong> <span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></p>
               <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
+              <p><strong>SLA:</strong> <span class="pill ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span> <span class="muted">${{esc(t.sla_due_at || "")}}</span></p>
+              <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : "<span class=\"muted\">Nieprzypisane</span>"}}</p>
               <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
               <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
               <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
               <h3>Opis</h3><p>${{esc(t.description)}}</p>
             </section>
             ${{statusPanel}}
+            ${{assignmentPanel}}
+            <section class="card">
+              <h3>Historia zmian</h3>
+              ${{eventHistory}}
+            </section>
             <section class="card">
               <h3>Komentarze</h3>
               ${{comments}}
@@ -1100,6 +1213,23 @@ data:
                 "Status zgłoszenia #" + id + " został zmieniony",
                 "Nowy status: " + newStatus
               );
+              await renderTicket(id);
+            }});
+          }}
+
+          const assignmentForm = document.getElementById("assignmentForm");
+          if (assignmentForm) {{
+            assignmentForm.addEventListener("submit", async (e) => {{
+              e.preventDefault();
+              const payload = Object.fromEntries(new FormData(assignmentForm).entries());
+              suppressNextLiveRefresh = true;
+              const res = await api(`/api/tickets/${{id}}/assign`, {{ method: "POST", body: JSON.stringify(payload) }});
+              if (!res || !res.ok) {{
+                suppressNextLiveRefresh = false;
+                alert("Nie udało się zmienić przypisania.");
+                return;
+              }}
+              showToast("Zmieniono przypisanie zgłoszenia #" + id, payload.assigned_to_email || "Nieprzypisane");
               await renderTicket(id);
             }});
           }}
@@ -1141,7 +1271,7 @@ data:
           </form>
           <p class="muted">
             Konta testowe: anna.kowalska@incoprp.local, piotr.nowak@incoprp.local,
-            admin@incoprp.local. Hasło startowe: Incoprp123!
+            agent@incoprp.local, admin@incoprp.local. Hasło startowe: Incoprp123!
           </p>
         </section>
       </main>
@@ -1403,7 +1533,7 @@ data:
             return jsonify({"error": "Imię, nazwisko oraz e-mail są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "admin"):
+        if role not in ("user", "agent", "admin"):
             return jsonify({"error": "Nieprawidłowa rola."}), 400
         if len(password) < 8:
             return jsonify({"error": "Hasło musi mieć co najmniej 8 znaków."}), 400
@@ -1440,7 +1570,7 @@ data:
             return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
-        if role not in ("user", "admin"):
+        if role not in ("user", "agent", "admin"):
             return jsonify({"error": "Nieprawidłowa rola."}), 400
 
         conn = get_conn()
@@ -1534,11 +1664,27 @@ data:
     @app.get("/api/meta")
     @api_login_required
     def api_meta(user):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT first_name, last_name, email, role
+            FROM users
+            WHERE role IN ('agent', 'admin')
+            ORDER BY last_name, first_name
+        """)
+        agents = [
+            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
+            for r in cur.fetchall()
+        ]
+        cur.close()
+        conn.close()
         return jsonify({
             "departments": DEPARTMENTS,
             "categories": CATEGORIES,
             "priorities": PRIORITIES,
             "statuses": STATUSES,
+            "roles": ["user", "agent", "admin"],
+            "agents": agents,
         })
 
     @app.get("/api/tickets")
@@ -1558,7 +1704,7 @@ data:
         base_clauses = []
         base_params = []
 
-        if not is_admin(user):
+        if not is_staff(user):
             base_clauses.append("requester_email = %s")
             base_params.append(user["email"])
 
@@ -1586,11 +1732,14 @@ data:
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
 
         cur.execute(f"""
-            SELECT id, title, requester_name, requester_email, department, category,
-                   priority, status, created_at, updated_at
-            FROM tickets
+            SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category,
+                   t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+                   COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+                   t.sla_due_at
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             {filtered_where_sql}
-            ORDER BY id DESC
+            ORDER BY t.id DESC
         """, tuple(filtered_params))
         rows = cur.fetchall()
         cur.close()
@@ -1609,6 +1758,10 @@ data:
                 "status": row[7],
                 "created_at": str(row[8]),
                 "updated_at": str(row[9]),
+                "assigned_to_email": row[10],
+                "assigned_to_name": row[11],
+                "sla_due_at": str(row[12]) if row[12] else "",
+                "sla_state": sla_state(row[12], row[7]),
             })
 
         return jsonify({
@@ -1635,21 +1788,25 @@ data:
 
         if not title or not description:
             return jsonify({"error": "title and description are required"}), 400
+        if priority not in PRIORITIES:
+            return jsonify({"error": "Nieprawidłowy priorytet."}), 400
 
         conn = get_conn()
         cur = conn.cursor()
+        sla_due_at = sla_due_for_priority(priority)
         cur.execute("""
             INSERT INTO tickets (
                 title, description, requester_name, requester_email,
-                department, category, priority, status
+                department, category, priority, status, sla_due_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe')
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)
             RETURNING id
         """, (
             title, description, user["name"], user["email"],
-            user["department"], category, priority,
+            user["department"], category, priority, sla_due_at,
         ))
         ticket_id = cur.fetchone()[0]
+        add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
         conn.commit()
         cur.close()
         conn.close()
@@ -1657,7 +1814,7 @@ data:
         return jsonify({"id": ticket_id}), 201
 
     def can_view_ticket(user, ticket_id):
-        if is_admin(user):
+        if is_staff(user):
             return True
         conn = get_conn()
         cur = conn.cursor()
@@ -1676,10 +1833,13 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            SELECT id, title, description, requester_name, requester_email, department,
-                   category, priority, status, created_at, updated_at
-            FROM tickets
-            WHERE id = %s
+            SELECT t.id, t.title, t.description, t.requester_name, t.requester_email, t.department,
+                   t.category, t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+                   COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+                   t.sla_due_at
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE t.id = %s
         """, (ticket_id,))
         row = cur.fetchone()
         if not row:
@@ -1694,6 +1854,14 @@ data:
             ORDER BY id ASC
         """, (ticket_id,))
         comment_rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT actor_name, event_type, message, created_at
+            FROM ticket_events
+            WHERE ticket_id = %s
+            ORDER BY id ASC
+        """, (ticket_id,))
+        event_rows = cur.fetchall()
         cur.close()
         conn.close()
 
@@ -1709,31 +1877,122 @@ data:
             "status": row[8],
             "created_at": str(row[9]),
             "updated_at": str(row[10]),
+            "assigned_to_email": row[11],
+            "assigned_to_name": row[12],
+            "sla_due_at": str(row[13]) if row[13] else "",
+            "sla_state": sla_state(row[13], row[8]),
         }
         comments = [
             {"author": c[0], "content": c[1], "created_at": str(c[2])}
             for c in comment_rows
         ]
+        events = [
+            {"actor_name": e[0], "event_type": e[1], "message": e[2], "created_at": str(e[3])}
+            for e in event_rows
+        ]
+
+        conn2 = get_conn()
+        cur2 = conn2.cursor()
+        cur2.execute("""
+            SELECT first_name, last_name, email, role
+            FROM users
+            WHERE role IN ('agent', 'admin')
+            ORDER BY last_name, first_name
+        """)
+        agents = [
+            {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": r[3]}
+            for r in cur2.fetchall()
+        ]
+        cur2.close()
+        conn2.close()
+
         return jsonify({
             "ticket": ticket,
             "comments": comments,
-            "meta": {"statuses": STATUSES},
+            "events": events,
+            "meta": {"statuses": STATUSES, "agents": agents},
         })
 
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
     def api_update_status(user, ticket_id):
-        if not is_admin(user):
+        if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
         payload = request.get_json(silent=True) or {}
         status = clean(payload.get("status")) or "Nowe"
+        if status not in STATUSES:
+            return jsonify({"error": "Nieprawidłowy status."}), 400
         conn = get_conn()
         cur = conn.cursor()
+        cur.execute("SELECT status FROM tickets WHERE id = %s", (ticket_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        old_status = row[0]
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
+        add_ticket_event(cur, ticket_id, user, "status_changed", f"Status zmieniony z {old_status} na {status}")
         conn.commit()
         cur.close()
         conn.close()
-        publish_event(f"{user['name']} zmienił status zgłoszenia #{ticket_id} na {status}", "status_changed", ticket_id)
+        publish_event(f"{user['name']} zmienił status zgłoszenia #{ticket_id} z {old_status} na {status}", "status_changed", ticket_id)
+        return jsonify({"status": "ok"})
+
+
+    @app.post("/api/tickets/<int:ticket_id>/assign")
+    @api_login_required
+    def api_assign_ticket(user, ticket_id):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+
+        payload = request.get_json(silent=True) or {}
+        assigned_to_email = clean(payload.get("assigned_to_email")).lower()
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT assigned_to_email FROM tickets WHERE id = %s", (ticket_id,))
+        ticket_row = cur.fetchone()
+        if not ticket_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+
+        old_assigned = ticket_row[0]
+
+        assigned_to_name = "Nieprzypisane"
+        if assigned_to_email:
+            cur.execute("""
+                SELECT first_name, last_name, email, role
+                FROM users
+                WHERE lower(email) = %s AND role IN ('agent', 'admin')
+            """, (assigned_to_email,))
+            agent_row = cur.fetchone()
+            if not agent_row:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Można przypisać tylko do agenta lub admina."}), 400
+            assigned_to_email = agent_row[2]
+            assigned_to_name = f"{agent_row[0]} {agent_row[1]}".strip()
+
+        cur.execute("""
+            UPDATE tickets
+            SET assigned_to_email = %s, updated_at = NOW()
+            WHERE id = %s
+        """, (assigned_to_email or None, ticket_id))
+
+        add_ticket_event(
+            cur,
+            ticket_id,
+            user,
+            "assignment_changed",
+            f"Przypisanie zmienione z {old_assigned or 'Nieprzypisane'} na {assigned_to_name}"
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        publish_event(f"{user['name']} przypisał zgłoszenie #{ticket_id} do: {assigned_to_name}", "assignment_changed", ticket_id)
         return jsonify({"status": "ok"})
 
     @app.post("/api/tickets/<int:ticket_id>/comments")
@@ -1752,6 +2011,7 @@ data:
             VALUES (%s, %s, %s)
         """, (ticket_id, user["name"], content))
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
+        add_ticket_event(cur, ticket_id, user, "comment_added", f"Dodano komentarz: {content[:120]}")
         conn.commit()
         cur.close()
         conn.close()
