@@ -388,6 +388,9 @@ data:
     def is_admin(user):
         return bool(user and user.get("role") == "admin")
 
+    def is_staff(user):
+        return bool(user and user.get("role") in ("agent", "admin"))
+
     def publish_event(message, event_type="info", ticket_id=None):
         global last_live_event
         last_live_event = {
