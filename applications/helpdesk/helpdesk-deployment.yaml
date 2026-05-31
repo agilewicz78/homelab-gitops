@@ -59,6 +59,8 @@ spec:
               readOnly: true
             - name: venv
               mountPath: /venv
+            - name: attachments
+              mountPath: /data/attachments
           resources:
             requests:
               cpu: 100m
@@ -77,3 +79,6 @@ spec:
             name: helpdesk-app
         - name: venv
           emptyDir: {}
+        - name: attachments
+          persistentVolumeClaim:
+            claimName: helpdesk-attachments
