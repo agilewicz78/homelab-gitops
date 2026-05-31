@@ -1420,7 +1420,7 @@ data:
 
                 <label>Załączniki opcjonalne</label>
                 <input type="file" name="attachments" multiple accept=".png,.jpg,.jpeg,.gif,.pdf,.txt,.log,.csv,.xlsx,.docx">
-                <p class="muted">Możesz dodać screenshot, PDF, log lub dokument. Maksymalnie 10 MB na plik.</p>
+                <p class="muted">Możesz dodać screenshot, PDF, log lub dokument. Maksymalnie 10 MB na plik. Załączniki zostaną zapisane automatycznie po kliknięciu „Utwórz zgłoszenie”.</p>
 
                 <button type="submit">Utwórz zgłoszenie</button>
                 <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
@@ -1456,7 +1456,7 @@ data:
 
               const uploadRes = await fetch(`/api/tickets/${{ticketId}}/attachments`, {{
                 method: "POST",
-                headers: {{ "X-Helpdesk-Session": sid }},
+                headers: {{ "X-Helpdesk-Session": getSid() }},
                 body: uploadData
               }});
 
@@ -1468,7 +1468,7 @@ data:
           }}
 
           showToast("Zgłoszenie zostało utworzone", files.length ? `Dodano załączniki: ${{files.length}}` : "");
-          await renderTicket(ticketId);
+          await renderHome();
         }}
 
         async function renderTicket(id, fromLive = false) {{
