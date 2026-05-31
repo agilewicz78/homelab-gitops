@@ -1417,6 +1417,11 @@ data:
                 </div>
                 <label>Priorytet</label>
                 <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
+
+                <label>Załączniki opcjonalne</label>
+                <input type="file" name="attachments" multiple accept=".png,.jpg,.jpeg,.gif,.pdf,.txt,.log,.csv,.xlsx,.docx">
+                <p class="muted">Możesz dodać screenshot, PDF, log lub dokument. Maksymalnie 10 MB na plik.</p>
+
                 <button type="submit">Utwórz zgłoszenie</button>
                 <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
               </form>
@@ -1427,12 +1432,43 @@ data:
         async function createTicket(event) {{
           event.preventDefault();
           const form = event.target;
-          const payload = Object.fromEntries(new FormData(form).entries());
+          const formData = new FormData(form);
+          const files = formData.getAll("attachments").filter(file => file && file.name);
+          const payload = {{
+            title: formData.get("title") || "",
+            description: formData.get("description") || "",
+            category: formData.get("category") || "",
+            priority: formData.get("priority") || "Normalny"
+          }};
+
           suppressNextLiveRefresh = true;
           const res = await api("/api/tickets", {{ method: "POST", body: JSON.stringify(payload) }});
           if (!res) return;
           if (!res.ok) {{ alert("Nie udało się utworzyć zgłoszenia."); return; }}
-          await renderHome();
+
+          const created = await res.json();
+          const ticketId = created.id;
+
+          if (files.length > 0) {{
+            for (const file of files) {{
+              const uploadData = new FormData();
+              uploadData.append("file", file);
+
+              const uploadRes = await fetch(`/api/tickets/${{ticketId}}/attachments`, {{
+                method: "POST",
+                headers: {{ "X-Helpdesk-Session": sid }},
+                body: uploadData
+              }});
+
+              if (!uploadRes.ok) {{
+                const err = await uploadRes.json().catch(() => ({{ error: "Nie udało się dodać załącznika." }}));
+                showToast("Zgłoszenie utworzone, ale nie dodano załącznika", err.error || "Błąd uploadu");
+              }}
+            }}
+          }}
+
+          showToast("Zgłoszenie zostało utworzone", files.length ? `Dodano załączniki: ${{files.length}}` : "");
+          await renderTicket(ticketId);
         }}
 
         async function renderTicket(id, fromLive = false) {{
