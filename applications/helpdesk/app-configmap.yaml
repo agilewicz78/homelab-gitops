@@ -866,6 +866,20 @@ data:
       .toast { position: fixed; right: 24px; bottom: 24px; z-index: 9999; min-width: 280px; max-width: 440px; padding: 16px 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(2,132,199,.96), rgba(34,197,94,.96)); color: #fff; box-shadow: 0 18px 40px rgba(0,0,0,.35); font-weight: 700; opacity: 0; transform: translateY(16px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
       .toast.show { opacity: 1; transform: translateY(0); }
       .toast small { display: block; margin-top: 4px; opacity: .85; font-weight: 500; }
+
+      .dashboard-section-title { margin: 4px 0 14px; color: var(--muted); font-size: 14px; }
+      .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
+      .dashboard-card { border: 1px solid var(--border); background: rgba(31,41,55,.65); border-radius: 18px; padding: 16px; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
+      .dashboard-card:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.55); background: rgba(31,41,55,.88); }
+      .dashboard-card .num { font-size: 34px; font-weight: 900; line-height: 1; }
+      .dashboard-card .label { margin-top: 7px; color: var(--muted); font-size: 14px; }
+      .dashboard-list { display: grid; gap: 9px; }
+      .dashboard-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--border); background: rgba(31,41,55,.52); border-radius: 14px; padding: 11px 12px; cursor: pointer; }
+      .dashboard-row:hover { border-color: rgba(56,189,248,.55); }
+      .dashboard-row strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dashboard-row .count { font-weight: 900; color: var(--text); }
+      .dashboard-bar { grid-column: 1 / -1; height: 7px; border-radius: 999px; background: rgba(148,163,184,.18); overflow: hidden; }
+      .dashboard-bar span { display:block; height:100%; border-radius:999px; background: linear-gradient(135deg, #0284c7, #22c55e); }
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
     """
@@ -1327,8 +1341,9 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
+          const dashboardLink = canWorkTickets(data) ? ` · <a href="#" onclick="renderDashboard();return false;">Dashboard</a>` : "";
           const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{dashboardLink}}${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           await loadNotifications();
           return data;
@@ -1341,6 +1356,137 @@ data:
           notificationPanel.classList.add("hidden");
           notificationCount.classList.add("hidden");
           window.location.href = "/login";
+        }}
+
+
+        function dashboardPercent(count, total) {{
+          const c = Number(count || 0);
+          const t = Math.max(1, Number(total || 0));
+          return Math.min(100, Math.round((c / t) * 100));
+        }}
+
+        function dashboardRow(item, total, kind) {{
+          const label = item.label || "Brak danych";
+          const value = item.value || item.label || "";
+          const count = Number(item.count || 0);
+          return `
+            <div class="dashboard-row" onclick="applyDashboardFilter('${{kind}}', '${{encodeURIComponent(value)}}')">
+              <strong>${{esc(label)}}</strong>
+              <span class="count">${{count}}</span>
+              <div class="dashboard-bar"><span style="width:${{dashboardPercent(count, total)}}%"></span></div>
+            </div>
+          `;
+        }}
+
+        function dashboardList(title, items, total, kind) {{
+          const rows = (items || []).length
+            ? items.map(item => dashboardRow(item, total, kind)).join("")
+            : `<p class="muted">Brak danych.</p>`;
+
+          return `
+            <section class="card">
+              <h3>${{esc(title)}}</h3>
+              <div class="dashboard-list">${{rows}}</div>
+            </section>
+          `;
+        }}
+
+        function applyDashboardFilter(kind, encodedValue) {{
+          const value = decodeURIComponent(encodedValue || "");
+          saveStatusFilters([]);
+          saveAssignedFilter("all");
+          savePriorityFilter("all");
+          saveSlaFilter("all");
+          saveTicketSearch("");
+          resetTicketPage();
+
+          if (kind === "status") {{
+            saveStatusFilters([value]);
+          }} else if (kind === "priority") {{
+            savePriorityFilter(value);
+          }} else if (kind === "sla") {{
+            saveSlaFilter(value);
+          }} else if (kind === "operator") {{
+            saveAssignedFilter(value === "unassigned" ? "unassigned" : value);
+          }} else if (kind === "category" || kind === "department") {{
+            saveTicketSearch(value);
+          }} else if (kind === "unassigned") {{
+            saveAssignedFilter("unassigned");
+          }} else if (kind === "overdue") {{
+            saveSlaFilter("overdue");
+          }} else if (kind === "new") {{
+            saveStatusFilters(["Nowe"]);
+          }} else if (kind === "progress") {{
+            saveStatusFilters(["W trakcie"]);
+          }}
+          renderHome(loadStatusFilters());
+        }}
+
+        async function renderDashboard() {{
+          currentView = {{ name: "dashboard", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          if (!canWorkTickets(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Dashboard jest dostępny dla operatorów i administratorów.</p></section>`;
+            return;
+          }}
+
+          const res = await api("/api/dashboard");
+          if (!res) return;
+          const data = await res.json();
+          if (!res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać dashboardu</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
+            return;
+          }}
+
+          const summary = data.summary || {{}};
+          const total = Number(summary.total || 0);
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <h2>Dashboard Helpdesk</h2>
+              <p class="dashboard-section-title">Raport operacyjny dla operatorów i administratorów. Kliknij kafelek lub wiersz, aby przejść do listy zgłoszeń z odpowiednim filtrem.</p>
+            </section>
+
+            <section class="dashboard-grid">
+              <div class="dashboard-card" onclick="applyDashboardFilter('all','')">
+                <div class="num">${{summary.total || 0}}</div>
+                <div class="label">Wszystkie zgłoszenia</div>
+              </div>
+              <div class="dashboard-card" onclick="applyDashboardFilter('new','Nowe')">
+                <div class="num">${{summary.new || 0}}</div>
+                <div class="label">Nowe</div>
+              </div>
+              <div class="dashboard-card" onclick="applyDashboardFilter('progress','W trakcie')">
+                <div class="num">${{summary.in_progress || 0}}</div>
+                <div class="label">W trakcie</div>
+              </div>
+              <div class="dashboard-card" onclick="applyDashboardFilter('overdue','overdue')">
+                <div class="num">${{summary.overdue_sla || 0}}</div>
+                <div class="label">Przekroczone SLA</div>
+              </div>
+              <div class="dashboard-card" onclick="applyDashboardFilter('unassigned','unassigned')">
+                <div class="num">${{summary.unassigned || 0}}</div>
+                <div class="label">Nieprzypisane</div>
+              </div>
+            </section>
+
+            <div class="grid">
+              ${{dashboardList("Według statusu", data.by_status || [], total, "status")}}
+              ${{dashboardList("Według priorytetu", data.by_priority || [], total, "priority")}}
+            </div>
+
+            <div class="grid">
+              ${{dashboardList("Według SLA", (data.by_sla || []).map(x => ({{...x, label: slaLabel(x.value)}})), total, "sla")}}
+              ${{dashboardList("Według operatora", data.by_operator || [], total, "operator")}}
+            </div>
+
+            <div class="grid">
+              ${{dashboardList("Według kategorii", data.by_category || [], total, "category")}}
+              ${{dashboardList("Według działu", data.by_department || [], total, "department")}}
+            </div>
+          `;
         }}
 
         async function renderProfile() {{
@@ -1782,6 +1928,7 @@ data:
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
+              ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
               ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
               <div style="margin-top:16px">
                 <strong>Filtry zgłoszeń:</strong>
@@ -1813,10 +1960,12 @@ data:
             </section>
             <section class="card">
               <h2>${{scope}}${{filteredLabel}}</h2>
+              ${{pageControls}}
               <table>
                 <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane do</th><th>SLA</th><th>Utworzono</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
+              ${{pageControls}}
             </section>`;
         }}
 
@@ -2866,6 +3015,122 @@ data:
                 "total_filtered": total_filtered,
                 "total_pages": total_pages,
             },
+        })
+
+
+    @app.get("/api/dashboard")
+    @api_login_required
+    def api_dashboard(user):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT
+              COUNT(*),
+              COUNT(*) FILTER (WHERE status = 'Nowe'),
+              COUNT(*) FILTER (WHERE status = 'W trakcie'),
+              COUNT(*) FILTER (WHERE status NOT IN ('Rozwiązane', 'Zamknięte') AND sla_due_at IS NOT NULL AND sla_due_at < NOW()),
+              COUNT(*) FILTER (WHERE assigned_to_email IS NULL OR assigned_to_email = '')
+            FROM tickets
+        """)
+        total, new_count, in_progress_count, overdue_sla_count, unassigned_count = cur.fetchone()
+
+        cur.execute("""
+            SELECT status, COUNT(*)
+            FROM tickets
+            GROUP BY status
+            ORDER BY array_position(ARRAY['Nowe','Otwarte','W trakcie','Oczekuje na użytkownika','Oczekuje na dostawcę','Rozwiązane','Zamknięte'], status)
+        """)
+        by_status = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT priority, COUNT(*)
+            FROM tickets
+            GROUP BY priority
+            ORDER BY CASE priority
+              WHEN 'Krytyczny' THEN 1
+              WHEN 'Wysoki' THEN 2
+              WHEN 'Normalny' THEN 3
+              WHEN 'Niski' THEN 4
+              ELSE 5
+            END
+        """)
+        by_priority = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT sla_state, COUNT(*)
+            FROM (
+              SELECT
+                CASE
+                  WHEN status IN ('Rozwiązane', 'Zamknięte') THEN 'done'
+                  WHEN sla_due_at IS NULL THEN 'none'
+                  WHEN sla_due_at < NOW() THEN 'overdue'
+                  WHEN sla_due_at <= NOW() + INTERVAL '4 hours' THEN 'warning'
+                  ELSE 'ok'
+                END AS sla_state
+              FROM tickets
+            ) x
+            GROUP BY sla_state
+            ORDER BY CASE sla_state
+              WHEN 'overdue' THEN 1
+              WHEN 'warning' THEN 2
+              WHEN 'ok' THEN 3
+              WHEN 'done' THEN 4
+              ELSE 5
+            END
+        """)
+        by_sla = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT COALESCE(NULLIF(category, ''), 'Brak kategorii') AS label, COUNT(*)
+            FROM tickets
+            GROUP BY label
+            ORDER BY COUNT(*) DESC, label ASC
+            LIMIT 12
+        """)
+        by_category = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT COALESCE(NULLIF(department, ''), 'Brak działu') AS label, COUNT(*)
+            FROM tickets
+            GROUP BY label
+            ORDER BY COUNT(*) DESC, label ASC
+            LIMIT 12
+        """)
+        by_department = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), NULLIF(t.assigned_to_email, ''), 'Nieprzypisane') AS label,
+              COALESCE(NULLIF(t.assigned_to_email, ''), 'unassigned') AS value,
+              COUNT(*)
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            GROUP BY label, value
+            ORDER BY COUNT(*) DESC, label ASC
+        """)
+        by_operator = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "summary": {
+                "total": total,
+                "new": new_count,
+                "in_progress": in_progress_count,
+                "overdue_sla": overdue_sla_count,
+                "unassigned": unassigned_count,
+            },
+            "by_status": by_status,
+            "by_priority": by_priority,
+            "by_sla": by_sla,
+            "by_category": by_category,
+            "by_department": by_department,
+            "by_operator": by_operator,
         })
 
     @app.post("/api/tickets")
