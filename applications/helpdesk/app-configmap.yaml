@@ -513,7 +513,7 @@ data:
     def is_staff(user):
         return bool(user and (is_operator(user) or is_admin(user)))
 
-    def publish_event(message, event_type="info", ticket_id=None):
+    def publish_event(message, event_type="info", ticket_id=None, staff_only=False):
         global last_live_event
         last_live_event = {
             "id": str(uuid.uuid4()),
@@ -521,6 +521,7 @@ data:
             "message": message,
             "ticket_id": ticket_id,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "staff_only": staff_only,
         }
 
     def api_admin_required(fn):
@@ -933,11 +934,18 @@ data:
           if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
           lastLiveEventId = liveEvent.id;
 
-          if (!["ticket_created", "status_changed", "comment_added", "assignment_changed", "attachment_added"].includes(liveEvent.type)) return;
+          if (!["ticket_created", "status_changed", "comment_added", "internal_note_added", "assignment_changed", "attachment_added"].includes(liveEvent.type)) return;
 
           if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
             showToast(
               "Zmieniono status zgłoszenia #" + liveEvent.ticket_id,
+              liveEvent.message || ""
+            );
+          }}
+
+          if (liveEvent.type === "internal_note_added" && !suppressNextLiveRefresh) {{
+            showToast(
+              "Dodano notatkę wewnętrzną do zgłoszenia #" + liveEvent.ticket_id,
               liveEvent.message || ""
             );
           }}
@@ -1799,6 +1807,10 @@ data:
             publish_event(f"{user['name']} połączony z live helpdesk", "presence")
 
             while True:
+                event = last_live_event
+                if event and event.get("staff_only") and not is_staff(user):
+                    event = None
+
                 ws.send(json.dumps({
                     "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "active_clients": len(active_ws_clients),
@@ -1808,7 +1820,7 @@ data:
                         "role": user["role"],
                         "roles": user.get("roles", ["user"]),
                     },
-                    "event": last_live_event,
+                    "event": event,
                 }))
                 time.sleep(1)
         except Exception:
@@ -2642,7 +2654,7 @@ data:
         else:
             # Nie publikujemy treści notatki wewnętrznej globalnie do zwykłych użytkowników.
             # Widok operatorów/adminów odświeży się po wejściu w zgłoszenie albo po kolejnej akcji.
-            publish_event(f"{user['name']} dodał notatkę wewnętrzną do zgłoszenia #{ticket_id}", "internal_note_added", ticket_id)
+            publish_event(f"{user['name']} dodał notatkę wewnętrzną do zgłoszenia #{ticket_id}", "internal_note_added", ticket_id, staff_only=True)
 
         return jsonify({"status": "ok", "visibility": visibility})
 
