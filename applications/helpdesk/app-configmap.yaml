@@ -1452,7 +1452,6 @@ data:
                 <thead><tr><th>Użytkownik</th><th>Dział</th><th>Role</th><th>Utworzono</th><th>Akcje</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
-              ${{pageControls}}
             </section>`;
         }}
 
@@ -1793,12 +1792,10 @@ data:
             </section>
             <section class="card">
               <h2>${{scope}}${{filteredLabel}}</h2>
-              ${{pageControls}}
               <table>
                 <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane do</th><th>SLA</th><th>Utworzono</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
-              ${{pageControls}}
             </section>`;
         }}
 
