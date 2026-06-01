@@ -996,24 +996,53 @@ data:
         function savePriorityFilter(value) {{ sessionStorage.setItem("helpdesk_priority_filter", value || "all"); }}
         function loadSlaFilter() {{ return sessionStorage.getItem("helpdesk_sla_filter") || "all"; }}
         function saveSlaFilter(value) {{ sessionStorage.setItem("helpdesk_sla_filter", value || "all"); }}
+        function loadTicketSearch() {{ return sessionStorage.getItem("helpdesk_ticket_search") || ""; }}
+        function saveTicketSearch(value) {{ sessionStorage.setItem("helpdesk_ticket_search", value || ""); }}
+        function loadTicketSort() {{ return sessionStorage.getItem("helpdesk_ticket_sort") || "created_at"; }}
+        function saveTicketSort(value) {{ sessionStorage.setItem("helpdesk_ticket_sort", value || "created_at"); }}
+        function loadTicketOrder() {{ return sessionStorage.getItem("helpdesk_ticket_order") || "desc"; }}
+        function saveTicketOrder(value) {{ sessionStorage.setItem("helpdesk_ticket_order", value || "desc"); }}
+        function loadTicketPage() {{ return Number(sessionStorage.getItem("helpdesk_ticket_page") || "1") || 1; }}
+        function saveTicketPage(value) {{ sessionStorage.setItem("helpdesk_ticket_page", String(Math.max(1, Number(value) || 1))); }}
+        function loadTicketPageSize() {{ return Number(sessionStorage.getItem("helpdesk_ticket_page_size") || "10") || 10; }}
+        function saveTicketPageSize(value) {{ sessionStorage.setItem("helpdesk_ticket_page_size", String(Number(value) || 10)); }}
+        function resetTicketPage() {{ saveTicketPage(1); }}
 
         function toggleStatusFilter(status) {{
           const filters = loadStatusFilters();
           const next = filters.includes(status) ? filters.filter(s => s !== status) : filters.concat([status]);
           saveStatusFilters(next);
+          resetTicketPage();
           renderHome(next);
         }}
         function clearStatusFilters() {{
           saveStatusFilters([]);
+          resetTicketPage();
           renderHome([]);
         }}
-        function setAssignedFilter(value) {{ saveAssignedFilter(value); renderHome(loadStatusFilters()); }}
-        function setPriorityFilter(value) {{ savePriorityFilter(value); renderHome(loadStatusFilters()); }}
-        function setSlaFilter(value) {{ saveSlaFilter(value); renderHome(loadStatusFilters()); }}
+        function setAssignedFilter(value) {{ saveAssignedFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function setPriorityFilter(value) {{ savePriorityFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function setSlaFilter(value) {{ saveSlaFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function applyTicketSearch(event) {{
+          if (event) event.preventDefault();
+          const input = document.getElementById("ticket-search-input");
+          saveTicketSearch(input ? input.value.trim() : "");
+          resetTicketPage();
+          renderHome(loadStatusFilters());
+        }}
+        function setTicketSort(value) {{ saveTicketSort(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function setTicketOrder(value) {{ saveTicketOrder(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function setTicketPageSize(value) {{ saveTicketPageSize(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function goTicketPage(page) {{ saveTicketPage(page); renderHome(loadStatusFilters()); }}
         function clearAllFilters() {{
           saveStatusFilters([]);
           savePriorityFilter("all");
           saveSlaFilter("all");
+          saveTicketSearch("");
+          saveTicketSort("created_at");
+          saveTicketOrder("desc");
+          saveTicketPageSize(10);
+          saveTicketPage(1);
           sessionStorage.removeItem("helpdesk_assigned_filter");
           renderHome([]);
         }}
@@ -1182,6 +1211,7 @@ data:
                 <thead><tr><th>Użytkownik</th><th>Dział</th><th>Role</th><th>Utworzono</th><th>Akcje</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
+              ${{pageControls}}
             </section>`;
         }}
 
@@ -1333,12 +1363,22 @@ data:
           const assignedFilter = canWorkTickets(me) ? loadAssignedFilter(me) : "all";
           const priorityFilter = loadPriorityFilter();
           const slaFilter = loadSlaFilter();
+          const searchQuery = loadTicketSearch();
+          const sortBy = loadTicketSort();
+          const sortOrder = loadTicketOrder();
+          const page = loadTicketPage();
+          const pageSize = loadTicketPageSize();
 
           const params = new URLSearchParams();
           if (filters.length) params.set("statuses", filters.join(","));
           if (canWorkTickets(me)) params.set("assigned", assignedFilter);
           if (priorityFilter && priorityFilter !== "all") params.set("priority", priorityFilter);
           if (slaFilter && slaFilter !== "all") params.set("sla", slaFilter);
+          if (searchQuery) params.set("q", searchQuery);
+          params.set("sort", sortBy);
+          params.set("order", sortOrder);
+          params.set("page", String(page));
+          params.set("page_size", String(pageSize));
 
           const query = params.toString() ? `?${{params.toString()}}` : "";
           const res = await api(`/api/tickets${{query}}`);
@@ -1350,13 +1390,16 @@ data:
           }}
 
           const scope = canWorkTickets(me) ? "Zgłoszenia" : "Moje zgłoszenia";
-          const activeFilterCount = filters.length + (canWorkTickets(me) && assignedFilter !== "all" ? 1 : 0) + (priorityFilter !== "all" ? 1 : 0) + (slaFilter !== "all" ? 1 : 0);
+          const activeFilterCount = filters.length + (canWorkTickets(me) && assignedFilter !== "all" ? 1 : 0) + (priorityFilter !== "all" ? 1 : 0) + (slaFilter !== "all" ? 1 : 0) + (searchQuery ? 1 : 0);
           const filterSummary = [];
           if (filters.length) filterSummary.push(`status: ${{filters.join(", ")}}`);
           if (canWorkTickets(me) && assignedFilter !== "all") filterSummary.push(`operator: ${{assignedFilterLabel(assignedFilter, data.operators || [])}}`);
           if (priorityFilter !== "all") filterSummary.push(`priorytet: ${{priorityFilter}}`);
           if (slaFilter !== "all") filterSummary.push(`SLA: ${{slaFilterLabel(slaFilter)}}`);
+          if (searchQuery) filterSummary.push(`szukaj: ${{searchQuery}}`);
           const filteredLabel = filterSummary.length ? ` · ${{filterSummary.join(" · ")}}` : "";
+          const pagination = data.pagination || {{ page: 1, page_size: pageSize, total_pages: 1, total_filtered: data.tickets.length }};
+          if (pagination.page !== page) saveTicketPage(pagination.page);
 
           const statusChecks = data.statuses.map(s => `
             <label class="combo-option">
@@ -1397,6 +1440,45 @@ data:
               </select>
             </div>`;
 
+          const searchSortControls = `
+            <div class="filter-grid" style="margin-top:14px">
+              <div class="filter-field" style="grid-column: span 2">
+                <label>Szukaj</label>
+                <form id="ticketSearchForm" onsubmit="applyTicketSearch(event)" style="display:flex; gap:8px">
+                  <input id="ticket-search-input" value="${{esc(searchQuery)}}" placeholder="ID, #12, tytuł, opis, zgłaszający, dział, kategoria, operator..." style="margin-top:0">
+                  <button type="submit" style="margin-top:0">Szukaj</button>
+                </form>
+              </div>
+              <div class="filter-field">
+                <label>Sortuj według</label>
+                <select onchange="setTicketSort(this.value)">
+                  <option value="created_at" ${{sortBy === "created_at" ? "selected" : ""}}>Data utworzenia</option>
+                  <option value="updated_at" ${{sortBy === "updated_at" ? "selected" : ""}}>Data aktualizacji</option>
+                  <option value="id" ${{sortBy === "id" ? "selected" : ""}}>ID zgłoszenia</option>
+                  <option value="priority" ${{sortBy === "priority" ? "selected" : ""}}>Priorytet</option>
+                  <option value="status" ${{sortBy === "status" ? "selected" : ""}}>Status</option>
+                  <option value="sla" ${{sortBy === "sla" ? "selected" : ""}}>SLA</option>
+                  <option value="requester" ${{sortBy === "requester" ? "selected" : ""}}>Zgłaszający</option>
+                  <option value="operator" ${{sortBy === "operator" ? "selected" : ""}}>Operator</option>
+                </select>
+              </div>
+              <div class="filter-field">
+                <label>Kierunek</label>
+                <select onchange="setTicketOrder(this.value)">
+                  <option value="desc" ${{sortOrder === "desc" ? "selected" : ""}}>Malejąco</option>
+                  <option value="asc" ${{sortOrder === "asc" ? "selected" : ""}}>Rosnąco</option>
+                </select>
+              </div>
+              <div class="filter-field">
+                <label>Na stronie</label>
+                <select onchange="setTicketPageSize(this.value)">
+                  <option value="10" ${{pageSize === 10 ? "selected" : ""}}>10</option>
+                  <option value="25" ${{pageSize === 25 ? "selected" : ""}}>25</option>
+                  <option value="50" ${{pageSize === 50 ? "selected" : ""}}>50</option>
+                </select>
+              </div>
+            </div>`;
+
           const rows = data.tickets.length ? data.tickets.map(t => `
             <tr>
               <td>#${{t.id}}</td>
@@ -1409,6 +1491,13 @@ data:
               <td><span class="sla-badge ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span><br><span class="muted">${{esc(t.sla_due_at || "")}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
             </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych filtrów.</td></tr>`;
+
+          const pageControls = `
+            <div class="pagination">
+              <button class="btn-secondary" ${{pagination.page <= 1 ? "disabled" : ""}} onclick="goTicketPage(${{pagination.page - 1}})">Poprzednia</button>
+              <span class="muted">Strona ${{pagination.page}} z ${{pagination.total_pages}} · wyników: ${{pagination.total_filtered}}</span>
+              <button class="btn-secondary" ${{pagination.page >= pagination.total_pages ? "disabled" : ""}} onclick="goTicketPage(${{pagination.page + 1}})">Następna</button>
+            </div>`;
 
           appEl.innerHTML = `
             <section class="stats">
@@ -1446,6 +1535,7 @@ data:
                     <button class="btn-secondary" onclick="clearAllFilters()">Wyczyść filtry</button>
                   </div>
                 </div>
+                ${{searchSortControls}}
                 <div class="active-filter-count">Aktywne filtry: ${{activeFilterCount}}${{canWorkTickets(me) ? ` · domyślnie operator widzi: ${{assignedFilterLabel(loadAssignedFilter(me), data.operators || [])}}` : ""}}</div>
               </div>
             </section>
@@ -2203,6 +2293,25 @@ data:
         assigned_filter = clean(request.args.get("assigned")) or ""
         priority_filter = clean(request.args.get("priority")) or "all"
         sla_filter = clean(request.args.get("sla")) or "all"
+        search_query = clean(request.args.get("q") or request.args.get("search")) or ""
+
+        sort_by = clean(request.args.get("sort")) or "created_at"
+        sort_order = (clean(request.args.get("order")) or "desc").lower()
+        if sort_order not in ("asc", "desc"):
+            sort_order = "desc"
+
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except ValueError:
+            page = 1
+
+        try:
+            page_size = int(request.args.get("page_size", "10"))
+        except ValueError:
+            page_size = 10
+
+        if page_size not in (10, 25, 50):
+            page_size = 10
 
         if priority_filter not in (["all"] + PRIORITIES):
             return jsonify({"error": "invalid priority filter"}), 400
@@ -2276,6 +2385,40 @@ data:
             filtered_clauses.append(f"status IN ({placeholders})")
             filtered_params.extend(status_filters)
 
+        if search_query:
+            search_terms = []
+            search_params = []
+
+            numeric_match = None
+            normalized_search = search_query.strip()
+            if normalized_search.startswith("#"):
+                normalized_search = normalized_search[1:].strip()
+            if normalized_search.isdigit():
+                numeric_match = int(normalized_search)
+
+            if numeric_match is not None:
+                search_terms.append("t.id = %s")
+                search_params.append(numeric_match)
+
+            like = f"%{search_query}%"
+            search_terms.extend([
+                "CAST(t.id AS TEXT) ILIKE %s",
+                "t.title ILIKE %s",
+                "t.description ILIKE %s",
+                "t.requester_name ILIKE %s",
+                "t.requester_email ILIKE %s",
+                "t.department ILIKE %s",
+                "t.category ILIKE %s",
+                "t.status ILIKE %s",
+                "t.priority ILIKE %s",
+                "COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, '') ILIKE %s",
+                "COALESCE(t.assigned_to_email, '') ILIKE %s",
+            ])
+            search_params.extend([like] * 11)
+
+            filtered_clauses.append("(" + " OR ".join(search_terms) + ")")
+            filtered_params.extend(search_params)
+
         filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
 
         cur.execute(f"""
@@ -2291,6 +2434,32 @@ data:
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
 
         cur.execute(f"""
+            SELECT COUNT(*)
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            {filtered_where_sql}
+        """, tuple(filtered_params))
+        total_filtered = cur.fetchone()[0] or 0
+
+        total_pages = max(1, (total_filtered + page_size - 1) // page_size)
+        if page > total_pages:
+            page = total_pages
+        offset = (page - 1) * page_size
+
+        sort_map = {
+            "id": "t.id",
+            "created_at": "t.created_at",
+            "updated_at": "t.updated_at",
+            "priority": "CASE t.priority WHEN 'Krytyczny' THEN 1 WHEN 'Wysoki' THEN 2 WHEN 'Normalny' THEN 3 WHEN 'Niski' THEN 4 ELSE 5 END",
+            "status": "t.status",
+            "sla": "t.sla_due_at",
+            "requester": "t.requester_name",
+            "operator": "COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, '')",
+        }
+        sort_expr = sort_map.get(sort_by, "t.created_at")
+        nulls = "NULLS LAST"
+
+        cur.execute(f"""
             SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category,
                    t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
                    COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
@@ -2298,8 +2467,9 @@ data:
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             {filtered_where_sql}
-            ORDER BY t.id DESC
-        """, tuple(filtered_params))
+            ORDER BY {sort_expr} {sort_order.upper()} {nulls}, t.id DESC
+            LIMIT %s OFFSET %s
+        """, tuple(filtered_params + [page_size, offset]))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -2340,6 +2510,15 @@ data:
             "selected_assigned": assigned_filter,
             "selected_priority": priority_filter,
             "selected_sla": sla_filter,
+            "search": search_query,
+            "sort": sort_by,
+            "order": sort_order,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_filtered": total_filtered,
+                "total_pages": total_pages,
+            },
         })
 
     @app.post("/api/tickets")
@@ -2808,4 +2987,5 @@ data:
             download_name=original_filename,
             mimetype=content_type or "application/octet-stream",
         )
+
 
