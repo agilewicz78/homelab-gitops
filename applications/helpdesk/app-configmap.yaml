@@ -659,6 +659,50 @@ data:
       .comment-type { display: inline-block; margin-left: 8px; border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); }
       .comment-type.public { color: #bbf7d0; border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12); }
       .comment-type.internal { color: #fef08a; border-color: rgba(250,204,21,.55); background: rgba(250,204,21,.14); }
+      .switch-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin: 14px 0 4px;
+        padding: 13px 14px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: rgba(31,41,55,.55);
+      }
+      .switch-row strong { display: block; color: var(--text); font-size: 14px; }
+      .switch-row small { display: block; color: var(--muted); margin-top: 3px; line-height: 1.35; }
+      .switch { position: relative; display: inline-block; width: 58px; height: 32px; flex: 0 0 auto; }
+      .switch input { opacity: 0; width: 0; height: 0; }
+      .slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: rgba(148,163,184,.28);
+        border: 1px solid rgba(148,163,184,.35);
+        transition: .2s;
+        border-radius: 999px;
+      }
+      .slider:before {
+        position: absolute;
+        content: "";
+        height: 24px;
+        width: 24px;
+        left: 3px;
+        bottom: 3px;
+        background: #f8fafc;
+        transition: .2s;
+        border-radius: 50%;
+        box-shadow: 0 6px 14px rgba(0,0,0,.28);
+      }
+      .switch input:checked + .slider {
+        background: rgba(250,204,21,.38);
+        border-color: rgba(250,204,21,.70);
+      }
+      .switch input:checked + .slider:before {
+        transform: translateX(26px);
+        background: #fef08a;
+      }
       .attachment-list { display: grid; gap: 10px; margin-top: 12px; }
       .attachment-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: rgba(31,41,55,.58); }
       .attachment-meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
@@ -1585,11 +1629,16 @@ data:
                 <label>Komentarz</label>
                 <textarea name="content" required></textarea>
                 ${{canWorkTickets(me) ? `
-                  <label>Typ komentarza</label>
-                  <select name="visibility">
-                    <option value="public">Publiczny — widoczny dla użytkownika</option>
-                    <option value="internal">Wewnętrzny — tylko operator/admin</option>
-                  </select>
+                  <div class="switch-row">
+                    <div>
+                      <strong>Notatka wewnętrzna</strong>
+                      <small>Widoczna tylko dla operatorów i administratorów.</small>
+                    </div>
+                    <label class="switch">
+                      <input id="comment-internal" name="internal_note" type="checkbox">
+                      <span class="slider"></span>
+                    </label>
+                  </div>
                 ` : `<input type="hidden" name="visibility" value="public">`}}
                 <button type="submit">Dodaj komentarz</button>
               </form>
@@ -1624,6 +1673,9 @@ data:
           commentForm.addEventListener("submit", async (e) => {{
             e.preventDefault();
             const payload = Object.fromEntries(new FormData(commentForm).entries());
+            const internalToggle = document.getElementById("comment-internal");
+            payload.visibility = internalToggle && internalToggle.checked ? "internal" : "public";
+            delete payload.internal_note;
             suppressNextLiveRefresh = true;
             await api(`/api/tickets/${{id}}/comments`, {{ method: "POST", body: JSON.stringify(payload) }});
             await renderTicket(id);
