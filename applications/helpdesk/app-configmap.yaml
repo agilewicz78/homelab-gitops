@@ -547,8 +547,7 @@ data:
         return {row[0] for row in cur.fetchall() if row and row[0]}
 
 
-    def ticket_notification_recipients(cur, ticket_id, include_requester=True, include_assigned=True, include_staff=True):
-        recipients = set()
+    def ticket_notification_participants(cur, ticket_id):
         cur.execute("""
             SELECT requester_email, assigned_to_email
             FROM tickets
@@ -556,16 +555,42 @@ data:
         """, (ticket_id,))
         row = cur.fetchone()
 
-        if row:
-            requester_email, assigned_to_email = row
-            if include_requester and requester_email:
-                recipients.add(requester_email)
-            if include_assigned and assigned_to_email:
-                recipients.add(assigned_to_email)
+        if not row:
+            return None, None
 
-        if include_staff:
+        requester_email, assigned_to_email = row
+        return requester_email, assigned_to_email
+
+
+    def ticket_notification_recipients(cur, ticket_id, event_type):
+        """Return notification recipients according to the helpdesk workflow.
+
+        Workflow:
+        - new ticket -> all operators and admins,
+        - internal note -> all operators and admins,
+        - assigned ticket -> requester and assigned operator,
+        - unassigned ticket -> requester plus all operators/admins.
+        """
+        recipients = set()
+        requester_email, assigned_to_email = ticket_notification_participants(cur, ticket_id)
+
+        if event_type == "ticket_created":
             recipients.update(staff_notification_recipients(cur))
+            return recipients
 
+        if event_type == "internal_note_added":
+            recipients.update(staff_notification_recipients(cur))
+            return recipients
+
+        if assigned_to_email:
+            if requester_email:
+                recipients.add(requester_email)
+            recipients.add(assigned_to_email)
+            return recipients
+
+        if requester_email:
+            recipients.add(requester_email)
+        recipients.update(staff_notification_recipients(cur))
         return recipients
 
 
@@ -580,13 +605,7 @@ data:
 
 
     def create_ticket_notifications(cur, ticket_id, event_type, message, actor_email=None, staff_only=False):
-        recipients = ticket_notification_recipients(
-            cur,
-            ticket_id,
-            include_requester=not staff_only,
-            include_assigned=True,
-            include_staff=True,
-        )
+        recipients = ticket_notification_recipients(cur, ticket_id, event_type)
         create_notifications(cur, recipients, ticket_id, event_type, message, actor_email=actor_email)
 
 
