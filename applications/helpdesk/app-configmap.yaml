@@ -631,6 +631,52 @@ data:
       .combo-option:hover { background: rgba(31,41,55,.9); }
       .combo-option input { width: auto; }
       .active-filter-count { color: var(--muted); font-size: 13px; margin-top: 10px; }
+
+      .pagination {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 16px;
+        padding-top: 14px;
+        border-top: 1px solid var(--border);
+      }
+      .pagination-info {
+        color: var(--muted);
+        font-size: 14px;
+        line-height: 1.5;
+      }
+      .pagination-pages {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+        align-items: center;
+        justify-content: flex-end;
+      }
+      .pagination-btn {
+        margin-top: 0;
+        padding: 8px 11px;
+        min-width: 38px;
+        border-radius: 10px;
+        background: rgba(31,41,55,.9);
+        border: 1px solid var(--border);
+        color: var(--text);
+      }
+      .pagination-btn.active {
+        color: white;
+        border-color: rgba(56,189,248,.65);
+        background: linear-gradient(135deg, #0284c7, #22c55e);
+        box-shadow: 0 0 0 3px rgba(56,189,248,.14);
+      }
+      .pagination-btn:disabled {
+        opacity: .42;
+        cursor: not-allowed;
+      }
+      .pagination-ellipsis {
+        color: var(--muted);
+        padding: 0 4px;
+      }
       .status-filter-btn { margin-top: 0; color: var(--muted); transition: border-color .15s ease, background .15s ease, color .15s ease, transform .15s ease; }
       .status-filter-btn:hover { transform: translateY(-1px); border-color: rgba(56,189,248,.55); color: var(--text); }
       .status-filter-btn.active { color: white; background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.65); box-shadow: 0 0 0 3px rgba(56,189,248,.14); }
@@ -1034,6 +1080,43 @@ data:
         function setTicketOrder(value) {{ saveTicketOrder(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function setTicketPageSize(value) {{ saveTicketPageSize(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function goTicketPage(page) {{ saveTicketPage(page); renderHome(loadStatusFilters()); }}
+
+        function buildPaginationButtons(pagination) {{
+          const page = Number(pagination.page || 1);
+          const totalPages = Number(pagination.total_pages || 1);
+          const buttons = [];
+
+          function addButton(label, targetPage, disabled = false, active = false) {{
+            buttons.push(`
+              <button
+                class="pagination-btn ${{active ? "active" : ""}}"
+                ${{disabled ? "disabled" : ""}}
+                onclick="goTicketPage(${{targetPage}})"
+              >${{label}}</button>
+            `);
+          }}
+
+          addButton("«", 1, page <= 1);
+          addButton("‹", Math.max(1, page - 1), page <= 1);
+
+          const candidates = [1, totalPages, page - 2, page - 1, page, page + 1, page + 2]
+            .filter(p => p >= 1 && p <= totalPages);
+          const pages = [...new Set(candidates)].sort((a, b) => a - b);
+
+          let previous = 0;
+          for (const p of pages) {{
+            if (previous && p - previous > 1) {{
+              buttons.push(`<span class="pagination-ellipsis">…</span>`);
+            }}
+            addButton(String(p), p, false, p === page);
+            previous = p;
+          }}
+
+          addButton("›", Math.min(totalPages, page + 1), page >= totalPages);
+          addButton("»", totalPages, page >= totalPages);
+
+          return buttons.join("");
+        }}
         function clearAllFilters() {{
           saveStatusFilters([]);
           savePriorityFilter("all");
@@ -1492,11 +1575,22 @@ data:
               <td class="muted">${{esc(t.created_at)}}</td>
             </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych filtrów.</td></tr>`;
 
+          const totalFiltered = Number(pagination.total_filtered || 0);
+          const currentPage = Number(pagination.page || 1);
+          const currentPageSize = Number(pagination.page_size || pageSize || 10);
+          const totalPages = Number(pagination.total_pages || 1);
+          const firstItem = totalFiltered === 0 ? 0 : ((currentPage - 1) * currentPageSize) + 1;
+          const lastItem = Math.min(totalFiltered, currentPage * currentPageSize);
+
           const pageControls = `
             <div class="pagination">
-              <button class="btn-secondary" ${{pagination.page <= 1 ? "disabled" : ""}} onclick="goTicketPage(${{pagination.page - 1}})">Poprzednia</button>
-              <span class="muted">Strona ${{pagination.page}} z ${{pagination.total_pages}} · wyników: ${{pagination.total_filtered}}</span>
-              <button class="btn-secondary" ${{pagination.page >= pagination.total_pages ? "disabled" : ""}} onclick="goTicketPage(${{pagination.page + 1}})">Następna</button>
+              <div class="pagination-info">
+                <strong>Wyświetlanie ${{firstItem}}–${{lastItem}} z ${{totalFiltered}} zgłoszeń</strong><br>
+                <span>Strona ${{currentPage}} z ${{totalPages}}</span>
+              </div>
+              <div class="pagination-pages">
+                ${{buildPaginationButtons(pagination)}}
+              </div>
             </div>`;
 
           appEl.innerHTML = `
@@ -1541,10 +1635,12 @@ data:
             </section>
             <section class="card">
               <h2>${{scope}}${{filteredLabel}}</h2>
+              ${{pageControls}}
               <table>
                 <thead><tr><th>ID</th><th>Tytuł</th><th>Zgłaszający</th><th>Kategoria</th><th>Priorytet</th><th>Status</th><th>Przypisane do</th><th>SLA</th><th>Utworzono</th></tr></thead>
                 <tbody>${{rows}}</tbody>
               </table>
+              ${{pageControls}}
             </section>`;
         }}
 
@@ -2987,5 +3083,4 @@ data:
             download_name=original_filename,
             mimetype=content_type or "application/octet-stream",
         )
-
 
