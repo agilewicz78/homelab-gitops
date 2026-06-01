@@ -706,6 +706,10 @@ data:
       .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-top: 14px; align-items: end; }
       .filter-field label { margin-top: 0; }
       .filter-field select { min-height: 44px; }
+      .work-views { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 16px; }
+      .work-view-btn { border: 1px solid var(--border); background: rgba(31,41,55,.72); color: var(--text); border-radius: 999px; padding: 9px 12px; font-weight: 800; cursor: pointer; }
+      .work-view-btn:hover { border-color: rgba(56,189,248,.55); background: rgba(31,41,55,.92); }
+      .work-view-btn.active { background: linear-gradient(135deg, #0284c7, #22c55e); border-color: rgba(56,189,248,.75); color: #fff; box-shadow: 0 12px 24px rgba(0,0,0,.22); }
       .combo { position: relative; }
       .combo summary { list-style: none; cursor: pointer; width: 100%; background: var(--card2); color: var(--text); border: 1px solid var(--border); border-radius: 14px; padding: 12px; font-size: 15px; min-height: 44px; }
       .combo summary::-webkit-details-marker { display: none; }
@@ -1320,6 +1324,69 @@ data:
           renderHome([]);
         }}
 
+        function applyWorkView(view) {{
+          saveStatusFilters([]);
+          savePriorityFilter("all");
+          saveSlaFilter("all");
+          saveTicketSearch("");
+          resetTicketPage();
+
+          if (view === "queue") {{
+            saveAssignedFilter("me");
+          }} else if (view === "unassigned") {{
+            saveAssignedFilter("unassigned");
+          }} else if (view === "new") {{
+            saveAssignedFilter("all");
+            saveStatusFilters(["Nowe"]);
+          }} else if (view === "overdue") {{
+            saveAssignedFilter("all");
+            saveSlaFilter("overdue");
+          }} else if (view === "waiting_user") {{
+            saveAssignedFilter("all");
+            saveStatusFilters(["Oczekuje na użytkownika"]);
+          }} else {{
+            saveAssignedFilter("all");
+          }}
+
+          renderHome(loadStatusFilters());
+        }}
+
+        function detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
+          if (!canWorkTickets(me)) return "";
+          const statusKey = (filters || []).join("|");
+          const noPriority = priorityFilter === "all";
+          const noSearch = !searchQuery;
+
+          if (assignedFilter === "me" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "queue";
+          if (assignedFilter === "unassigned" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "unassigned";
+          if (assignedFilter === "all" && statusKey === "Nowe" && noPriority && slaFilter === "all" && noSearch) return "new";
+          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "overdue" && noSearch) return "overdue";
+          if (assignedFilter === "all" && statusKey === "Oczekuje na użytkownika" && noPriority && slaFilter === "all" && noSearch) return "waiting_user";
+          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "all";
+
+          return "";
+        }}
+
+        function workViewButton(view, label, activeView) {{
+          return `<button type="button" class="work-view-btn ${{activeView === view ? "active" : ""}}" onclick="applyWorkView('${{view}}')">${{label}}</button>`;
+        }}
+
+        function renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
+          if (!canWorkTickets(me)) return "";
+          const activeView = detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
+
+          return `
+            <div class="work-views">
+              ${{workViewButton("queue", "Moja kolejka", activeView)}}
+              ${{workViewButton("unassigned", "Nieprzypisane", activeView)}}
+              ${{workViewButton("new", "Nowe", activeView)}}
+              ${{workViewButton("overdue", "SLA przekroczone", activeView)}}
+              ${{workViewButton("waiting_user", "Oczekuje na użytkownika", activeView)}}
+              ${{workViewButton("all", "Wszystkie", activeView)}}
+            </div>
+          `;
+        }}
+
         function statusFilterLabel(filters) {{
           if (!filters || !filters.length) return "Wszystkie statusy";
           if (filters.length === 1) return filters[0];
@@ -1847,6 +1914,8 @@ data:
               </select>
             </div>`;
 
+          const workViewsHtml = renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
+
           const searchSortControls = `
             <div class="filter-grid" style="margin-top:14px">
               <div class="filter-field" style="grid-column: span 2">
@@ -1931,6 +2000,8 @@ data:
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
               ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
               <div style="margin-top:16px">
+                <strong>Widoki robocze:</strong>
+                ${{workViewsHtml}}
                 <strong>Filtry zgłoszeń:</strong>
                 <div class="filter-grid">
                   <div class="filter-field">
