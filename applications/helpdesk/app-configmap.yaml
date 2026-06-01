@@ -277,6 +277,15 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
+                cur.execute("""
+                    ALTER TABLE comments
+                    ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'public'
+                """)
+                cur.execute("""
+                    UPDATE comments
+                    SET visibility = 'public'
+                    WHERE visibility IS NULL OR visibility NOT IN ('public', 'internal')
+                """)
 
                 cur.execute("""
                     ALTER TABLE tickets
@@ -646,6 +655,10 @@ data:
       .ticket-title.status-default, .ticket-heading.status-default { color:var(--text); background:transparent; border-color:transparent; }
       .muted { color: var(--muted); }
       .comment { border: 1px solid var(--border); border-radius: 16px; padding: 14px; background: rgba(31,41,55,.65); margin-top: 10px; }
+      .comment.internal { border-color: rgba(250,204,21,.55); background: rgba(250,204,21,.10); }
+      .comment-type { display: inline-block; margin-left: 8px; border-radius: 999px; padding: 2px 7px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); }
+      .comment-type.public { color: #bbf7d0; border-color: rgba(34,197,94,.45); background: rgba(34,197,94,.12); }
+      .comment-type.internal { color: #fef08a; border-color: rgba(250,204,21,.55); background: rgba(250,204,21,.14); }
       .attachment-list { display: grid; gap: 10px; margin-top: 12px; }
       .attachment-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 14px; padding: 12px; background: rgba(31,41,55,.58); }
       .attachment-meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
@@ -1481,7 +1494,13 @@ data:
           const data = await res.json();
           const t = data.ticket;
           const comments = data.comments.map(c => `
-            <div class="comment"><div class="muted">${{esc(c.author)}} · ${{esc(c.created_at)}}</div><div>${{esc(c.content)}}</div></div>
+            <div class="comment ${{c.visibility === "internal" ? "internal" : ""}}">
+              <div class="muted">
+                ${{esc(c.author)}} · ${{esc(c.created_at)}}
+                <span class="comment-type ${{c.visibility === "internal" ? "internal" : "public"}}">${{c.visibility === "internal" ? "Wewnętrzny" : "Publiczny"}}</span>
+              </div>
+              <div>${{esc(c.content)}}</div>
+            </div>
           `).join("") || `<p class="muted">Brak komentarzy.</p>`;
 
           const statusPanel = canWorkTickets(me) ? `
@@ -1565,6 +1584,13 @@ data:
               <form id="commentForm">
                 <label>Komentarz</label>
                 <textarea name="content" required></textarea>
+                ${{canWorkTickets(me) ? `
+                  <label>Typ komentarza</label>
+                  <select name="visibility">
+                    <option value="public">Publiczny — widoczny dla użytkownika</option>
+                    <option value="internal">Wewnętrzny — tylko operator/admin</option>
+                  </select>
+                ` : `<input type="hidden" name="visibility" value="public">`}}
                 <button type="submit">Dodaj komentarz</button>
               </form>
             </section>`;
@@ -2344,12 +2370,21 @@ data:
             conn.close()
             return jsonify({"error": "not found"}), 404
 
-        cur.execute("""
-            SELECT author, content, created_at
-            FROM comments
-            WHERE ticket_id = %s
-            ORDER BY id ASC
-        """, (ticket_id,))
+        if is_staff(user):
+            cur.execute("""
+                SELECT author, content, created_at, COALESCE(visibility, 'public') AS visibility
+                FROM comments
+                WHERE ticket_id = %s
+                ORDER BY id ASC
+            """, (ticket_id,))
+        else:
+            cur.execute("""
+                SELECT author, content, created_at, COALESCE(visibility, 'public') AS visibility
+                FROM comments
+                WHERE ticket_id = %s
+                  AND COALESCE(visibility, 'public') = 'public'
+                ORDER BY id ASC
+            """, (ticket_id,))
         comment_rows = cur.fetchall()
 
         cur.execute("""
@@ -2389,7 +2424,7 @@ data:
             "sla_state": sla_state(row[13], row[8]),
         }
         comments = [
-            {"author": c[0], "content": c[1], "created_at": str(c[2])}
+            {"author": c[0], "content": c[1], "created_at": str(c[2]), "visibility": c[3] or "public"}
             for c in comment_rows
         ]
         events = [
@@ -2520,21 +2555,44 @@ data:
             return jsonify({"error": "forbidden"}), 403
         payload = request.get_json(silent=True) or {}
         content = clean(payload.get("content"))
+        visibility = clean(payload.get("visibility")) or "public"
+
+        if not is_staff(user):
+            visibility = "public"
+
+        if visibility not in ("public", "internal"):
+            visibility = "public"
+
         if not content:
             return jsonify({"error": "content is required"}), 400
+
+        event_type = "internal_note_added" if visibility == "internal" else "comment_added"
+        event_message = (
+            f"Dodano notatkę wewnętrzną: {content[:120]}"
+            if visibility == "internal"
+            else f"Dodano komentarz publiczny: {content[:120]}"
+        )
+
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
-            INSERT INTO comments (ticket_id, author, content)
-            VALUES (%s, %s, %s)
-        """, (ticket_id, user["name"], content))
+            INSERT INTO comments (ticket_id, author, content, visibility)
+            VALUES (%s, %s, %s, %s)
+        """, (ticket_id, user["name"], content, visibility))
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
-        add_ticket_event(cur, ticket_id, user, "comment_added", f"Dodano komentarz: {content[:120]}")
+        add_ticket_event(cur, ticket_id, user, event_type, event_message)
         conn.commit()
         cur.close()
         conn.close()
-        publish_event(f"{user['name']} dodał komentarz do zgłoszenia #{ticket_id}", "comment_added", ticket_id)
-        return jsonify({"status": "ok"})
+
+        if visibility == "public":
+            publish_event(f"{user['name']} dodał komentarz do zgłoszenia #{ticket_id}", "comment_added", ticket_id)
+        else:
+            # Nie publikujemy treści notatki wewnętrznej globalnie do zwykłych użytkowników.
+            # Widok operatorów/adminów odświeży się po wejściu w zgłoszenie albo po kolejnej akcji.
+            publish_event(f"{user['name']} dodał notatkę wewnętrzną do zgłoszenia #{ticket_id}", "internal_note_added", ticket_id)
+
+        return jsonify({"status": "ok", "visibility": visibility})
 
 
     @app.get("/api/tickets/<int:ticket_id>/attachments")
