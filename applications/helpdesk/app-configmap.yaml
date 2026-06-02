@@ -1057,6 +1057,7 @@ data:
       .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .dashboard-card { border: 1px solid var(--border); background: rgba(31,41,55,.65); border-radius: 18px; padding: 16px; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
       .dashboard-card:hover { transform: translateY(-2px); border-color: rgba(56,189,248,.55); background: rgba(31,41,55,.88); }
+      .dashboard-card.active { border-color: rgba(34,197,94,.75); background: linear-gradient(135deg, rgba(2,132,199,.30), rgba(34,197,94,.22)); box-shadow: 0 14px 28px rgba(0,0,0,.22); }
       .dashboard-card .num { font-size: 34px; font-weight: 900; line-height: 1; }
       .dashboard-card .label { margin-top: 7px; color: var(--muted); font-size: 14px; }
       .dashboard-list { display: grid; gap: 9px; }
@@ -1803,7 +1804,7 @@ data:
           `;
         }}
 
-        async function renderSlaCalendar() {{
+        async function renderSlaCalendar(selectedSection = "overdue") {{
           currentView = {{ name: "sla-calendar", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
@@ -1825,43 +1826,48 @@ data:
             ? "Administrator widzi wszystkie aktywne zgłoszenia z terminem SLA."
             : "Operator widzi zgłoszenia przypisane do siebie oraz nieprzypisane zgłoszenia z terminem SLA.";
 
+          const sections = {{
+            overdue: {{ title: "Przekroczone SLA", items: data.overdue || [], count: data.counts?.overdue || 0 }},
+            today: {{ title: "Dzisiaj", items: data.today || [], count: data.counts?.today || 0 }},
+            tomorrow: {{ title: "Jutro", items: data.tomorrow || [], count: data.counts?.tomorrow || 0 }},
+            next_7_days: {{ title: "Następne 7 dni", items: data.next_7_days || [], count: data.counts?.next_7_days || 0 }},
+            next_30_days: {{ title: "Następne 30 dni", items: data.next_30_days || [], count: data.counts?.next_30_days || 0 }}
+          }};
+
+          if (!sections[selectedSection]) {{
+            selectedSection = "overdue";
+          }}
+
+          const selected = sections[selectedSection];
+
+          function slaCalendarCard(key, label, count) {{
+            return `
+              <div class="dashboard-card ${{selectedSection === key ? "active" : ""}}" onclick="renderSlaCalendar('${{key}}')">
+                <div class="num">${{count || 0}}</div>
+                <div class="label">${{esc(label)}}</div>
+              </div>
+            `;
+          }}
+
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>
               <h2>📅 Kalendarz SLA</h2>
               <p class="dashboard-section-title">${{scopeText}}</p>
+              <p class="muted">Kliknij sekcję, aby wyświetlić odpowiadającą jej listę zgłoszeń.</p>
             </section>
 
             <section class="dashboard-grid">
-              <div class="dashboard-card" onclick="applyDashboardFilter('overdue','overdue')">
-                <div class="num">${{data.counts?.overdue || 0}}</div>
-                <div class="label">Przekroczone</div>
-              </div>
-              <div class="dashboard-card" onclick="renderSlaCalendar()">
-                <div class="num">${{data.counts?.today || 0}}</div>
-                <div class="label">Dzisiaj</div>
-              </div>
-              <div class="dashboard-card" onclick="renderSlaCalendar()">
-                <div class="num">${{data.counts?.tomorrow || 0}}</div>
-                <div class="label">Jutro</div>
-              </div>
-              <div class="dashboard-card" onclick="renderSlaCalendar()">
-                <div class="num">${{data.counts?.next_7_days || 0}}</div>
-                <div class="label">Następne 7 dni</div>
-              </div>
-              <div class="dashboard-card" onclick="renderSlaCalendar()">
-                <div class="num">${{data.counts?.next_30_days || 0}}</div>
-                <div class="label">Następne 30 dni</div>
-              </div>
+              ${{slaCalendarCard("overdue", "Przekroczone", sections.overdue.count)}}
+              ${{slaCalendarCard("today", "Dzisiaj", sections.today.count)}}
+              ${{slaCalendarCard("tomorrow", "Jutro", sections.tomorrow.count)}}
+              ${{slaCalendarCard("next_7_days", "Następne 7 dni", sections.next_7_days.count)}}
+              ${{slaCalendarCard("next_30_days", "Następne 30 dni", sections.next_30_days.count)}}
             </section>
 
             <section class="sla-calendar-grid">
-              ${{slaCalendarSection("Przekroczone SLA", data.overdue || [])}}
-              ${{slaCalendarSection("Dzisiaj", data.today || [])}}
-              ${{slaCalendarSection("Jutro", data.tomorrow || [])}}
-              ${{slaCalendarSection("Następne 7 dni", data.next_7_days || [])}}
-              ${{slaCalendarSection("Następne 30 dni", data.next_30_days || [])}}
+              ${{slaCalendarSection(selected.title, selected.items)}}
             </section>
           `;
         }}
