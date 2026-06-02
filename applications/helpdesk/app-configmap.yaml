@@ -438,6 +438,19 @@ data:
                     );
                 """)
 
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS audit_log (
+                        id SERIAL PRIMARY KEY,
+                        actor_email TEXT,
+                        actor_name TEXT,
+                        action TEXT NOT NULL,
+                        target_type TEXT NOT NULL,
+                        target_id TEXT,
+                        details TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+
 
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for first_name, last_name, email, department, role in SEED_USERS:
@@ -536,6 +549,33 @@ data:
             user.get("name") if user else "System",
             event_type,
             message,
+        ))
+
+    def log_audit(cur, user, action, target_type, target_id=None, details=None):
+        if isinstance(details, (dict, list)):
+            details = json.dumps(details, ensure_ascii=False)
+        elif details is None:
+            details = ""
+        else:
+            details = str(details)
+
+        cur.execute("""
+            INSERT INTO audit_log (
+                actor_email,
+                actor_name,
+                action,
+                target_type,
+                target_id,
+                details
+            )
+            VALUES (%s, %s, %s, %s, %s, %s)
+        """, (
+            user.get("email") if user else None,
+            user.get("name") if user else "System",
+            action,
+            target_type,
+            str(target_id) if target_id is not None else None,
+            details,
         ))
 
     def get_sid_from_request():
@@ -1551,7 +1591,7 @@ data:
           if (!res) return null;
           const data = await res.json();
           const dashboardLink = canWorkTickets(data) ? ` · <a href="#" onclick="renderDashboard();return false;">Dashboard</a>` : "";
-          const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>` : "";
+          const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a> · <a href="#" onclick="renderAudit();return false;">Audyt</a>` : "";
           userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{dashboardLink}}${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           await loadNotifications();
@@ -1969,6 +2009,190 @@ data:
           await renderAdminUsers();
         }}
 
+
+        function auditActionLabel(action) {{
+          const map = {{
+            "user_created": "Utworzono użytkownika",
+            "user_updated": "Zmieniono użytkownika / role",
+            "user_password_reset": "Zresetowano hasło",
+            "user_deleted": "Usunięto użytkownika",
+            "ticket_status_changed": "Zmieniono status zgłoszenia",
+            "ticket_assigned": "Przypisano zgłoszenie",
+            "ticket_watcher_added": "Dodano obserwatora",
+            "ticket_watcher_removed": "Usunięto obserwatora",
+            "internal_note_added": "Dodano notatkę wewnętrzną",
+            "attachment_added": "Dodano załącznik"
+          }};
+          return map[action] || action;
+        }}
+
+        function formatAuditDetails(details) {{
+          if (!details) return "";
+          try {{
+            const parsed = JSON.parse(details);
+            return Object.entries(parsed)
+              .map(([key, value]) => `<div><span class="muted">${{esc(key)}}:</span> ${{esc(Array.isArray(value) ? value.join(", ") : String(value ?? ""))}}</div>`)
+              .join("");
+          }} catch (e) {{
+            return esc(details);
+          }}
+        }}
+
+        function auditPaginationControls(pagination) {{
+          const page = Number(pagination.page || 1);
+          const totalPages = Number(pagination.total_pages || 1);
+          const disabledPrev = page <= 1 ? "disabled" : "";
+          const disabledNext = page >= totalPages ? "disabled" : "";
+
+          return `
+            <div class="pagination">
+              <div class="pagination-info">
+                <strong>Wyświetlanie audytu</strong><br>
+                <span>Strona ${{page}} z ${{totalPages}} · rekordów: ${{pagination.total_filtered || 0}}</span>
+              </div>
+              <div class="pagination-pages">
+                <button class="btn-secondary btn-small" ${{disabledPrev}} onclick="renderAudit(1)">« Pierwsza</button>
+                <button class="btn-secondary btn-small" ${{disabledPrev}} onclick="renderAudit(${{Math.max(1, page - 1)}})">‹ Poprzednia</button>
+                <button class="btn-secondary btn-small" ${{disabledNext}} onclick="renderAudit(${{Math.min(totalPages, page + 1)}})">Następna ›</button>
+                <button class="btn-secondary btn-small" ${{disabledNext}} onclick="renderAudit(${{totalPages}})">Ostatnia »</button>
+              </div>
+            </div>
+          `;
+        }}
+
+        async function renderAudit(page = 1) {{
+          currentView = {{ name: "audit", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          if (!isAdmin(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Audyt jest dostępny tylko dla administratorów.</p></section>`;
+            return;
+          }}
+
+          const q = sessionStorage.getItem("helpdesk_audit_q") || "";
+          const action = sessionStorage.getItem("helpdesk_audit_action") || "all";
+          const actor = sessionStorage.getItem("helpdesk_audit_actor") || "all";
+          const pageSize = sessionStorage.getItem("helpdesk_audit_page_size") || "25";
+
+          const params = new URLSearchParams();
+          if (q) params.set("q", q);
+          if (action && action !== "all") params.set("action", action);
+          if (actor && actor !== "all") params.set("actor", actor);
+          params.set("page", String(page));
+          params.set("page_size", String(pageSize));
+
+          const res = await api(`/api/audit?${{params.toString()}}`);
+          if (!res) return;
+          const data = await res.json();
+          if (!res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Błąd pobierania audytu</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
+            return;
+          }}
+
+          const rows = (data.audit || []).length
+            ? data.audit.map(a => `
+              <tr>
+                <td class="muted">#${{a.id}}<br>${{esc(a.created_at)}}</td>
+                <td><strong>${{esc(a.actor_name || "System")}}</strong><br><span class="muted">${{esc(a.actor_email || "")}}</span></td>
+                <td><span class="pill">${{esc(auditActionLabel(a.action))}}</span><br><span class="muted">${{esc(a.action)}}</span></td>
+                <td>${{esc(a.target_type)}}<br><span class="muted">${{esc(a.target_id || "")}}</span></td>
+                <td>${{formatAuditDetails(a.details)}}</td>
+              </tr>
+            `).join("")
+            : `<tr><td colspan="5" class="muted">Brak wpisów audytu dla wybranych filtrów.</td></tr>`;
+
+          const actionOptions = [`<option value="all">Wszystkie akcje</option>`]
+            .concat((data.actions || []).map(a => `<option value="${{esc(a)}}" ${{a === action ? "selected" : ""}}>${{esc(auditActionLabel(a))}}</option>`))
+            .join("");
+
+          const actorOptions = [`<option value="all">Wszyscy aktorzy</option>`]
+            .concat((data.actors || []).map(a => `<option value="${{esc(a)}}" ${{a === actor ? "selected" : ""}}>${{esc(a)}}</option>`))
+            .join("");
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <h2>Audyt działań</h2>
+              <p class="muted">Ślad działań administracyjnych i operatorskich: użytkownicy, role, przypisania, obserwatorzy, statusy, notatki wewnętrzne i załączniki.</p>
+            </section>
+
+            <section class="card">
+              <h3>Filtry audytu</h3>
+              <div class="filter-grid">
+                <div class="filter-field" style="grid-column: span 2">
+                  <label>Szukaj</label>
+                  <form id="auditSearchForm" style="display:flex; gap:8px">
+                    <input id="audit-search-input" value="${{esc(q)}}" placeholder="e-mail, akcja, obiekt, szczegóły..." style="margin-top:0">
+                    <button type="submit" style="margin-top:0">Szukaj</button>
+                  </form>
+                </div>
+                <div class="filter-field">
+                  <label>Akcja</label>
+                  <select id="audit-action-filter">${{actionOptions}}</select>
+                </div>
+                <div class="filter-field">
+                  <label>Aktor</label>
+                  <select id="audit-actor-filter">${{actorOptions}}</select>
+                </div>
+                <div class="filter-field">
+                  <label>Na stronie</label>
+                  <select id="audit-page-size">
+                    <option value="25" ${{String(pageSize) === "25" ? "selected" : ""}}>25</option>
+                    <option value="50" ${{String(pageSize) === "50" ? "selected" : ""}}>50</option>
+                    <option value="100" ${{String(pageSize) === "100" ? "selected" : ""}}>100</option>
+                  </select>
+                </div>
+                <div class="filter-field">
+                  <label>&nbsp;</label>
+                  <button class="btn-secondary" onclick="clearAuditFilters()">Wyczyść filtry</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="card">
+              <h3>Wpisy audytu</h3>
+              ${{auditPaginationControls(data.pagination || {{ page: 1, total_pages: 1, total_filtered: 0 }})}}
+              <table>
+                <thead>
+                  <tr><th>ID / czas</th><th>Aktor</th><th>Akcja</th><th>Obiekt</th><th>Szczegóły</th></tr>
+                </thead>
+                <tbody>${{rows}}</tbody>
+              </table>
+              ${{auditPaginationControls(data.pagination || {{ page: 1, total_pages: 1, total_filtered: 0 }})}}
+            </section>
+          `;
+
+          document.getElementById("auditSearchForm").addEventListener("submit", (e) => {{
+            e.preventDefault();
+            sessionStorage.setItem("helpdesk_audit_q", document.getElementById("audit-search-input").value.trim());
+            renderAudit(1);
+          }});
+
+          document.getElementById("audit-action-filter").addEventListener("change", (e) => {{
+            sessionStorage.setItem("helpdesk_audit_action", e.target.value);
+            renderAudit(1);
+          }});
+
+          document.getElementById("audit-actor-filter").addEventListener("change", (e) => {{
+            sessionStorage.setItem("helpdesk_audit_actor", e.target.value);
+            renderAudit(1);
+          }});
+
+          document.getElementById("audit-page-size").addEventListener("change", (e) => {{
+            sessionStorage.setItem("helpdesk_audit_page_size", e.target.value);
+            renderAudit(1);
+          }});
+        }}
+
+        function clearAuditFilters() {{
+          sessionStorage.removeItem("helpdesk_audit_q");
+          sessionStorage.removeItem("helpdesk_audit_action");
+          sessionStorage.removeItem("helpdesk_audit_actor");
+          sessionStorage.removeItem("helpdesk_audit_page_size");
+          renderAudit(1);
+        }}
+
+
         async function renderHome(statusFilters = loadStatusFilters(), fromLive = false) {{
           currentView = {{ name: "home", ticketId: null }};
           const me = await loadMe();
@@ -2141,7 +2365,7 @@ data:
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
-              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button>` : ""}}
+              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
               <div style="margin-top:16px">
                 <strong>Widoki robocze:</strong>
                 ${{workViewsHtml}}
@@ -2863,6 +3087,13 @@ data:
             INSERT INTO users (first_name, last_name, email, department, role, roles, password_hash)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
         """, (first_name, last_name, email, department, role, roles, generate_password_hash(password)))
+        log_audit(cur, user, "user_created", "user", email, {
+            "email": email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "department": department,
+            "roles": roles,
+        })
         conn.commit()
         cur.close()
         conn.close()
@@ -2908,6 +3139,14 @@ data:
             SET first_name = %s, last_name = %s, department = %s, role = %s, roles = %s
             WHERE lower(email) = %s
         """, (first_name, last_name, department, role, roles, target_email))
+        log_audit(cur, user, "user_updated", "user", target_email, {
+            "email": target_email,
+            "first_name": first_name,
+            "last_name": last_name,
+            "department": department,
+            "old_roles": old_roles,
+            "new_roles": roles,
+        })
         conn.commit()
         cur.close()
         conn.close()
@@ -2936,6 +3175,10 @@ data:
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
         cur.execute("UPDATE users SET password_hash = %s WHERE lower(email) = %s", (generate_password_hash(new_password), target_email))
         cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
+        log_audit(cur, user, "user_password_reset", "user", target_email, {
+            "email": target_email,
+            "sessions_revoked": True,
+        })
         conn.commit()
         cur.close()
         conn.close()
@@ -2968,6 +3211,10 @@ data:
 
         cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
         cur.execute("DELETE FROM users WHERE lower(email) = %s", (target_email,))
+        log_audit(cur, user, "user_deleted", "user", target_email, {
+            "email": target_email,
+            "roles": list(row[0] or []),
+        })
         conn.commit()
         cur.close()
         conn.close()
@@ -3046,6 +3293,121 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
+
+
+    @app.get("/api/audit")
+    @api_login_required
+    @api_admin_required
+    def api_audit(user):
+        q = clean(request.args.get("q") or "")
+        action_filter = clean(request.args.get("action") or "all")
+        actor_filter = clean(request.args.get("actor") or "all")
+
+        try:
+            page = max(1, int(request.args.get("page", "1")))
+        except ValueError:
+            page = 1
+
+        try:
+            page_size = int(request.args.get("page_size", "25"))
+        except ValueError:
+            page_size = 25
+
+        if page_size not in (25, 50, 100):
+            page_size = 25
+
+        clauses = []
+        params = []
+
+        if action_filter and action_filter != "all":
+            clauses.append("action = %s")
+            params.append(action_filter)
+
+        if actor_filter and actor_filter != "all":
+            clauses.append("lower(actor_email) = lower(%s)")
+            params.append(actor_filter)
+
+        if q:
+            like = f"%{q.lower()}%"
+            clauses.append("""(
+                lower(coalesce(actor_email, '')) LIKE %s
+                OR lower(coalesce(actor_name, '')) LIKE %s
+                OR lower(coalesce(action, '')) LIKE %s
+                OR lower(coalesce(target_type, '')) LIKE %s
+                OR lower(coalesce(target_id, '')) LIKE %s
+                OR lower(coalesce(details, '')) LIKE %s
+            )""")
+            params.extend([like, like, like, like, like, like])
+
+        where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        offset = (page - 1) * page_size
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        cur.execute(f"SELECT COUNT(*) FROM audit_log {where_sql}", params)
+        total = cur.fetchone()[0]
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        if page > total_pages:
+            page = total_pages
+            offset = (page - 1) * page_size
+
+        cur.execute(f"""
+            SELECT id, actor_email, actor_name, action, target_type, target_id, details, created_at
+            FROM audit_log
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s OFFSET %s
+        """, params + [page_size, offset])
+        rows = cur.fetchall()
+
+        cur.execute("""
+            SELECT DISTINCT action
+            FROM audit_log
+            ORDER BY action
+        """)
+        actions = [r[0] for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT DISTINCT actor_email
+            FROM audit_log
+            WHERE actor_email IS NOT NULL AND actor_email <> ''
+            ORDER BY actor_email
+        """)
+        actors = [r[0] for r in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+
+        return jsonify({
+            "audit": [
+                {
+                    "id": r[0],
+                    "actor_email": r[1] or "",
+                    "actor_name": r[2] or "System",
+                    "action": r[3],
+                    "target_type": r[4],
+                    "target_id": r[5] or "",
+                    "details": r[6] or "",
+                    "created_at": str(r[7]),
+                }
+                for r in rows
+            ],
+            "actions": actions,
+            "actors": actors,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_filtered": total,
+                "total_pages": total_pages,
+            },
+            "filters": {
+                "q": q,
+                "action": action_filter,
+                "actor": actor_filter,
+            },
+        })
+
 
 
     @app.get("/api/meta")
@@ -3488,6 +3850,12 @@ data:
         ))
         ticket_id = cur.fetchone()[0]
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
+        log_audit(cur, user, "ticket_created", "ticket", ticket_id, {
+            "title": title,
+            "category": category,
+            "subcategory": subcategory,
+            "priority": priority,
+        })
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -3732,6 +4100,10 @@ data:
         old_status = row[0]
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
         add_ticket_event(cur, ticket_id, user, "status_changed", f"Status zmieniony z {old_status} na {status}")
+        log_audit(cur, user, "ticket_status_changed", "ticket", ticket_id, {
+            "old_status": old_status,
+            "new_status": status,
+        })
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -3798,6 +4170,11 @@ data:
             "assignment_changed",
             assignment_message
         )
+        log_audit(cur, user, "ticket_assigned", "ticket", ticket_id, {
+            "old_assigned_to_email": old_assigned,
+            "new_assigned_to_email": assigned_to_email or None,
+            "new_assigned_to_name": assigned_to_name,
+        })
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -3849,6 +4226,10 @@ data:
 
         add_ticket_watcher(cur, ticket_id, watcher_email, user["email"])
         add_ticket_event(cur, ticket_id, user, "watcher_added", f"Dodano obserwatora: {watcher_name}")
+        log_audit(cur, user, "ticket_watcher_added", "ticket", ticket_id, {
+            "watcher_email": watcher_email,
+            "watcher_name": watcher_name,
+        })
         create_notifications(
             cur,
             {watcher_email},
@@ -3904,6 +4285,10 @@ data:
             WHERE ticket_id = %s AND lower(user_email) = %s
         """, (ticket_id, watcher_email.lower()))
         add_ticket_event(cur, ticket_id, user, "watcher_removed", f"Usunięto obserwatora: {watcher_name}")
+        log_audit(cur, user, "ticket_watcher_removed", "ticket", ticket_id, {
+            "watcher_email": watcher_email,
+            "watcher_name": watcher_name,
+        })
 
         conn.commit()
         cur.close()
@@ -3946,6 +4331,10 @@ data:
         """, (ticket_id, user["name"], content, visibility))
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
         add_ticket_event(cur, ticket_id, user, event_type, event_message)
+        if visibility == "internal":
+            log_audit(cur, user, "internal_note_added", "ticket", ticket_id, {
+                "content_preview": content[:120],
+            })
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -4076,6 +4465,11 @@ data:
 
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
         add_ticket_event(cur, ticket_id, user, "attachment_added", f"Dodano załącznik: {original_filename}")
+        log_audit(cur, user, "attachment_added", "ticket", ticket_id, {
+            "attachment_id": attachment_id,
+            "original_filename": original_filename,
+            "size_bytes": size_bytes,
+        })
         create_ticket_notifications(
             cur,
             ticket_id,
