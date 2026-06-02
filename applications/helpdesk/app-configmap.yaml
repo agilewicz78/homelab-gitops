@@ -53,19 +53,92 @@ data:
         "Księgowość",
     ]
 
-    CATEGORIES = [
-        "Komputer i laptop",
-        "Poczta e-mail",
-        "Drukarki i skanery",
-        "Microsoft 365 / Office",
-        "Sieć i Wi-Fi",
-        "VPN i praca zdalna",
-        "Konta i hasła",
-        "Telefon / Teams / wideokonferencje",
-        "Dostępy do systemów",
-        "Sprzęt biurowy",
-        "Inne",
-    ]
+    SUBCATEGORIES = {
+        "Komputer i laptop": [
+            "Wolne działanie",
+            "Awaria sprzętu",
+            "Aktualizacja systemu",
+            "Oprogramowanie",
+            "Stacja dokująca / monitor",
+            "Inne",
+        ],
+        "Poczta e-mail": [
+            "Outlook",
+            "Webmail",
+            "Skrzynka współdzielona",
+            "Spam / phishing",
+            "Załączniki",
+            "Inne",
+        ],
+        "Drukarki i skanery": [
+            "Brak wydruku",
+            "Brak tonera",
+            "Skanowanie",
+            "Kolejka wydruku",
+            "Sterownik",
+            "Inne",
+        ],
+        "Microsoft 365 / Office": [
+            "Word",
+            "Excel",
+            "Teams",
+            "OneDrive",
+            "SharePoint",
+            "Licencja",
+            "Inne",
+        ],
+        "Sieć i Wi-Fi": [
+            "Brak połączenia",
+            "Słaby zasięg",
+            "DNS / dostęp do stron",
+            "LAN / kabel",
+            "Inne",
+        ],
+        "VPN i praca zdalna": [
+            "Brak połączenia",
+            "MFA",
+            "Wolne połączenie",
+            "Certyfikat",
+            "Dostęp z domu",
+            "Inne",
+        ],
+        "Konta i hasła": [
+            "Reset hasła",
+            "Blokada konta",
+            "MFA",
+            "Uprawnienia",
+            "Nowe konto",
+            "Inne",
+        ],
+        "Telefon / Teams / wideokonferencje": [
+            "Mikrofon",
+            "Kamera",
+            "Słuchawki",
+            "Połączenia Teams",
+            "Telefon służbowy",
+            "Inne",
+        ],
+        "Dostępy do systemów": [
+            "Nowy dostęp",
+            "Brak dostępu",
+            "Zmiana uprawnień",
+            "Folder sieciowy",
+            "Aplikacja biznesowa",
+            "Inne",
+        ],
+        "Sprzęt biurowy": [
+            "Klawiatura / mysz",
+            "Monitor",
+            "Telefon",
+            "Akcesoria",
+            "Inne",
+        ],
+        "Inne": [
+            "Inne",
+        ],
+    }
+
+    CATEGORIES = list(SUBCATEGORIES.keys())
 
     PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
 
@@ -261,6 +334,7 @@ data:
                         requester_email TEXT NOT NULL,
                         department TEXT NOT NULL,
                         category TEXT NOT NULL,
+                        subcategory TEXT DEFAULT 'Inne',
                         priority TEXT NOT NULL,
                         status TEXT NOT NULL,
                         created_at TIMESTAMP DEFAULT NOW(),
@@ -290,6 +364,15 @@ data:
                 cur.execute("""
                     ALTER TABLE tickets
                     ADD COLUMN IF NOT EXISTS assigned_to_email TEXT REFERENCES users(email) ON DELETE SET NULL
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS subcategory TEXT DEFAULT 'Inne'
+                """)
+                cur.execute("""
+                    UPDATE tickets
+                    SET subcategory = 'Inne'
+                    WHERE subcategory IS NULL OR trim(subcategory) = ''
                 """)
                 cur.execute("""
                     ALTER TABLE tickets
@@ -377,9 +460,9 @@ data:
                         cur.execute("""
                             INSERT INTO tickets (
                                 title, description, requester_name, requester_email,
-                                department, category, priority, status, sla_due_at
+                                department, category, subcategory, priority, status, sla_due_at
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                            VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s)
                         """, ticket + (sla_due_at,))
 
                 conn.commit()
@@ -1125,6 +1208,19 @@ data:
             .replace(/[^a-zA-Z0-9]+/g, "-")
             .replace(/^-|-$/g, "");
         }}
+        function subcategoriesForCategory(meta, category) {{
+          const all = meta?.subcategories || {{}};
+          return all[category] || all["Inne"] || ["Inne"];
+        }}
+
+        function updateSubcategorySelect(meta) {{
+          const categorySelect = document.getElementById("new-ticket-category");
+          const subcategorySelect = document.getElementById("new-ticket-subcategory");
+          if (!categorySelect || !subcategorySelect) return;
+          const values = subcategoriesForCategory(meta, categorySelect.value);
+          subcategorySelect.innerHTML = values.map(x => `<option>${{esc(x)}}</option>`).join("");
+        }}
+
         function setWsStatus(text, connected) {{
           wsStatus.textContent = text;
           wsStatus.className = connected ? "live-value ws-connected" : "live-value ws-disconnected";
@@ -1475,7 +1571,7 @@ data:
             saveSlaFilter(value);
           }} else if (kind === "operator") {{
             saveAssignedFilter(value === "unassigned" ? "unassigned" : value);
-          }} else if (kind === "category" || kind === "department") {{
+          }} else if (kind === "category" || kind === "subcategory" || kind === "department") {{
             saveTicketSearch(value);
           }} else if (kind === "unassigned") {{
             saveAssignedFilter("unassigned");
@@ -1551,6 +1647,7 @@ data:
 
             <div class="grid">
               ${{dashboardList("Według kategorii", data.by_category || [], total, "category")}}
+              ${{dashboardList("Według podkategorii", data.by_subcategory || [], total, "subcategory")}}
               ${{dashboardList("Według działu", data.by_department || [], total, "department")}}
             </div>
           `;
@@ -1921,7 +2018,7 @@ data:
               <div class="filter-field" style="grid-column: span 2">
                 <label>Szukaj</label>
                 <form id="ticketSearchForm" onsubmit="applyTicketSearch(event)" style="display:flex; gap:8px">
-                  <input id="ticket-search-input" value="${{esc(searchQuery)}}" placeholder="ID, #12, tytuł, opis, zgłaszający, dział, kategoria, operator..." style="margin-top:0">
+                  <input id="ticket-search-input" value="${{esc(searchQuery)}}" placeholder="ID, #12, tytuł, opis, zgłaszający, dział, kategoria, podkategoria, operator..." style="margin-top:0">
                   <button type="submit" style="margin-top:0">Szukaj</button>
                 </form>
               </div>
@@ -1960,7 +2057,7 @@ data:
               <td>#${{t.id}}</td>
               <td><a class="ticket-title ${{statusClass(t.status)}}" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
               <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
-              <td>${{esc(t.category)}}</td>
+              <td>${{esc(t.category)}}<br><span class="muted">${{esc(t.subcategory || "Inne")}}</span></td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
               <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
               <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</td>
@@ -2060,7 +2157,18 @@ data:
                 </div>
                 <div class="grid">
                   <div><label>Dział</label><input value="${{esc(me.department)}}" disabled></div>
-                  <div><label>Kategoria</label><select name="category">${{meta.categories.map(x => `<option>${{esc(x)}}</option>`).join("")}}</select></div>
+                  <div>
+                    <label>Kategoria</label>
+                    <select id="new-ticket-category" name="category">
+                      ${{meta.categories.map(x => `<option>${{esc(x)}}</option>`).join("")}}
+                    </select>
+                  </div>
+                </div>
+                <div class="grid">
+                  <div>
+                    <label>Podkategoria</label>
+                    <select id="new-ticket-subcategory" name="subcategory"></select>
+                  </div>
                 </div>
                 <label>Priorytet</label>
                 <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
@@ -2073,6 +2181,8 @@ data:
                 <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
               </form>
             </section>`;
+          updateSubcategorySelect(meta);
+          document.getElementById("new-ticket-category").addEventListener("change", () => updateSubcategorySelect(meta));
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }}
 
@@ -2085,6 +2195,7 @@ data:
             title: formData.get("title") || "",
             description: formData.get("description") || "",
             category: formData.get("category") || "",
+            subcategory: formData.get("subcategory") || "Inne",
             priority: formData.get("priority") || "Normalny"
           }};
 
@@ -2191,7 +2302,7 @@ data:
               <p><strong>Priorytet:</strong> <span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></p>
               <p><strong>SLA:</strong> <span class="sla-badge ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span> <span class="muted">${{esc(t.sla_due_at || "")}}</span></p>
               <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</p>
-              <p><strong>Kategoria:</strong> ${{esc(t.category)}}</p>
+              <p><strong>Kategoria:</strong> ${{esc(t.category)}} / ${{esc(t.subcategory || "Inne")}}</p>
               <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
               <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
               <h3>Opis</h3><p>${{esc(t.description)}}</p>
@@ -2840,6 +2951,7 @@ data:
         return jsonify({
             "departments": DEPARTMENTS,
             "categories": CATEGORIES,
+            "subcategories": SUBCATEGORIES,
             "priorities": PRIORITIES,
             "statuses": STATUSES,
             "roles": VALID_ROLES,
@@ -2976,12 +3088,13 @@ data:
                 "t.requester_email ILIKE %s",
                 "t.department ILIKE %s",
                 "t.category ILIKE %s",
+                "COALESCE(t.subcategory, '') ILIKE %s",
                 "t.status ILIKE %s",
                 "t.priority ILIKE %s",
                 "COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, '') ILIKE %s",
                 "COALESCE(t.assigned_to_email, '') ILIKE %s",
             ])
-            search_params.extend([like] * 11)
+            search_params.extend([like] * 12)
 
             filtered_clauses.append("(" + " OR ".join(search_terms) + ")")
             filtered_params.extend(search_params)
@@ -3027,7 +3140,7 @@ data:
         nulls = "NULLS LAST"
 
         cur.execute(f"""
-            SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category,
+            SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
                    t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
                    COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
                    t.sla_due_at
@@ -3050,14 +3163,15 @@ data:
                 "requester_email": row[3],
                 "department": row[4],
                 "category": row[5],
-                "priority": row[6],
-                "status": row[7],
-                "created_at": str(row[8]),
-                "updated_at": str(row[9]),
-                "assigned_to_email": row[10],
-                "assigned_to_name": row[11],
-                "sla_due_at": str(row[12]) if row[12] else "",
-                "sla_state": sla_state(row[12], row[7]),
+                "subcategory": row[6],
+                "priority": row[7],
+                "status": row[8],
+                "created_at": str(row[9]),
+                "updated_at": str(row[10]),
+                "assigned_to_email": row[11],
+                "assigned_to_name": row[12],
+                "sla_due_at": str(row[13]) if row[13] else "",
+                "sla_state": sla_state(row[13], row[8]),
             })
 
         return jsonify({
@@ -3165,6 +3279,15 @@ data:
         by_category = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
 
         cur.execute("""
+            SELECT COALESCE(NULLIF(subcategory, ''), 'Inne') AS label, COUNT(*)
+            FROM tickets
+            GROUP BY label
+            ORDER BY COUNT(*) DESC, label ASC
+            LIMIT 12
+        """)
+        by_subcategory = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
+
+        cur.execute("""
             SELECT COALESCE(NULLIF(department, ''), 'Brak działu') AS label, COUNT(*)
             FROM tickets
             GROUP BY label
@@ -3200,6 +3323,7 @@ data:
             "by_priority": by_priority,
             "by_sla": by_sla,
             "by_category": by_category,
+            "by_subcategory": by_subcategory,
             "by_department": by_department,
             "by_operator": by_operator,
         })
@@ -3211,12 +3335,17 @@ data:
         title = clean(payload.get("title"))
         description = clean(payload.get("description"))
         category = clean(payload.get("category"))
+        subcategory = clean(payload.get("subcategory")) or "Inne"
         priority = clean(payload.get("priority")) or "Normalny"
 
         if not title or not description:
             return jsonify({"error": "title and description are required"}), 400
         if priority not in PRIORITIES:
             return jsonify({"error": "Nieprawidłowy priorytet."}), 400
+        if category not in CATEGORIES:
+            return jsonify({"error": "Nieprawidłowa kategoria."}), 400
+        if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            return jsonify({"error": "Nieprawidłowa podkategoria."}), 400
 
         conn = get_conn()
         cur = conn.cursor()
@@ -3224,13 +3353,13 @@ data:
         cur.execute("""
             INSERT INTO tickets (
                 title, description, requester_name, requester_email,
-                department, category, priority, status, sla_due_at
+                department, category, subcategory, priority, status, sla_due_at
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)
             RETURNING id
         """, (
             title, description, user["name"], user["email"],
-            user["department"], category, priority, sla_due_at,
+            user["department"], category, subcategory, priority, sla_due_at,
         ))
         ticket_id = cur.fetchone()[0]
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
@@ -3290,7 +3419,7 @@ data:
         cur = conn.cursor()
         cur.execute("""
             SELECT t.id, t.title, t.description, t.requester_name, t.requester_email, t.department,
-                   t.category, t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+                   t.category, COALESCE(t.subcategory, 'Inne') AS subcategory, t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
                    COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
                    t.sla_due_at
             FROM tickets t
@@ -3347,14 +3476,15 @@ data:
             "requester_email": row[4],
             "department": row[5],
             "category": row[6],
-            "priority": row[7],
-            "status": row[8],
-            "created_at": str(row[9]),
-            "updated_at": str(row[10]),
-            "assigned_to_email": row[11],
-            "assigned_to_name": row[12],
-            "sla_due_at": str(row[13]) if row[13] else "",
-            "sla_state": sla_state(row[13], row[8]),
+            "subcategory": row[7],
+            "priority": row[8],
+            "status": row[9],
+            "created_at": str(row[10]),
+            "updated_at": str(row[11]),
+            "assigned_to_email": row[12],
+            "assigned_to_name": row[13],
+            "sla_due_at": str(row[14]) if row[14] else "",
+            "sla_state": sla_state(row[14], row[9]),
         }
         comments = [
             {"author": c[0], "content": c[1], "created_at": str(c[2]), "visibility": c[3] or "public"}
