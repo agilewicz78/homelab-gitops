@@ -439,6 +439,19 @@ data:
                 """)
 
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS ticket_links (
+                        id SERIAL PRIMARY KEY,
+                        ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+                        linked_ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+                        relation_type TEXT NOT NULL DEFAULT 'related',
+                        created_by_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(ticket_id, linked_ticket_id, relation_type),
+                        CHECK (ticket_id <> linked_ticket_id)
+                    );
+                """)
+
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
                         actor_email TEXT,
@@ -1198,7 +1211,8 @@ data:
             comment_added: "Komentarz",
             internal_note_added: "Notatka wewnętrzna",
             assignment_changed: "Przypisanie",
-            attachment_added: "Załącznik"
+            attachment_added: "Załącznik",
+            ticket_link_changed: "Powiązanie zgłoszeń"
           }};
           return map[type] || "Powiadomienie";
         }}
@@ -1356,7 +1370,7 @@ data:
 
           await loadNotifications();
 
-          if (!["ticket_created", "status_changed", "comment_added", "internal_note_added", "assignment_changed", "attachment_added", "watcher_changed"].includes(liveEvent.type)) return;
+          if (!["ticket_created", "status_changed", "comment_added", "internal_note_added", "assignment_changed", "attachment_added", "watcher_changed", "ticket_link_changed"].includes(liveEvent.type)) return;
 
           if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
             showToast(
@@ -2558,6 +2572,35 @@ data:
             .map(w => `<option value="${{esc(w.email)}}">${{esc(w.name)}} · ${{esc(w.email)}} · ${{esc((w.roles || []).join(", "))}}</option>`)
             .join("");
 
+          const linkedTickets = (data.linked_tickets || []).length
+            ? `<div class="watcher-list">${{data.linked_tickets.map(l => `
+                <div class="watcher-item">
+                  <div>
+                    <strong><a href="#" onclick="renderTicket(${{l.id}}); return false;">#${{l.id}} · ${{esc(l.title)}}</a></strong>
+                    <div class="watcher-meta">
+                      <span class="pill ${{statusClass(l.status)}}">${{esc(l.status)}}</span>
+                      ${{l.assigned_to_name ? " · " + esc(l.assigned_to_name) : ""}}
+                      ${{l.requester_name ? " · zgłaszający: " + esc(l.requester_name) : ""}}
+                    </div>
+                  </div>
+                  ${{canWorkTickets(me) ? `<button class="btn-secondary btn-small" onclick="removeTicketLink(${{t.id}}, ${{l.id}})">Usuń</button>` : ""}}
+                </div>`).join("")}}</div>`
+            : `<p class="muted">Brak powiązanych zgłoszeń.</p>`;
+
+          const linkedTicketsPanel = `
+            <section class="card">
+              <h3>Powiązane zgłoszenia</h3>
+              <p class="muted">Powiązania pomagają łączyć zgłoszenia dotyczące tego samego problemu, duplikatów albo wspólnego incydentu.</p>
+              ${{linkedTickets}}
+              ${{canWorkTickets(me) ? `
+                <form id="ticketLinkForm">
+                  <label>Dodaj powiązanie po ID zgłoszenia</label>
+                  <input name="linked_ticket_id" type="number" min="1" placeholder="Np. 12" required>
+                  <button type="submit">Dodaj powiązanie</button>
+                </form>
+              ` : ""}}
+            </section>`;
+
           const watcherPanel = `
             <section class="card">
               <h3>Obserwatorzy</h3>
@@ -2613,6 +2656,7 @@ data:
             </section>
             ${{statusPanel}}
             ${{assignmentPanel}}
+            ${{linkedTicketsPanel}}
             ${{watcherPanel}}
             <section class="card">
               <h3>Historia zmian</h3>
@@ -2725,6 +2769,28 @@ data:
             }});
           }}
 
+          const ticketLinkForm = document.getElementById("ticketLinkForm");
+          if (ticketLinkForm) {{
+            ticketLinkForm.addEventListener("submit", async (e) => {{
+              e.preventDefault();
+              const payload = Object.fromEntries(new FormData(ticketLinkForm).entries());
+              if (!payload.linked_ticket_id) {{
+                alert("Podaj ID zgłoszenia do powiązania.");
+                return;
+              }}
+              suppressNextLiveRefresh = true;
+              const res = await api(`/api/tickets/${{id}}/links`, {{ method: "POST", body: JSON.stringify(payload) }});
+              if (!res || !res.ok) {{
+                suppressNextLiveRefresh = false;
+                const err = res ? await res.json().catch(() => ({{ error: "Nie udało się dodać powiązania." }})) : {{ error: "Nie udało się dodać powiązania." }};
+                alert(err.error || "Nie udało się dodać powiązania.");
+                return;
+              }}
+              showToast("Dodano powiązanie do zgłoszenia #" + id);
+              await renderTicket(id);
+            }});
+          }}
+
           const watcherForm = document.getElementById("watcherForm");
           if (watcherForm) {{
             watcherForm.addEventListener("submit", async (e) => {{
@@ -2746,6 +2812,20 @@ data:
               await renderTicket(id);
             }});
           }}
+        }}
+
+        async function removeTicketLink(ticketId, linkedTicketId) {{
+          if (!confirm("Usunąć powiązanie z tym zgłoszeniem?")) return;
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${{ticketId}}/links/${{linkedTicketId}}`, {{ method: "DELETE" }});
+          if (!res || !res.ok) {{
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({{ error: "Nie udało się usunąć powiązania." }})) : {{ error: "Nie udało się usunąć powiązania." }};
+            alert(err.error || "Nie udało się usunąć powiązania.");
+            return;
+          }}
+          showToast("Usunięto powiązanie ze zgłoszenia #" + ticketId);
+          await renderTicket(ticketId);
         }}
 
         async function removeWatcher(ticketId, email) {{
@@ -3992,6 +4072,38 @@ data:
             """)
             watcher_candidate_rows = cur.fetchall()
 
+        cur.execute("""
+            SELECT
+              l.id,
+              l.linked_id,
+              t.title,
+              t.status,
+              t.requester_name,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              l.relation_type,
+              l.created_by_email,
+              l.created_at
+            FROM (
+              SELECT
+                id,
+                ticket_id,
+                linked_ticket_id,
+                relation_type,
+                created_by_email,
+                created_at,
+                CASE
+                  WHEN ticket_id = %s THEN linked_ticket_id
+                  ELSE ticket_id
+                END AS linked_id
+              FROM ticket_links
+              WHERE ticket_id = %s OR linked_ticket_id = %s
+            ) l
+            JOIN tickets t ON t.id = l.linked_id
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            ORDER BY l.created_at DESC
+        """, (ticket_id, ticket_id, ticket_id))
+        link_rows = cur.fetchall()
+
         cur.close()
         conn.close()
 
@@ -4056,6 +4168,20 @@ data:
             for w in watcher_candidate_rows
         ]
 
+        linked_tickets = []
+        for l in link_rows:
+            linked_id = l[1]
+            if is_staff(user) or can_view_ticket(user, linked_id):
+                linked_tickets.append({
+                    "id": linked_id,
+                    "title": l[2],
+                    "status": l[3],
+                    "requester_name": l[4] or "",
+                    "assigned_to_name": l[5] or "",
+                    "relation_type": l[6] or "related",
+                    "created_at": str(l[8]),
+                })
+
         conn2 = get_conn()
         cur2 = conn2.cursor()
         cur2.execute("""
@@ -4077,6 +4203,7 @@ data:
             "events": events,
             "attachments": attachments,
             "watchers": watchers,
+            "linked_tickets": linked_tickets,
             "meta": {"statuses": STATUSES, "operators": operators, "watcher_candidates": watcher_candidates},
         })
 
@@ -4295,6 +4422,179 @@ data:
         conn.close()
 
         publish_event(f"{user['name']} usunął obserwatora ze zgłoszenia #{ticket_id}: {watcher_name}", "watcher_changed", ticket_id)
+        return jsonify({"status": "ok"})
+
+
+    @app.post("/api/tickets/<int:ticket_id>/links")
+    @api_login_required
+    def api_add_ticket_link(user, ticket_id):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+
+        payload = request.get_json(silent=True) or {}
+        linked_ticket_id_raw = payload.get("linked_ticket_id") or payload.get("ticket_id")
+        try:
+            linked_ticket_id = int(linked_ticket_id_raw)
+        except Exception:
+            return jsonify({"error": "Podaj poprawne ID zgłoszenia."}), 400
+
+        if linked_ticket_id == ticket_id:
+            return jsonify({"error": "Nie można powiązać zgłoszenia z samym sobą."}), 400
+
+        relation_type = clean(payload.get("relation_type")) or "related"
+        if relation_type not in ("related",):
+            relation_type = "related"
+
+        a_id = min(ticket_id, linked_ticket_id)
+        b_id = max(ticket_id, linked_ticket_id)
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, title
+            FROM tickets
+            WHERE id IN (%s, %s)
+        """, (ticket_id, linked_ticket_id))
+        rows = cur.fetchall()
+        titles = {r[0]: r[1] for r in rows}
+        if ticket_id not in titles or linked_ticket_id not in titles:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono jednego ze zgłoszeń."}), 404
+
+        cur.execute("""
+            INSERT INTO ticket_links (ticket_id, linked_ticket_id, relation_type, created_by_email)
+            VALUES (%s, %s, %s, %s)
+            ON CONFLICT (ticket_id, linked_ticket_id, relation_type) DO NOTHING
+            RETURNING id
+        """, (a_id, b_id, relation_type, user["email"]))
+        inserted = cur.fetchone()
+
+        if not inserted:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Te zgłoszenia są już powiązane."}), 409
+
+        add_ticket_event(
+            cur,
+            ticket_id,
+            user,
+            "ticket_link_added",
+            f"Powiązano ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}"
+        )
+        add_ticket_event(
+            cur,
+            linked_ticket_id,
+            user,
+            "ticket_link_added",
+            f"Powiązano ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}"
+        )
+        log_audit(cur, user, "ticket_link_added", "ticket", ticket_id, {
+            "linked_ticket_id": linked_ticket_id,
+            "ticket_title": titles[ticket_id],
+            "linked_ticket_title": titles[linked_ticket_id],
+            "relation_type": relation_type,
+        })
+        create_ticket_notifications(
+            cur,
+            ticket_id,
+            "ticket_link_changed",
+            f"Zgłoszenie #{ticket_id}: {titles[ticket_id]} powiązano ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}.",
+            actor_email=user["email"],
+        )
+        create_ticket_notifications(
+            cur,
+            linked_ticket_id,
+            "ticket_link_changed",
+            f"Zgłoszenie #{linked_ticket_id}: {titles[linked_ticket_id]} powiązano ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}.",
+            actor_email=user["email"],
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        publish_event(f"{user['name']} powiązał zgłoszenie #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
+        publish_event(f"{user['name']} powiązał zgłoszenie #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
+        return jsonify({"status": "ok"}), 201
+
+
+    @app.delete("/api/tickets/<int:ticket_id>/links/<int:linked_ticket_id>")
+    @api_login_required
+    def api_remove_ticket_link(user, ticket_id, linked_ticket_id):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+
+        if linked_ticket_id == ticket_id:
+            return jsonify({"error": "Nieprawidłowe powiązanie."}), 400
+
+        a_id = min(ticket_id, linked_ticket_id)
+        b_id = max(ticket_id, linked_ticket_id)
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, title
+            FROM tickets
+            WHERE id IN (%s, %s)
+        """, (ticket_id, linked_ticket_id))
+        rows = cur.fetchall()
+        titles = {r[0]: r[1] for r in rows}
+        if ticket_id not in titles or linked_ticket_id not in titles:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono jednego ze zgłoszeń."}), 404
+
+        cur.execute("""
+            DELETE FROM ticket_links
+            WHERE ticket_id = %s AND linked_ticket_id = %s AND relation_type = 'related'
+        """, (a_id, b_id))
+
+        if cur.rowcount == 0:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Powiązanie nie istnieje."}), 404
+
+        add_ticket_event(
+            cur,
+            ticket_id,
+            user,
+            "ticket_link_removed",
+            f"Usunięto powiązanie ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}"
+        )
+        add_ticket_event(
+            cur,
+            linked_ticket_id,
+            user,
+            "ticket_link_removed",
+            f"Usunięto powiązanie ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}"
+        )
+        log_audit(cur, user, "ticket_link_removed", "ticket", ticket_id, {
+            "linked_ticket_id": linked_ticket_id,
+            "ticket_title": titles[ticket_id],
+            "linked_ticket_title": titles[linked_ticket_id],
+        })
+        create_ticket_notifications(
+            cur,
+            ticket_id,
+            "ticket_link_changed",
+            f"Usunięto powiązanie zgłoszenia #{ticket_id}: {titles[ticket_id]} ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}.",
+            actor_email=user["email"],
+        )
+        create_ticket_notifications(
+            cur,
+            linked_ticket_id,
+            "ticket_link_changed",
+            f"Usunięto powiązanie zgłoszenia #{linked_ticket_id}: {titles[linked_ticket_id]} ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}.",
+            actor_email=user["email"],
+        )
+
+        conn.commit()
+        cur.close()
+        conn.close()
+
+        publish_event(f"{user['name']} usunął powiązanie zgłoszenia #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
+        publish_event(f"{user['name']} usunął powiązanie zgłoszenia #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
         return jsonify({"status": "ok"})
 
 
