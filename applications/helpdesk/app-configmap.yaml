@@ -3142,43 +3142,43 @@ data:
 
         if not is_staff(user):
             base_clauses.append("""(
-                requester_email = %s
+                lower(t.requester_email) = lower(%s)
                 OR EXISTS (
                     SELECT 1
                     FROM ticket_watchers tw
-                    WHERE tw.ticket_id = tickets.id
+                    WHERE tw.ticket_id = t.id
                       AND lower(tw.user_email) = lower(%s)
                 )
             )""")
             base_params.extend([user["email"], user["email"]])
         else:
             if assigned_filter == "me":
-                base_clauses.append("lower(assigned_to_email) = lower(%s)")
+                base_clauses.append("lower(t.assigned_to_email) = lower(%s)")
                 base_params.append(user["email"])
             elif assigned_filter == "unassigned":
-                base_clauses.append("(assigned_to_email IS NULL OR assigned_to_email = '')")
+                base_clauses.append("(t.assigned_to_email IS NULL OR t.assigned_to_email = '')")
             elif assigned_filter and assigned_filter != "all":
                 if assigned_filter.lower() not in operator_emails:
                     cur.close()
                     conn.close()
                     return jsonify({"error": "invalid assigned filter"}), 400
-                base_clauses.append("lower(assigned_to_email) = lower(%s)")
+                base_clauses.append("lower(t.assigned_to_email) = lower(%s)")
                 base_params.append(assigned_filter)
 
         if priority_filter != "all":
-            base_clauses.append("priority = %s")
+            base_clauses.append("t.priority = %s")
             base_params.append(priority_filter)
 
         if sla_filter == "none":
-            base_clauses.append("sla_due_at IS NULL")
+            base_clauses.append("t.sla_due_at IS NULL")
         elif sla_filter == "done":
-            base_clauses.append("status IN ('Rozwiązane', 'Zamknięte')")
+            base_clauses.append("t.status IN ('Rozwiązane', 'Zamknięte')")
         elif sla_filter == "overdue":
-            base_clauses.append("status NOT IN ('Rozwiązane', 'Zamknięte') AND sla_due_at IS NOT NULL AND sla_due_at < NOW()")
+            base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at < NOW()")
         elif sla_filter == "warning":
-            base_clauses.append("status NOT IN ('Rozwiązane', 'Zamknięte') AND sla_due_at IS NOT NULL AND sla_due_at >= NOW() AND sla_due_at <= NOW() + INTERVAL '4 hours'")
+            base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at >= NOW() AND t.sla_due_at <= NOW() + INTERVAL '4 hours'")
         elif sla_filter == "ok":
-            base_clauses.append("status NOT IN ('Rozwiązane', 'Zamknięte') AND sla_due_at IS NOT NULL AND sla_due_at > NOW() + INTERVAL '4 hours'")
+            base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at > NOW() + INTERVAL '4 hours'")
 
         base_where_sql = "WHERE " + " AND ".join(base_clauses) if base_clauses else ""
 
@@ -3186,7 +3186,7 @@ data:
         filtered_params = list(base_params)
         if status_filters:
             placeholders = ",".join(["%s"] * len(status_filters))
-            filtered_clauses.append(f"status IN ({placeholders})")
+            filtered_clauses.append(f"t.status IN ({placeholders})")
             filtered_params.extend(status_filters)
 
         if search_query:
@@ -3229,11 +3229,11 @@ data:
         cur.execute(f"""
             SELECT
               COUNT(*),
-              COUNT(*) FILTER (WHERE status = 'Nowe'),
-              COUNT(*) FILTER (WHERE status = 'W trakcie'),
-              COUNT(*) FILTER (WHERE priority IN ('Wysoki', 'Krytyczny')),
-              COUNT(*) FILTER (WHERE status IN ('Rozwiązane', 'Zamknięte'))
-            FROM tickets
+              COUNT(*) FILTER (WHERE t.status = 'Nowe'),
+              COUNT(*) FILTER (WHERE t.status = 'W trakcie'),
+              COUNT(*) FILTER (WHERE t.priority IN ('Wysoki', 'Krytyczny')),
+              COUNT(*) FILTER (WHERE t.status IN ('Rozwiązane', 'Zamknięte'))
+            FROM tickets t
             {base_where_sql}
         """, tuple(base_params))
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
