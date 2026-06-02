@@ -1066,6 +1066,17 @@ data:
       .dashboard-row .count { font-weight: 900; color: var(--text); }
       .dashboard-bar { grid-column: 1 / -1; height: 7px; border-radius: 999px; background: rgba(148,163,184,.18); overflow: hidden; }
       .dashboard-bar span { display:block; height:100%; border-radius:999px; background: linear-gradient(135deg, #0284c7, #22c55e); }
+
+      .sla-calendar-grid { display: grid; gap: 14px; }
+      .sla-calendar-section { border: 1px solid var(--border); border-radius: 18px; background: rgba(31,41,55,.42); padding: 14px; }
+      .sla-calendar-section h3 { margin: 0 0 10px; display:flex; justify-content:space-between; gap:12px; align-items:center; }
+      .sla-calendar-count { color: var(--muted); font-size: 13px; font-weight: 800; }
+      .sla-calendar-list { display: grid; gap: 10px; }
+      .sla-calendar-item { width: 100%; text-align: left; margin: 0; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: rgba(15,23,42,.62); color: var(--text); cursor: pointer; }
+      .sla-calendar-item:hover { border-color: rgba(56,189,248,.62); background: rgba(31,41,55,.88); }
+      .sla-calendar-title { font-weight: 900; line-height: 1.35; }
+      .sla-calendar-meta { color: var(--muted); font-size: 13px; margin-top: 6px; line-height: 1.5; }
+      .sla-calendar-empty { color: var(--muted); margin: 0; }
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
     """
@@ -1399,6 +1410,10 @@ data:
           if (currentView.name === "home") {{
             await renderHome(loadStatusFilters(), true);
           }}
+
+          if (currentView.name === "sla-calendar") {{
+            await renderSlaCalendar();
+          }}
         }}
 
         function disconnectLive() {{
@@ -1604,7 +1619,7 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-          const dashboardLink = canWorkTickets(data) ? ` · <a href="#" onclick="renderDashboard();return false;">Dashboard</a>` : "";
+          const dashboardLink = canWorkTickets(data) ? ` · <a href="#" onclick="renderDashboard();return false;">Dashboard</a> · <a href="#" onclick="renderSlaCalendar();return false;">Kalendarz SLA</a>` : "";
           const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a> · <a href="#" onclick="renderAudit();return false;">Audyt</a>` : "";
           userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{dashboardLink}}${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
@@ -1750,6 +1765,104 @@ data:
               ${{dashboardList("Według podkategorii", data.by_subcategory || [], total, "subcategory")}}
               ${{dashboardList("Według działu", data.by_department || [], total, "department")}}
             </div>
+          `;
+        }}
+
+
+        function slaCalendarItem(t) {{
+          const assigned = t.assigned_to_name || "Nieprzypisane";
+          const due = t.sla_due_at || "-";
+          return `
+            <button class="sla-calendar-item" onclick="renderTicket(${{Number(t.id)}}); return false;">
+              <div class="sla-calendar-title">
+                <span class="ticket-title ${{statusClass(t.status)}}">#${{t.id}} · ${{esc(t.title)}}</span>
+              </div>
+              <div class="sla-calendar-meta">
+                <span class="sla-badge ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span>
+                <span class="pill priority-${{esc(t.priority)}}">${{esc(t.priority)}}</span>
+                <span class="pill">${{esc(t.status)}}</span>
+                <br>
+                SLA: <strong>${{esc(due)}}</strong> · Operator: ${{esc(assigned)}} · Zgłaszający: ${{esc(t.requester_name || "-")}}
+                <br>
+                ${{esc(t.category || "-")}} / ${{esc(t.subcategory || "Inne")}}
+              </div>
+            </button>
+          `;
+        }}
+
+        function slaCalendarSection(title, items) {{
+          const rows = (items || []).length
+            ? items.map(slaCalendarItem).join("")
+            : `<p class="sla-calendar-empty">Brak zgłoszeń w tej sekcji.</p>`;
+
+          return `
+            <section class="sla-calendar-section">
+              <h3>${{esc(title)}} <span class="sla-calendar-count">${{(items || []).length}}</span></h3>
+              <div class="sla-calendar-list">${{rows}}</div>
+            </section>
+          `;
+        }}
+
+        async function renderSlaCalendar() {{
+          currentView = {{ name: "sla-calendar", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          if (!canWorkTickets(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Kalendarz SLA jest dostępny dla operatorów i administratorów.</p></section>`;
+            return;
+          }}
+
+          const res = await api("/api/sla-calendar");
+          if (!res) return;
+          const data = await res.json();
+
+          if (!res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać kalendarza SLA</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
+            return;
+          }}
+
+          const scopeText = data.scope === "admin"
+            ? "Administrator widzi wszystkie aktywne zgłoszenia z terminem SLA."
+            : "Operator widzi zgłoszenia przypisane do siebie oraz nieprzypisane zgłoszenia z terminem SLA.";
+
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>
+              <h2>📅 Kalendarz SLA</h2>
+              <p class="dashboard-section-title">${{scopeText}}</p>
+            </section>
+
+            <section class="dashboard-grid">
+              <div class="dashboard-card" onclick="applyDashboardFilter('overdue','overdue')">
+                <div class="num">${{data.counts?.overdue || 0}}</div>
+                <div class="label">Przekroczone</div>
+              </div>
+              <div class="dashboard-card" onclick="renderSlaCalendar()">
+                <div class="num">${{data.counts?.today || 0}}</div>
+                <div class="label">Dzisiaj</div>
+              </div>
+              <div class="dashboard-card" onclick="renderSlaCalendar()">
+                <div class="num">${{data.counts?.tomorrow || 0}}</div>
+                <div class="label">Jutro</div>
+              </div>
+              <div class="dashboard-card" onclick="renderSlaCalendar()">
+                <div class="num">${{data.counts?.next_7_days || 0}}</div>
+                <div class="label">Następne 7 dni</div>
+              </div>
+              <div class="dashboard-card" onclick="renderSlaCalendar()">
+                <div class="num">${{data.counts?.next_30_days || 0}}</div>
+                <div class="label">Następne 30 dni</div>
+              </div>
+            </section>
+
+            <section class="sla-calendar-grid">
+              ${{slaCalendarSection("Przekroczone SLA", data.overdue || [])}}
+              ${{slaCalendarSection("Dzisiaj", data.today || [])}}
+              ${{slaCalendarSection("Jutro", data.tomorrow || [])}}
+              ${{slaCalendarSection("Następne 7 dni", data.next_7_days || [])}}
+              ${{slaCalendarSection("Następne 30 dni", data.next_30_days || [])}}
+            </section>
           `;
         }}
 
@@ -3894,6 +4007,109 @@ data:
             "by_department": by_department,
             "by_operator": by_operator,
         })
+
+
+    @app.get("/api/sla-calendar")
+    @api_login_required
+    def api_sla_calendar(user):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+
+        conn = get_conn()
+        cur = conn.cursor()
+
+        params = []
+        where = [
+            "t.sla_due_at IS NOT NULL",
+            "t.status NOT IN ('Rozwiązane', 'Zamknięte')",
+        ]
+
+        scope = "admin" if is_admin(user) else "operator"
+        if not is_admin(user):
+            where.append("(lower(COALESCE(t.assigned_to_email, '')) = lower(%s) OR t.assigned_to_email IS NULL OR t.assigned_to_email = '')")
+            params.append(user.get("email") or "")
+
+        cur.execute(f"""
+            SELECT
+              t.id,
+              t.title,
+              t.status,
+              t.priority,
+              t.sla_due_at,
+              t.assigned_to_email,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              t.requester_name,
+              t.category,
+              COALESCE(t.subcategory, 'Inne') AS subcategory
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE {' AND '.join(where)}
+            ORDER BY t.sla_due_at ASC, t.id ASC
+        """, tuple(params))
+
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+
+        now = datetime.now()
+        today = now.date()
+        tomorrow = today + timedelta(days=1)
+        next_7 = today + timedelta(days=7)
+        next_30 = today + timedelta(days=30)
+
+        result = {
+            "scope": scope,
+            "overdue": [],
+            "today": [],
+            "tomorrow": [],
+            "next_7_days": [],
+            "next_30_days": [],
+        }
+
+        def row_to_dict(row):
+            due_at = row[4]
+            return {
+                "id": row[0],
+                "title": row[1],
+                "status": row[2],
+                "priority": row[3],
+                "sla_due_at": str(due_at) if due_at else None,
+                "sla_state": sla_state(due_at, row[2]),
+                "assigned_to_email": row[5],
+                "assigned_to_name": row[6],
+                "requester_name": row[7],
+                "category": row[8],
+                "subcategory": row[9],
+            }
+
+        for row in rows:
+            due_at = row[4]
+            item = row_to_dict(row)
+            if not due_at:
+                continue
+            due_date = due_at.date()
+
+            if due_at < now:
+                result["overdue"].append(item)
+            elif due_date == today:
+                result["today"].append(item)
+            elif due_date == tomorrow:
+                result["tomorrow"].append(item)
+            elif due_date <= next_7:
+                result["next_7_days"].append(item)
+            elif due_date <= next_30:
+                result["next_30_days"].append(item)
+
+        result["counts"] = {
+            "overdue": len(result["overdue"]),
+            "today": len(result["today"]),
+            "tomorrow": len(result["tomorrow"]),
+            "next_7_days": len(result["next_7_days"]),
+            "next_30_days": len(result["next_30_days"]),
+        }
+
+        return jsonify(result)
+
 
     @app.post("/api/tickets")
     @api_login_required
