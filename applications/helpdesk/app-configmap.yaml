@@ -17,29 +17,29 @@ data:
     from flask_sock import Sock
     from werkzeug.security import generate_password_hash, check_password_hash
     from werkzeug.utils import secure_filename
-
+    
     app = Flask(__name__)
     app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
     sock = Sock(app)
     active_ws_clients = set()
     last_live_event = {"id": str(uuid.uuid4()), "type": "system", "message": "System gotowy", "ticket_id": None}
-
-
+    
+    
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
     DB_NAME = os.getenv("POSTGRES_DB", "helpdeskdb")
     DB_USER = os.getenv("POSTGRES_USER", "helpdeskuser")
     DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
-
+    
     ATTACHMENTS_DIR = os.getenv("ATTACHMENTS_DIR", "/data/attachments")
     MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
     ALLOWED_ATTACHMENT_EXTENSIONS = {
         "png", "jpg", "jpeg", "gif", "pdf", "txt", "log", "csv", "xlsx", "docx"
     }
-
-
+    
+    
     INITIAL_PASSWORD = "Incoprp123!"
-
+    
     DEPARTMENTS = [
         "HR",
         "Finanse",
@@ -52,7 +52,7 @@ data:
         "Logistyka",
         "Księgowość",
     ]
-
+    
     SUBCATEGORIES = {
         "Komputer i laptop": [
             "Wolne działanie",
@@ -137,11 +137,11 @@ data:
             "Inne",
         ],
     }
-
+    
     CATEGORIES = list(SUBCATEGORIES.keys())
-
+    
     PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
-
+    
     STANDARD_STATUSES = [
         "Nowe",
         "Otwarte",
@@ -151,7 +151,7 @@ data:
         "Rozwiązane",
         "Zamknięte",
     ]
-
+    
     WORKFLOWS = {
         "default": {
             "name": "Standardowy workflow zgłoszenia",
@@ -246,42 +246,166 @@ data:
             ],
         },
     }
-
+    
+    def seed_workflows(cur):
+        for key, workflow in WORKFLOWS.items():
+            match = workflow.get("match") or {}
+            category = match.get("category") or "*"
+            subcategory = match.get("subcategory") or "*"
+            name = workflow.get("name") or key
+            is_default = (key == "default")
+    
+            cur.execute("""
+                INSERT INTO workflow_definitions (
+                    workflow_key, name, category, subcategory, is_default, is_active
+                )
+                VALUES (%s, %s, %s, %s, %s, TRUE)
+                ON CONFLICT (workflow_key) DO NOTHING
+            """, (key, name, category, subcategory, is_default))
+    
+            cur.execute("SELECT id FROM workflow_definitions WHERE workflow_key = %s", (key,))
+            row = cur.fetchone()
+            if not row:
+                continue
+            workflow_id = row[0]
+    
+            cur.execute("SELECT COUNT(*) FROM workflow_steps WHERE workflow_id = %s", (workflow_id,))
+            if cur.fetchone()[0] == 0:
+                for idx, step_name in enumerate(workflow.get("statuses") or STANDARD_STATUSES, start=1):
+                    cur.execute("""
+                        INSERT INTO workflow_steps (workflow_id, step_name, step_order, is_final)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (workflow_id, step_name) DO NOTHING
+                    """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
+    
+    
+    def db_workflow_statuses(workflow_key):
+        workflow_key = clean(workflow_key) or "default"
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT ws.step_name
+                FROM workflow_definitions wd
+                JOIN workflow_steps ws ON ws.workflow_id = wd.id
+                WHERE wd.workflow_key = %s
+                  AND wd.is_active = TRUE
+                ORDER BY ws.step_order ASC, ws.id ASC
+            """, (workflow_key,))
+            rows = [r[0] for r in cur.fetchall()]
+            cur.close()
+            conn.close()
+            if rows:
+                if "Zamknięte" not in rows:
+                    rows.append("Zamknięte")
+                return rows
+        except Exception:
+            pass
+        return None
+    
+    
     def workflow_statuses(workflow_key):
+        db_statuses = db_workflow_statuses(workflow_key)
+        if db_statuses:
+            return db_statuses
         workflow = WORKFLOWS.get(workflow_key) or WORKFLOWS["default"]
         statuses = list(workflow.get("statuses") or STANDARD_STATUSES)
         if "Zamknięte" not in statuses:
             statuses.append("Zamknięte")
         return statuses
-
+    
+    
     def all_statuses():
         values = []
-        for workflow in WORKFLOWS.values():
-            for status in workflow_statuses(next((k for k, v in WORKFLOWS.items() if v is workflow), "default")):
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT DISTINCT ws.step_name
+                FROM workflow_steps ws
+                JOIN workflow_definitions wd ON wd.id = ws.workflow_id
+                WHERE wd.is_active = TRUE
+                ORDER BY ws.step_name
+            """)
+            for (status,) in cur.fetchall():
                 if status not in values:
                     values.append(status)
+            cur.close()
+            conn.close()
+        except Exception:
+            values = []
+    
+        for workflow in WORKFLOWS.values():
+            for status in workflow.get("statuses") or STANDARD_STATUSES:
+                if status not in values:
+                    values.append(status)
+        if "Zamknięte" not in values:
+            values.append("Zamknięte")
         return values
-
+    
+    
     def choose_workflow(category, subcategory):
         category = str(category or "").strip()
         subcategory = str(subcategory or "").strip() or "Inne"
-
+    
+        try:
+            conn = get_conn()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT workflow_key, name
+                FROM workflow_definitions
+                WHERE is_active = TRUE
+                  AND category = %s
+                  AND subcategory = %s
+                ORDER BY is_default ASC, id ASC
+                LIMIT 1
+            """, (category, subcategory))
+            row = cur.fetchone()
+            if not row:
+                cur.execute("""
+                    SELECT workflow_key, name
+                    FROM workflow_definitions
+                    WHERE is_active = TRUE
+                      AND category = %s
+                      AND subcategory = '*'
+                    ORDER BY is_default ASC, id ASC
+                    LIMIT 1
+                """, (category,))
+                row = cur.fetchone()
+            if not row:
+                cur.execute("""
+                    SELECT workflow_key, name
+                    FROM workflow_definitions
+                    WHERE is_active = TRUE
+                      AND is_default = TRUE
+                    ORDER BY id ASC
+                    LIMIT 1
+                """)
+                row = cur.fetchone()
+            cur.close()
+            conn.close()
+            if row:
+                return row[0], row[1]
+        except Exception:
+            pass
+    
         for key, workflow in WORKFLOWS.items():
             if key == "default":
                 continue
             match = workflow.get("match") or {}
             if match.get("category") == category and match.get("subcategory") == subcategory:
                 return key, workflow["name"]
-
+    
         for key, workflow in WORKFLOWS.items():
             if key == "default":
                 continue
             match = workflow.get("match") or {}
             if match.get("category") == category and match.get("subcategory") == "*":
                 return key, workflow["name"]
-
+    
         return "default", WORKFLOWS["default"]["name"]
-
+    
+    
     def reopen_status_for_workflow(workflow_key):
         statuses = workflow_statuses(workflow_key)
         if "Otwarte" in statuses:
@@ -292,18 +416,38 @@ data:
             if status != "Zamknięte":
                 return status
         return "Nowe"
-
+    
+    
+    def workflow_key_from_name(name):
+        value = clean(name).lower()
+        replacements = {
+            "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n",
+            "ó": "o", "ś": "s", "ż": "z", "ź": "z",
+        }
+        for src, dst in replacements.items():
+            value = value.replace(src, dst)
+        value = re_sub_non_alnum(value)
+        return value or f"workflow_{uuid.uuid4().hex[:8]}"
+    
+    
+    def re_sub_non_alnum(value):
+        import re
+        value = re.sub(r"[^a-z0-9]+", "_", value)
+        value = re.sub(r"_+", "_", value).strip("_")
+        return value
+    
+    
     STATUSES = all_statuses()
-
+    
     SLA_HOURS = {
         "Krytyczny": 4,
         "Wysoki": 8,
         "Normalny": 48,
         "Niski": 120,
     }
-
+    
     VALID_ROLES = ["user", "operator", "admin"]
-
+    
     SEED_USERS = [
         ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
         ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
@@ -314,7 +458,7 @@ data:
         ("Helpdesk", "Operator", "operator@incoprp.local", "IT", "operator"),
         ("Helpdesk", "Admin", "admin@incoprp.local", "IT", "admin"),
     ]
-
+    
     SEED_TICKETS = [
         (
             "Outlook nie odbiera poczty",
@@ -377,7 +521,7 @@ data:
             "Nowe",
         ),
     ]
-
+    
     def get_conn():
         return psycopg2.connect(
             host=DB_HOST,
@@ -386,13 +530,13 @@ data:
             user=DB_USER,
             password=DB_PASSWORD,
         )
-
+    
     def init_db():
         for _ in range(40):
             try:
                 conn = get_conn()
                 cur = conn.cursor()
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS users (
                         id SERIAL PRIMARY KEY,
@@ -405,7 +549,7 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS first_name TEXT")
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_name TEXT")
                 cur.execute("""
@@ -431,7 +575,7 @@ data:
                     cur.execute("ALTER TABLE users DROP COLUMN IF EXISTS full_name")
                 cur.execute("UPDATE users SET first_name = 'Nieznane' WHERE first_name IS NULL OR first_name = ''")
                 cur.execute("UPDATE users SET last_name = '-' WHERE last_name IS NULL OR last_name = ''")
-
+    
                 cur.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS roles TEXT[]")
                 cur.execute("UPDATE users SET role = 'operator' WHERE role = 'agent'")
                 cur.execute("""
@@ -458,7 +602,7 @@ data:
                         ELSE 'user'
                     END
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS user_sessions (
                         sid TEXT PRIMARY KEY,
@@ -467,7 +611,7 @@ data:
                         last_seen TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS tickets (
                         id SERIAL PRIMARY KEY,
@@ -484,7 +628,7 @@ data:
                         updated_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS comments (
                         id SERIAL PRIMARY KEY,
@@ -503,7 +647,7 @@ data:
                     SET visibility = 'public'
                     WHERE visibility IS NULL OR visibility NOT IN ('public', 'internal')
                 """)
-
+    
                 cur.execute("""
                     ALTER TABLE tickets
                     ADD COLUMN IF NOT EXISTS assigned_to_email TEXT REFERENCES users(email) ON DELETE SET NULL
@@ -545,6 +689,43 @@ data:
                     ALTER TABLE tickets
                     ADD COLUMN IF NOT EXISTS workflow_name TEXT
                 """)
+    
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workflow_definitions (
+                        id SERIAL PRIMARY KEY,
+                        workflow_key TEXT UNIQUE NOT NULL,
+                        name TEXT NOT NULL,
+                        category TEXT NOT NULL DEFAULT '*',
+                        subcategory TEXT NOT NULL DEFAULT '*',
+                        is_default BOOLEAN DEFAULT FALSE,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workflow_steps (
+                        id SERIAL PRIMARY KEY,
+                        workflow_id INTEGER REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+                        step_name TEXT NOT NULL,
+                        step_order INTEGER NOT NULL DEFAULT 1,
+                        is_final BOOLEAN DEFAULT FALSE,
+                        UNIQUE(workflow_id, step_name)
+                    );
+                """)
+                seed_workflows(cur)
+                cur.execute("""
+                    UPDATE workflow_definitions
+                    SET is_default = FALSE
+                    WHERE is_default = TRUE
+                      AND id NOT IN (
+                        SELECT id
+                        FROM workflow_definitions
+                        WHERE is_default = TRUE
+                        ORDER BY id ASC
+                        LIMIT 1
+                      )
+                """)
                 cur.execute("""
                     UPDATE tickets
                     SET sla_due_at = created_at + CASE priority
@@ -569,7 +750,7 @@ data:
                             workflow_name = %s
                         WHERE id = %s
                     """, (workflow_key, workflow_name, ticket_id))
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS ticket_events (
                         id SERIAL PRIMARY KEY,
@@ -581,7 +762,7 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS attachments (
                         id SERIAL PRIMARY KEY,
@@ -595,7 +776,7 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS notifications (
                         id SERIAL PRIMARY KEY,
@@ -607,7 +788,7 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS ticket_watchers (
                         id SERIAL PRIMARY KEY,
@@ -618,7 +799,7 @@ data:
                         UNIQUE(ticket_id, user_email)
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS ticket_links (
                         id SERIAL PRIMARY KEY,
@@ -631,7 +812,7 @@ data:
                         CHECK (ticket_id <> linked_ticket_id)
                     );
                 """)
-
+    
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -644,8 +825,8 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
-
-
+    
+    
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for first_name, last_name, email, department, role in SEED_USERS:
                     cur.execute("""
@@ -653,7 +834,7 @@ data:
                         VALUES (%s, %s, %s, %s, %s, %s)
                         ON CONFLICT (email) DO NOTHING
                     """, (first_name, last_name, email, department, role, password_hash))
-
+    
                     cur.execute("""
                         UPDATE users
                         SET roles = CASE
@@ -668,7 +849,7 @@ data:
                         END
                         WHERE email = %s AND (roles IS NULL OR array_length(roles, 1) IS NULL)
                     """, (role, role, role, role, email))
-
+    
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
                 if count == 0:
@@ -684,7 +865,7 @@ data:
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s, %s, %s)
                         """, ticket + (sla_due_at, workflow_key, workflow_name))
-
+    
                 conn.commit()
                 cur.close()
                 conn.close()
@@ -693,33 +874,33 @@ data:
                 print(f"Waiting for database: {e}", flush=True)
                 time.sleep(1)
         raise RuntimeError("Database unavailable")
-
+    
     init_db()
-
+    
     def esc(value):
         return html.escape(str(value or ""))
-
+    
     def clean(value):
         return str(value or "").strip()
-
-
+    
+    
     def allowed_attachment(filename):
         if not filename or "." not in filename:
             return False
         ext = filename.rsplit(".", 1)[1].lower()
         return ext in ALLOWED_ATTACHMENT_EXTENSIONS
-
+    
     def attachment_path(stored_filename):
         base = os.path.abspath(ATTACHMENTS_DIR)
         target = os.path.abspath(os.path.join(base, stored_filename))
         if not target.startswith(base + os.sep):
             raise ValueError("Invalid attachment path")
         return target
-
-
+    
+    
     def sla_due_for_priority(priority):
         return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
-
+    
     def sla_state(sla_due_at, status):
         if not sla_due_at:
             return "none"
@@ -731,10 +912,10 @@ data:
         if sla_due_at - now <= timedelta(hours=4):
             return "warning"
         return "ok"
-
+    
     def event_message(actor_name, text):
         return f"{actor_name}: {text}"
-
+    
     def add_ticket_event(cur, ticket_id, user, event_type, message):
         cur.execute("""
             INSERT INTO ticket_events (ticket_id, actor_email, actor_name, event_type, message)
@@ -746,7 +927,7 @@ data:
             event_type,
             message,
         ))
-
+    
     def log_audit(cur, user, action, target_type, target_id=None, details=None):
         if isinstance(details, (dict, list)):
             details = json.dumps(details, ensure_ascii=False)
@@ -754,7 +935,7 @@ data:
             details = ""
         else:
             details = str(details)
-
+    
         cur.execute("""
             INSERT INTO audit_log (
                 actor_email,
@@ -773,10 +954,10 @@ data:
             str(target_id) if target_id is not None else None,
             details,
         ))
-
+    
     def get_sid_from_request():
         return request.headers.get("X-Helpdesk-Session", "").strip()
-
+    
     def get_user_by_sid(sid):
         if not sid:
             return None
@@ -805,10 +986,10 @@ data:
             "role": row[4],
             "roles": list(row[5] or ["user"]),
         }
-
+    
     def current_user():
         return get_user_by_sid(get_sid_from_request())
-
+    
     def api_login_required(fn):
         @wraps(fn)
         def wrapper(*args, **kwargs):
@@ -817,7 +998,7 @@ data:
                 return jsonify({"error": "unauthorized"}), 401
             return fn(user, *args, **kwargs)
         return wrapper
-
+    
     def has_role(user, role):
         if not user:
             return False
@@ -825,7 +1006,7 @@ data:
         if isinstance(roles, str):
             roles = [roles]
         return role in roles
-
+    
     def role_label(roles):
         roles = roles or ["user"]
         if "admin" in roles:
@@ -833,7 +1014,7 @@ data:
         if "operator" in roles:
             return "operator"
         return "user"
-
+    
     def normalize_roles(raw_roles):
         if raw_roles is None:
             roles = ["user"]
@@ -846,16 +1027,16 @@ data:
             roles.insert(0, "user")
         # keep stable order
         return [r for r in VALID_ROLES if r in roles]
-
+    
     def is_admin(user):
         return has_role(user, "admin")
-
+    
     def is_operator(user):
         return has_role(user, "operator")
-
+    
     def is_staff(user):
         return bool(user and (is_operator(user) or is_admin(user)))
-
+    
     def publish_event(message, event_type="info", ticket_id=None, staff_only=False):
         global last_live_event
         last_live_event = {
@@ -866,7 +1047,7 @@ data:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "staff_only": staff_only,
         }
-
+    
     def staff_notification_recipients(cur):
         cur.execute("""
             SELECT email
@@ -875,8 +1056,8 @@ data:
               AND ('operator' = ANY(roles) OR 'admin' = ANY(roles))
         """)
         return {row[0] for row in cur.fetchall() if row and row[0]}
-
-
+    
+    
     def ticket_notification_participants(cur, ticket_id):
         cur.execute("""
             SELECT requester_email, assigned_to_email
@@ -884,14 +1065,14 @@ data:
             WHERE id = %s
         """, (ticket_id,))
         row = cur.fetchone()
-
+    
         if not row:
             return None, None
-
+    
         requester_email, assigned_to_email = row
         return requester_email, assigned_to_email
-
-
+    
+    
     def ticket_watcher_emails(cur, ticket_id, staff_only=False):
         if staff_only:
             cur.execute("""
@@ -909,8 +1090,8 @@ data:
                 WHERE ticket_id = %s
             """, (ticket_id,))
         return {row[0] for row in cur.fetchall() if row and row[0]}
-
-
+    
+    
     def add_ticket_watcher(cur, ticket_id, user_email, added_by_email=None):
         if not user_email:
             return
@@ -919,11 +1100,11 @@ data:
             VALUES (%s, %s, %s)
             ON CONFLICT (ticket_id, user_email) DO NOTHING
         """, (ticket_id, user_email, added_by_email))
-
-
+    
+    
     def ticket_notification_recipients(cur, ticket_id, event_type):
         """Return notification recipients according to the helpdesk workflow.
-
+    
         Workflow:
         - new ticket -> all operators and admins,
         - internal note -> all operators/admins plus staff watchers,
@@ -932,30 +1113,30 @@ data:
         """
         recipients = set()
         requester_email, assigned_to_email = ticket_notification_participants(cur, ticket_id)
-
+    
         if event_type == "ticket_created":
             recipients.update(staff_notification_recipients(cur))
             return recipients
-
+    
         if event_type == "internal_note_added":
             recipients.update(staff_notification_recipients(cur))
             recipients.update(ticket_watcher_emails(cur, ticket_id, staff_only=True))
             return recipients
-
+    
         recipients.update(ticket_watcher_emails(cur, ticket_id))
-
+    
         if assigned_to_email:
             if requester_email:
                 recipients.add(requester_email)
             recipients.add(assigned_to_email)
             return recipients
-
+    
         if requester_email:
             recipients.add(requester_email)
         recipients.update(staff_notification_recipients(cur))
         return recipients
-
-
+    
+    
     def create_notifications(cur, recipients, ticket_id, event_type, message, actor_email=None):
         for email in sorted({email for email in recipients if email}):
             if actor_email and email == actor_email:
@@ -964,13 +1145,13 @@ data:
                 INSERT INTO notifications (user_email, ticket_id, type, message)
                 VALUES (%s, %s, %s, %s)
             """, (email, ticket_id, event_type, message))
-
-
+    
+    
     def create_ticket_notifications(cur, ticket_id, event_type, message, actor_email=None, staff_only=False):
         recipients = ticket_notification_recipients(cur, ticket_id, event_type)
         create_notifications(cur, recipients, ticket_id, event_type, message, actor_email=actor_email)
-
-
+    
+    
     def api_admin_required(fn):
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
@@ -978,7 +1159,7 @@ data:
                 return jsonify({"error": "admin required"}), 403
             return fn(user, *args, **kwargs)
         return wrapper
-
+    
     def api_staff_required(fn):
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
@@ -986,7 +1167,7 @@ data:
                 return jsonify({"error": "operator or admin required"}), 403
             return fn(user, *args, **kwargs)
         return wrapper
-
+    
     def public_html(body):
         return f"""
         <!doctype html>
@@ -1011,7 +1192,7 @@ data:
         </body>
         </html>
         """
-
+    
     CSS = """
       :root {
         --bg: #0f172a;
@@ -1064,7 +1245,7 @@ data:
       .btn-danger { background: rgba(239,68,68,.18); border: 1px solid rgba(239,68,68,.45); color: #fecaca; }
       .btn-small { margin-top: 0; padding: 8px 11px; border-radius: 10px; font-size: 13px; }
       .actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-
+    
       .filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin-top: 14px; align-items: end; }
       .filter-field label { margin-top: 0; }
       .filter-field select { min-height: 44px; }
@@ -1082,7 +1263,7 @@ data:
       .combo-option:hover { background: rgba(31,41,55,.9); }
       .combo-option input { width: auto; }
       .active-filter-count { color: var(--muted); font-size: 13px; margin-top: 10px; }
-
+    
       .pagination {
         display: flex;
         flex-wrap: wrap;
@@ -1235,7 +1416,7 @@ data:
       .toast { position: fixed; right: 24px; bottom: 24px; z-index: 9999; min-width: 280px; max-width: 440px; padding: 16px 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(2,132,199,.96), rgba(34,197,94,.96)); color: #fff; box-shadow: 0 18px 40px rgba(0,0,0,.35); font-weight: 700; opacity: 0; transform: translateY(16px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
       .toast.show { opacity: 1; transform: translateY(0); }
       .toast small { display: block; margin-top: 4px; opacity: .85; font-weight: 500; }
-
+    
       .modal-backdrop { position: fixed; inset: 0; z-index: 9998; background: rgba(2,6,23,.72); display: grid; place-items: center; padding: 18px; }
       .modal-backdrop.hidden { display: none; }
       .modal-card { width: min(720px, 96vw); max-height: 92vh; overflow: auto; border: 1px solid var(--border); border-radius: 22px; background: #111827; box-shadow: 0 28px 80px rgba(0,0,0,.55); padding: 22px; }
@@ -1246,8 +1427,8 @@ data:
       .resolution-box { margin: 14px 0; padding: 14px; border: 1px solid rgba(34,197,94,.35); border-radius: 16px; background: rgba(34,197,94,.08); }
       .readonly-box { margin-top: 16px; padding: 14px; border: 1px solid rgba(148,163,184,.35); border-radius: 16px; background: rgba(148,163,184,.10); color: var(--text); }
       .readonly-box span { color: var(--muted); }
-
-
+    
+    
       .dashboard-section-title { margin: 4px 0 14px; color: var(--muted); font-size: 14px; }
       .dashboard-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .dashboard-card { border: 1px solid var(--border); background: rgba(31,41,55,.65); border-radius: 18px; padding: 16px; cursor: pointer; transition: transform .15s ease, border-color .15s ease, background .15s ease; }
@@ -1262,7 +1443,7 @@ data:
       .dashboard-row .count { font-weight: 900; color: var(--text); }
       .dashboard-bar { grid-column: 1 / -1; height: 7px; border-radius: 999px; background: rgba(148,163,184,.18); overflow: hidden; }
       .dashboard-bar span { display:block; height:100%; border-radius:999px; background: linear-gradient(135deg, #0284c7, #22c55e); }
-
+    
       .sla-calendar-grid { display: grid; gap: 14px; }
       .sla-calendar-section { border: 1px solid var(--border); border-radius: 18px; background: rgba(31,41,55,.42); padding: 14px; }
       .sla-calendar-section h3 { margin: 0 0 10px; display:flex; justify-content:space-between; gap:12px; align-items:center; }
@@ -1276,7 +1457,7 @@ data:
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
     """
-
+    
     SPA_HTML = f"""
     <!doctype html>
     <html lang="pl">
@@ -1319,9 +1500,9 @@ data:
         </header>
         <div id="app"></div>
       </main>
-
+    
       <div id="toast" class="toast"></div>
-
+    
       <div id="closeTicketModal" class="modal-backdrop hidden">
         <div class="modal-card">
           <div class="modal-header">
@@ -1364,7 +1545,7 @@ data:
           </form>
         </div>
       </div>
-
+    
       <div id="reopenTicketModal" class="modal-backdrop hidden">
         <div class="modal-card">
           <div class="modal-header">
@@ -1385,7 +1566,7 @@ data:
           </form>
         </div>
       </div>
-
+    
       <script>
         const appEl = document.getElementById("app");
         const userBadge = document.getElementById("userBadge");
@@ -1404,11 +1585,11 @@ data:
         let suppressNextLiveRefresh = false;
         let closeTicketId = null;
         let reopenTicketId = null;
-
+    
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
-
+    
         async function api(path, options = {{}}) {{
           const headers = options.headers || {{}};
           headers["X-Helpdesk-Session"] = getSid();
@@ -1421,23 +1602,23 @@ data:
           }}
           return res;
         }}
-
+    
         function esc(value) {{
           return String(value ?? "").replace(/[&<>"']/g, ch => ({{
             "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"
           }}[ch]));
         }}
-
-
-
-
+    
+    
+    
+    
         function formatBytes(bytes) {{
           const value = Number(bytes || 0);
           if (value < 1024) return value + " B";
           if (value < 1024 * 1024) return (value / 1024).toFixed(1) + " KB";
           return (value / (1024 * 1024)).toFixed(1) + " MB";
         }}
-
+    
         function formatResolutionMinutes(totalMinutes) {{
           const value = Number(totalMinutes || 0);
           const hours = Math.floor(value / 60);
@@ -1446,7 +1627,7 @@ data:
           if (hours) return `${{hours}}h`;
           return `${{minutes}}m`;
         }}
-
+    
         function openCloseTicketModal(ticketId) {{
           closeTicketId = ticketId;
           const modal = document.getElementById("closeTicketModal");
@@ -1456,13 +1637,13 @@ data:
           if (subtitle) subtitle.textContent = "Zamknięcie zgłoszenia #" + ticketId;
           if (modal) modal.classList.remove("hidden");
         }}
-
+    
         function closeCloseTicketModal() {{
           closeTicketId = null;
           const modal = document.getElementById("closeTicketModal");
           if (modal) modal.classList.add("hidden");
         }}
-
+    
         function openReopenTicketModal(ticketId) {{
           reopenTicketId = ticketId;
           const modal = document.getElementById("reopenTicketModal");
@@ -1472,13 +1653,13 @@ data:
           if (subtitle) subtitle.textContent = "Ponowne otwarcie zgłoszenia #" + ticketId;
           if (modal) modal.classList.remove("hidden");
         }}
-
+    
         function closeReopenTicketModal() {{
           reopenTicketId = null;
           const modal = document.getElementById("reopenTicketModal");
           if (modal) modal.classList.add("hidden");
         }}
-
+    
         async function downloadAttachment(id, filename) {{
           const res = await fetch(`/api/attachments/${{id}}/download`, {{
             headers: {{ "X-Helpdesk-Session": getSid() }}
@@ -1502,22 +1683,22 @@ data:
           a.remove();
           URL.revokeObjectURL(url);
         }}
-
+    
         function showToast(message, details = "") {{
           const toast = document.getElementById("toast");
           if (!toast) return;
-
+    
           const small = details ? "<small>" + esc(details) + "</small>" : "";
           toast.innerHTML = "<div>" + esc(message) + "</div>" + small;
-
+    
           toast.classList.add("show");
-
+    
           clearTimeout(window.__helpdeskToastTimer);
           window.__helpdeskToastTimer = setTimeout(() => {{
             toast.classList.remove("show");
           }}, 4200);
         }}
-
+    
         function notificationTypeLabel(type) {{
           const map = {{
             ticket_created: "Nowe zgłoszenie",
@@ -1530,24 +1711,24 @@ data:
           }};
           return map[type] || "Powiadomienie";
         }}
-
+    
         async function loadNotifications() {{
           if (!getSid()) return;
           const res = await api("/api/notifications");
           if (!res || !res.ok) return;
           const data = await res.json();
           const unread = Number(data.unread_count || 0);
-
+    
           notificationCount.textContent = unread;
           notificationCount.classList.toggle("hidden", unread <= 0);
           notificationButton.classList.toggle("has-unread", unread > 0);
-
+    
           const items = data.notifications || [];
           if (!items.length) {{
             notificationList.innerHTML = `<p class="muted">Brak powiadomień.</p>`;
             return;
           }}
-
+    
           notificationList.innerHTML = items.map(n => `
             <button class="notification-item ${{n.is_read ? "" : "unread"}}" onclick="openNotification(${{n.id}}, ${{n.ticket_id || "null"}}); return false;">
               ${{n.ticket_id ? `<div class="notification-ticket">#${{n.ticket_id}} · ${{esc(n.ticket_title || "Bez tytułu")}}</div>` : ""}}
@@ -1556,12 +1737,12 @@ data:
             </button>
           `).join("");
         }}
-
+    
         function toggleNotifications() {{
           notificationPanel.classList.toggle("hidden");
           if (!notificationPanel.classList.contains("hidden")) loadNotifications();
         }}
-
+    
         async function openNotification(id, ticketId) {{
           await api(`/api/notifications/${{id}}/read`, {{ method: "POST" }});
           await loadNotifications();
@@ -1570,14 +1751,14 @@ data:
             await renderTicket(ticketId);
           }}
         }}
-
+    
         async function markAllNotificationsRead() {{
           await api("/api/notifications/read-all", {{ method: "POST" }});
           await loadNotifications();
         }}
-
+    
         function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
-
+    
         function hasRole(user, role) {{
           return Array.isArray(user?.roles) && user.roles.includes(role);
         }}
@@ -1590,7 +1771,7 @@ data:
           const list = Array.isArray(roles) && roles.length ? roles : ["user"];
           return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
         }}
-
+    
         function slaClass(state) {{
           const map = {{
             "ok": "sla-ok",
@@ -1601,7 +1782,7 @@ data:
           }};
           return map[state] || "sla-none";
         }}
-
+    
         function slaLabel(state) {{
           const map = {{
             "ok": "SLA OK",
@@ -1612,7 +1793,7 @@ data:
           }};
           return map[state] || "Brak SLA";
         }}
-
+    
         function statusClass(status) {{
           return "status-" + String(status || "")
             .normalize("NFD")
@@ -1626,7 +1807,7 @@ data:
           const all = meta?.subcategories || {{}};
           return all[category] || all["Inne"] || ["Inne"];
         }}
-
+    
         function updateSubcategorySelect(meta) {{
           const categorySelect = document.getElementById("new-ticket-category");
           const subcategorySelect = document.getElementById("new-ticket-subcategory");
@@ -1634,31 +1815,31 @@ data:
           const values = subcategoriesForCategory(meta, categorySelect.value);
           subcategorySelect.innerHTML = values.map(x => `<option>${{esc(x)}}</option>`).join("");
         }}
-
+    
         function setWsStatus(text, connected) {{
           wsStatus.textContent = text;
           wsStatus.className = connected ? "live-value ws-connected" : "live-value ws-disconnected";
         }}
-
+    
         function connectLive() {{
           const sid = getSid();
           if (!sid) return;
           if (liveSocket && (liveSocket.readyState === WebSocket.OPEN || liveSocket.readyState === WebSocket.CONNECTING)) return;
-
+    
           const scheme = window.location.protocol === "https:" ? "wss" : "ws";
           liveSocket = new WebSocket(`${{scheme}}://${{window.location.host}}/ws`);
           setWsStatus("connecting", false);
-
+    
           liveSocket.onopen = () => {{
             setWsStatus("connected", true);
             liveSocket.send(JSON.stringify({{ type: "auth", sid }}));
           }};
-
+    
           liveSocket.onmessage = (event) => {{
             const data = JSON.parse(event.data);
             handleLivePayload(data);
           }};
-
+    
           liveSocket.onclose = () => {{
             setWsStatus("disconnected", false);
             if (getSid()) {{
@@ -1666,59 +1847,59 @@ data:
               liveReconnectTimer = setTimeout(connectLive, 2000);
             }}
           }};
-
+    
           liveSocket.onerror = () => {{
             try {{ liveSocket.close(); }} catch (e) {{}}
           }};
         }}
-
+    
         async function handleLivePayload(data) {{
           wsClients.textContent = data.active_clients ?? "-";
           wsTime.textContent = data.server_time ?? "-";
-
+    
           const liveEvent = data.event || null;
           wsEvent.textContent = liveEvent?.message || data.message || "-";
-
+    
           if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
           lastLiveEventId = liveEvent.id;
-
+    
           await loadNotifications();
-
+    
           if (!["ticket_created", "status_changed", "comment_added", "internal_note_added", "assignment_changed", "attachment_added", "watcher_changed", "ticket_link_changed"].includes(liveEvent.type)) return;
-
+    
           if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
             showToast(
               "Zmieniono status zgłoszenia #" + liveEvent.ticket_id,
               liveEvent.message || ""
             );
           }}
-
+    
           if (liveEvent.type === "internal_note_added" && !suppressNextLiveRefresh) {{
             showToast(
               "Dodano notatkę wewnętrzną do zgłoszenia #" + liveEvent.ticket_id,
               liveEvent.message || ""
             );
           }}
-
+    
           if (suppressNextLiveRefresh) {{
             suppressNextLiveRefresh = false;
             return;
           }}
-
+    
           if (currentView.name === "ticket" && Number(currentView.ticketId) === Number(liveEvent.ticket_id)) {{
             await renderTicket(liveEvent.ticket_id, true);
             return;
           }}
-
+    
           if (currentView.name === "home") {{
             await renderHome(loadStatusFilters(), true);
           }}
-
+    
           if (currentView.name === "sla-calendar") {{
             await renderSlaCalendar();
           }}
         }}
-
+    
         function disconnectLive() {{
           clearTimeout(liveReconnectTimer);
           if (liveSocket) {{
@@ -1730,7 +1911,7 @@ data:
           wsTime.textContent = "-";
           wsEvent.textContent = "-";
         }}
-
+    
         function loadStatusFilters() {{
           try {{ return JSON.parse(sessionStorage.getItem("helpdesk_status_filters") || "[]"); }}
           catch {{ return []; }}
@@ -1761,7 +1942,7 @@ data:
         function loadTicketPageSize() {{ return Number(sessionStorage.getItem("helpdesk_ticket_page_size") || "10") || 10; }}
         function saveTicketPageSize(value) {{ sessionStorage.setItem("helpdesk_ticket_page_size", String(Number(value) || 10)); }}
         function resetTicketPage() {{ saveTicketPage(1); }}
-
+    
         function toggleStatusFilter(status) {{
           const filters = loadStatusFilters();
           const next = filters.includes(status) ? filters.filter(s => s !== status) : filters.concat([status]);
@@ -1788,12 +1969,12 @@ data:
         function setTicketOrder(value) {{ saveTicketOrder(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function setTicketPageSize(value) {{ saveTicketPageSize(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function goTicketPage(page) {{ saveTicketPage(page); renderHome(loadStatusFilters()); }}
-
+    
         function buildPaginationButtons(pagination) {{
           const page = Number(pagination.page || 1);
           const totalPages = Number(pagination.total_pages || 1);
           const buttons = [];
-
+    
           function addButton(label, targetPage, disabled = false, active = false) {{
             buttons.push(`
               <button
@@ -1803,14 +1984,14 @@ data:
               >${{label}}</button>
             `);
           }}
-
+    
           addButton("«", 1, page <= 1);
           addButton("‹", Math.max(1, page - 1), page <= 1);
-
+    
           const candidates = [1, totalPages, page - 2, page - 1, page, page + 1, page + 2]
             .filter(p => p >= 1 && p <= totalPages);
           const pages = [...new Set(candidates)].sort((a, b) => a - b);
-
+    
           let previous = 0;
           for (const p of pages) {{
             if (previous && p - previous > 1) {{
@@ -1819,10 +2000,10 @@ data:
             addButton(String(p), p, false, p === page);
             previous = p;
           }}
-
+    
           addButton("›", Math.min(totalPages, page + 1), page >= totalPages);
           addButton("»", totalPages, page >= totalPages);
-
+    
           return buttons.join("");
         }}
         function clearAllFilters() {{
@@ -1837,14 +2018,14 @@ data:
           sessionStorage.removeItem("helpdesk_assigned_filter");
           renderHome([]);
         }}
-
+    
         function applyWorkView(view) {{
           saveStatusFilters([]);
           savePriorityFilter("all");
           saveSlaFilter("all");
           saveTicketSearch("");
           resetTicketPage();
-
+    
           if (view === "queue") {{
             saveAssignedFilter("me");
           }} else if (view === "unassigned") {{
@@ -1861,34 +2042,34 @@ data:
           }} else {{
             saveAssignedFilter("all");
           }}
-
+    
           renderHome(loadStatusFilters());
         }}
-
+    
         function detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
           if (!canWorkTickets(me)) return "";
           const statusKey = (filters || []).join("|");
           const noPriority = priorityFilter === "all";
           const noSearch = !searchQuery;
-
+    
           if (assignedFilter === "me" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "queue";
           if (assignedFilter === "unassigned" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "unassigned";
           if (assignedFilter === "all" && statusKey === "Nowe" && noPriority && slaFilter === "all" && noSearch) return "new";
           if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "overdue" && noSearch) return "overdue";
           if (assignedFilter === "all" && statusKey === "Oczekuje na użytkownika" && noPriority && slaFilter === "all" && noSearch) return "waiting_user";
           if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "all";
-
+    
           return "";
         }}
-
+    
         function workViewButton(view, label, activeView) {{
           return `<button type="button" class="work-view-btn ${{activeView === view ? "active" : ""}}" onclick="applyWorkView('${{view}}')">${{label}}</button>`;
         }}
-
+    
         function renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
           if (!canWorkTickets(me)) return "";
           const activeView = detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
-
+    
           return `
             <div class="work-views">
               ${{workViewButton("queue", "Moja kolejka", activeView)}}
@@ -1900,7 +2081,7 @@ data:
             </div>
           `;
         }}
-
+    
         function statusFilterLabel(filters) {{
           if (!filters || !filters.length) return "Wszystkie statusy";
           if (filters.length === 1) return filters[0];
@@ -1917,7 +2098,7 @@ data:
           const map = {{ all: "Wszystkie SLA", ok: "OK", warning: "Blisko terminu", overdue: "Przekroczone", done: "Zakończone", none: "Brak SLA" }};
           return map[value] || "Wszystkie SLA";
         }}
-
+    
         async function loadMe() {{
           const res = await api("/api/me");
           if (!res) return null;
@@ -1929,7 +2110,7 @@ data:
           await loadNotifications();
           return data;
         }}
-
+    
         async function logout() {{
           await api("/api/logout", {{ method: "POST" }});
           clearSid();
@@ -1938,14 +2119,14 @@ data:
           notificationCount.classList.add("hidden");
           window.location.href = "/login";
         }}
-
-
+    
+    
         function dashboardPercent(count, total) {{
           const c = Number(count || 0);
           const t = Math.max(1, Number(total || 0));
           return Math.min(100, Math.round((c / t) * 100));
         }}
-
+    
         function dashboardRow(item, total, kind) {{
           const label = item.label || "Brak danych";
           const value = item.value || item.label || "";
@@ -1958,12 +2139,12 @@ data:
             </div>
           `;
         }}
-
+    
         function dashboardList(title, items, total, kind) {{
           const rows = (items || []).length
             ? items.map(item => dashboardRow(item, total, kind)).join("")
             : `<p class="muted">Brak danych.</p>`;
-
+    
           return `
             <section class="card">
               <h3>${{esc(title)}}</h3>
@@ -1971,7 +2152,7 @@ data:
             </section>
           `;
         }}
-
+    
         function applyDashboardFilter(kind, encodedValue) {{
           const value = decodeURIComponent(encodedValue || "");
           saveStatusFilters([]);
@@ -1980,7 +2161,7 @@ data:
           saveSlaFilter("all");
           saveTicketSearch("");
           resetTicketPage();
-
+    
           if (kind === "status") {{
             saveStatusFilters([value]);
           }} else if (kind === "priority") {{
@@ -2002,7 +2183,7 @@ data:
           }}
           renderHome(loadStatusFilters());
         }}
-
+    
         async function renderDashboard() {{
           currentView = {{ name: "dashboard", ticketId: null }};
           const me = await loadMe();
@@ -2011,7 +2192,7 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Dashboard jest dostępny dla operatorów i administratorów.</p></section>`;
             return;
           }}
-
+    
           const res = await api("/api/dashboard");
           if (!res) return;
           const data = await res.json();
@@ -2019,17 +2200,17 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać dashboardu</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
             return;
           }}
-
+    
           const summary = data.summary || {{}};
           const total = Number(summary.total || 0);
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <h2>Dashboard Helpdesk</h2>
               <p class="dashboard-section-title">Raport operacyjny dla operatorów i administratorów. Kliknij kafelek lub wiersz, aby przejść do listy zgłoszeń z odpowiednim filtrem.</p>
             </section>
-
+    
             <section class="dashboard-grid">
               <div class="dashboard-card" onclick="applyDashboardFilter('all','')">
                 <div class="num">${{summary.total || 0}}</div>
@@ -2052,17 +2233,17 @@ data:
                 <div class="label">Nieprzypisane</div>
               </div>
             </section>
-
+    
             <div class="grid">
               ${{dashboardList("Według statusu", data.by_status || [], total, "status")}}
               ${{dashboardList("Według priorytetu", data.by_priority || [], total, "priority")}}
             </div>
-
+    
             <div class="grid">
               ${{dashboardList("Według SLA", (data.by_sla || []).map(x => ({{...x, label: slaLabel(x.value)}})), total, "sla")}}
               ${{dashboardList("Według operatora", data.by_operator || [], total, "operator")}}
             </div>
-
+    
             <div class="grid">
               ${{dashboardList("Według kategorii", data.by_category || [], total, "category")}}
               ${{dashboardList("Według podkategorii", data.by_subcategory || [], total, "subcategory")}}
@@ -2070,8 +2251,8 @@ data:
             </div>
           `;
         }}
-
-
+    
+    
         function slaCalendarItem(t) {{
           const assigned = t.assigned_to_name || "Nieprzypisane";
           const due = t.sla_due_at || "-";
@@ -2092,12 +2273,12 @@ data:
             </button>
           `;
         }}
-
+    
         function slaCalendarSection(title, items) {{
           const rows = (items || []).length
             ? items.map(slaCalendarItem).join("")
             : `<p class="sla-calendar-empty">Brak zgłoszeń w tej sekcji.</p>`;
-
+    
           return `
             <section class="sla-calendar-section">
               <h3>${{esc(title)}} <span class="sla-calendar-count">${{(items || []).length}}</span></h3>
@@ -2105,7 +2286,7 @@ data:
             </section>
           `;
         }}
-
+    
         async function renderSlaCalendar(selectedSection = "overdue") {{
           currentView = {{ name: "sla-calendar", ticketId: null }};
           const me = await loadMe();
@@ -2114,20 +2295,20 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Kalendarz SLA jest dostępny dla operatorów i administratorów.</p></section>`;
             return;
           }}
-
+    
           const res = await api("/api/sla-calendar");
           if (!res) return;
           const data = await res.json();
-
+    
           if (!res.ok) {{
             appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać kalendarza SLA</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
             return;
           }}
-
+    
           const scopeText = data.scope === "admin"
             ? "Administrator widzi wszystkie aktywne zgłoszenia z terminem SLA."
             : "Operator widzi zgłoszenia przypisane do siebie oraz nieprzypisane zgłoszenia z terminem SLA.";
-
+    
           const sections = {{
             overdue: {{ title: "Przekroczone SLA", items: data.overdue || [], count: data.counts?.overdue || 0 }},
             today: {{ title: "Dzisiaj", items: data.today || [], count: data.counts?.today || 0 }},
@@ -2135,13 +2316,13 @@ data:
             next_7_days: {{ title: "Następne 7 dni", items: data.next_7_days || [], count: data.counts?.next_7_days || 0 }},
             next_30_days: {{ title: "Następne 30 dni", items: data.next_30_days || [], count: data.counts?.next_30_days || 0 }}
           }};
-
+    
           if (!sections[selectedSection]) {{
             selectedSection = "overdue";
           }}
-
+    
           const selected = sections[selectedSection];
-
+    
           function slaCalendarCard(key, label, count) {{
             return `
               <div class="dashboard-card ${{selectedSection === key ? "active" : ""}}" onclick="renderSlaCalendar('${{key}}')">
@@ -2150,7 +2331,7 @@ data:
               </div>
             `;
           }}
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
@@ -2159,7 +2340,7 @@ data:
               <p class="dashboard-section-title">${{scopeText}}</p>
               <p class="muted">Kliknij sekcję, aby wyświetlić odpowiadającą jej listę zgłoszeń.</p>
             </section>
-
+    
             <section class="dashboard-grid">
               ${{slaCalendarCard("overdue", "Przekroczone", sections.overdue.count)}}
               ${{slaCalendarCard("today", "Dzisiaj", sections.today.count)}}
@@ -2167,26 +2348,26 @@ data:
               ${{slaCalendarCard("next_7_days", "Następne 7 dni", sections.next_7_days.count)}}
               ${{slaCalendarCard("next_30_days", "Następne 30 dni", sections.next_30_days.count)}}
             </section>
-
+    
             <section class="sla-calendar-grid">
               ${{slaCalendarSection(selected.title, selected.items)}}
             </section>
           `;
         }}
-
+    
         async function renderProfile() {{
           const me = await loadMe();
           if (!me) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
               <h2>Mój profil</h2>
               <p class="muted">Zmień dane profilu albo hasło zalogowanego użytkownika. Sesja pozostaje osobna dla tej karty przeglądarki.</p>
             </section>
-
+    
             <section class="card">
               <h3>Dane użytkownika</h3>
               <p id="profileMessage" class="success hidden">Profil został zapisany.</p>
@@ -2201,17 +2382,17 @@ data:
                     <input name="last_name" value="${{esc(me.last_name)}}" required>
                   </div>
                 </div>
-
+    
                 <label>E-mail</label>
                 <input value="${{esc(me.email)}}" disabled>
-
+    
                 <label>Dział</label>
                 <select name="department">${{meta.departments.map(x => `<option ${{x === me.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-
+    
                 <button type="submit">Zapisz profil</button>
               </form>
             </section>
-
+    
             <section class="card">
               <h3>Zmiana hasła</h3>
               <p id="passwordMessage" class="success hidden">Hasło zostało zmienione.</p>
@@ -2219,17 +2400,17 @@ data:
               <form id="passwordForm">
                 <label>Obecne hasło</label>
                 <input name="current_password" type="password" required>
-
+    
                 <label>Nowe hasło</label>
                 <input name="new_password" type="password" minlength="8" required>
-
+    
                 <label>Powtórz nowe hasło</label>
                 <input name="confirm_password" type="password" minlength="8" required>
-
+    
                 <button type="submit">Zmień hasło</button>
               </form>
             </section>`;
-
+    
           document.getElementById("profileForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
             const payload = Object.fromEntries(new FormData(e.target).entries());
@@ -2238,7 +2419,7 @@ data:
             document.getElementById("profileMessage").classList.remove("hidden");
             await loadMe();
           }});
-
+    
           document.getElementById("passwordForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
             const payload = Object.fromEntries(new FormData(e.target).entries());
@@ -2262,7 +2443,7 @@ data:
             msg.classList.remove("hidden");
           }});
         }}
-
+    
         async function renderAdminUsers() {{
           const me = await loadMe();
           if (!me) return;
@@ -2270,12 +2451,12 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Tylko administrator może zarządzać użytkownikami.</p></section>`;
             return;
           }}
-
+    
           const res = await api("/api/admin/users");
           if (!res) return;
           if (!res.ok) {{ appEl.innerHTML = `<section class="card"><h2>Błąd pobierania użytkowników</h2></section>`; return; }}
           const data = await res.json();
-
+    
           const rows = data.users.map(u => `
             <tr>
               <td><strong>${{esc(u.first_name)}} ${{esc(u.last_name)}}</strong><br><span class="muted">${{esc(u.email)}}</span></td>
@@ -2290,7 +2471,7 @@ data:
                 </div>
               </td>
             </tr>`).join("");
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
@@ -2306,23 +2487,23 @@ data:
               </table>
             </section>`;
         }}
-
+    
         async function renderAdminUserForm(encodedEmail = null) {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
-
+    
           let user = {{ first_name: "", last_name: "", email: "", department: meta.departments[0], role: "user" }};
           const editing = !!encodedEmail;
-
+    
           if (editing) {{
             const email = decodeURIComponent(encodedEmail);
             const res = await api(`/api/admin/users/${{encodeURIComponent(email)}}`);
             if (!res || !res.ok) {{ alert("Nie udało się pobrać użytkownika."); return; }}
             user = await res.json();
           }}
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderAdminUsers()">← Użytkownicy</button>
@@ -2340,13 +2521,13 @@ data:
                     <input name="last_name" value="${{esc(user.last_name)}}" required>
                   </div>
                 </div>
-
+    
                 <label>E-mail</label>
                 <input name="email" type="email" value="${{esc(user.email)}}" ${{editing ? "disabled" : "required"}} placeholder="jan.kowalski@incoprp.local">
-
+    
                 <label>Dział</label>
                 <select name="department">${{meta.departments.map(x => `<option ${{x === user.department ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-
+    
                 <label>Role</label>
                 <div class="card" style="padding:12px;margin-bottom:12px">
                   <input type="hidden" name="roles" value="user">
@@ -2354,17 +2535,17 @@ data:
                   <label><input type="checkbox" name="roles" value="operator" ${{(user.roles || []).includes("operator") ? "checked" : ""}}> operator <span class="muted">— obsługa i przypisywanie zgłoszeń</span></label>
                   <label><input type="checkbox" name="roles" value="admin" ${{(user.roles || []).includes("admin") ? "checked" : ""}}> admin <span class="muted">— zarządzanie użytkownikami</span></label>
                 </div>
-
+    
                 ${{editing ? "" : `
                   <label>Hasło startowe</label>
                   <input name="password" type="password" minlength="8" required placeholder="minimum 8 znaków">
                 `}}
-
+    
                 <button type="submit">Zapisz</button>
                 <button type="button" class="btn-secondary" onclick="renderAdminUsers()">Anuluj</button>
               </form>
             </section>`;
-
+    
           document.getElementById("adminUserForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
             const formData = new FormData(e.target);
@@ -2387,7 +2568,7 @@ data:
             setTimeout(renderAdminUsers, 500);
           }});
         }}
-
+    
         async function renderAdminPasswordForm(encodedEmail) {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) return;
@@ -2431,7 +2612,7 @@ data:
             msg.classList.remove("hidden");
           }});
         }}
-
+    
         async function deleteAdminUser(encodedEmail) {{
           const email = decodeURIComponent(encodedEmail);
           if (!confirm(`Usunąć użytkownika ${{email}}? Tej operacji nie można cofnąć.`)) return;
@@ -2443,8 +2624,233 @@ data:
           }}
           await renderAdminUsers();
         }}
-
-
+    
+    
+        function workflowStepsText(workflow) {{
+          return (workflow.steps || []).map(s => s.step_name || s).join("\\n");
+        }}
+    
+        function workflowMatchLabel(workflow) {{
+          const category = workflow.category === "*" ? "dowolna kategoria" : workflow.category;
+          const subcategory = workflow.subcategory === "*" ? "dowolna podkategoria" : workflow.subcategory;
+          return `${{esc(category)}} / ${{esc(subcategory)}}`;
+        }}
+    
+        async function renderAdminWorkflows() {{
+          const me = await loadMe();
+          if (!me || !isAdmin(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Tylko administrator może zarządzać workflow.</p></section>`;
+            return;
+          }}
+    
+          const res = await api("/api/admin/workflows");
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Błąd pobierania workflow</h2></section>`;
+            return;
+          }}
+          const data = await res.json();
+    
+          const rows = (data.workflows || []).map(w => `
+            <tr>
+              <td>
+                <strong>${{esc(w.name)}}</strong><br>
+                <span class="muted">${{esc(w.workflow_key)}}</span>
+              </td>
+              <td>${{workflowMatchLabel(w)}}</td>
+              <td>
+                ${{w.is_default ? `<span class="status-badge status-progress">Domyślny</span>` : ""}}
+                ${{w.is_active ? `<span class="status-badge status-new">Aktywny</span>` : `<span class="status-badge status-closed">Nieaktywny</span>`}}
+              </td>
+              <td>${{w.ticket_count || 0}}</td>
+              <td>
+                <div class="actions">
+                  <button class="btn-secondary btn-small" onclick="renderAdminWorkflowForm(${{w.id}})">Edytuj</button>
+                  <button class="btn-danger btn-small" onclick="deleteAdminWorkflow(${{w.id}}, ${{w.ticket_count || 0}})">Usuń/dezaktywuj</button>
+                </div>
+              </td>
+            </tr>
+          `).join("");
+    
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <h2>Workflow zgłoszeń</h2>
+              <p class="muted">Workflow określa proces obsługi zgłoszenia zależnie od kategorii i podkategorii. Na tym etapie edytujemy nazwę, dopasowanie i listę kroków/statusów.</p>
+              <button onclick="renderAdminWorkflowForm()">Dodaj workflow</button>
+            </section>
+            <section class="card">
+              <h3>Definicje workflow</h3>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Workflow</th>
+                    <th>Dopasowanie</th>
+                    <th>Status</th>
+                    <th>Zgłoszenia</th>
+                    <th>Akcje</th>
+                  </tr>
+                </thead>
+                <tbody>${{rows || `<tr><td colspan="5" class="muted">Brak workflow.</td></tr>`}}</tbody>
+              </table>
+            </section>
+          `;
+        }}
+    
+        function updateWorkflowSubcategoryOptions(meta, selectedCategory, selectedSubcategory = "*") {{
+          const select = document.getElementById("workflowSubcategorySelect");
+          if (!select) return;
+          const subcategories = selectedCategory === "*"
+            ? ["*"]
+            : ["*", ...(meta.subcategories[selectedCategory] || ["Inne"])];
+          select.innerHTML = subcategories.map(s => `
+            <option value="${{esc(s)}}" ${{s === selectedSubcategory ? "selected" : ""}}>
+              ${{s === "*" ? "Dowolna podkategoria" : esc(s)}}
+            </option>
+          `).join("");
+        }}
+    
+        async function renderAdminWorkflowForm(workflowId = null) {{
+          const me = await loadMe();
+          if (!me || !isAdmin(me)) return;
+    
+          const metaRes = await api("/api/meta");
+          const meta = await metaRes.json();
+    
+          let workflow = {{
+            id: null,
+            workflow_key: "",
+            name: "",
+            category: "*",
+            subcategory: "*",
+            is_default: false,
+            is_active: true,
+            ticket_count: 0,
+            steps: [
+              {{ step_name: "Nowe" }},
+              {{ step_name: "Otwarte" }},
+              {{ step_name: "W trakcie" }},
+              {{ step_name: "Oczekuje na użytkownika" }},
+              {{ step_name: "Rozwiązane" }},
+              {{ step_name: "Zamknięte" }}
+            ]
+          }};
+    
+          const editing = !!workflowId;
+          if (editing) {{
+            const res = await api(`/api/admin/workflows/${{workflowId}}`);
+            if (!res || !res.ok) {{
+              alert("Nie udało się pobrać workflow.");
+              return;
+            }}
+            workflow = await res.json();
+          }}
+    
+          const categoryOptions = ["*", ...meta.categories].map(c => `
+            <option value="${{esc(c)}}" ${{c === workflow.category ? "selected" : ""}}>
+              ${{c === "*" ? "Dowolna kategoria" : esc(c)}}
+            </option>
+          `).join("");
+    
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              <h2>${{editing ? "Edytuj workflow" : "Dodaj workflow"}}</h2>
+              <p class="muted">Podaj dopasowanie kategorii/podkategorii oraz kroki procesu. Każdy krok wpisz w osobnej linii.</p>
+              <p id="workflowMessage" class="success hidden">Zapisano workflow.</p>
+              <p id="workflowError" class="error hidden">Nie udało się zapisać workflow.</p>
+    
+              <form id="workflowForm">
+                <label>Nazwa workflow</label>
+                <input name="name" value="${{esc(workflow.name)}}" required placeholder="np. Naprawa sprzętu komputerowego">
+    
+                <label>Klucz workflow</label>
+                <input name="workflow_key" value="${{esc(workflow.workflow_key)}}" ${{editing ? "disabled" : ""}} placeholder="automatycznie z nazwy, jeśli zostawisz puste">
+                <div class="attachment-upload-hint">Klucz jest technicznym identyfikatorem. Po utworzeniu workflow nie zmieniamy go, żeby istniejące zgłoszenia zachowały powiązanie.</div>
+    
+                <div class="grid">
+                  <div>
+                    <label>Kategoria</label>
+                    <select id="workflowCategorySelect" name="category">${{categoryOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Podkategoria</label>
+                    <select id="workflowSubcategorySelect" name="subcategory"></select>
+                  </div>
+                </div>
+    
+                <div class="card" style="padding:12px;margin-bottom:12px">
+                  <label><input type="checkbox" name="is_active" ${{workflow.is_active ? "checked" : ""}}> Aktywny</label>
+                  <label><input type="checkbox" name="is_default" ${{workflow.is_default ? "checked" : ""}}> Workflow domyślny</label>
+                  <div class="attachment-upload-hint">Workflow domyślny jest używany, gdy nie ma dopasowania do kategorii lub podkategorii.</div>
+                </div>
+    
+                <label>Kroki / statusy workflow</label>
+                <textarea name="steps" rows="10" required>${{esc(workflowStepsText(workflow))}}</textarea>
+                <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
+    
+                ${{editing && workflow.ticket_count > 0 ? `
+                  <div class="readonly-box">
+                    Ten workflow jest używany przez <strong>${{workflow.ticket_count}}</strong> zgłoszeń.
+                    Edycja kroków wpłynie na dostępne statusy tych zgłoszeń.
+                  </div>
+                ` : ""}}
+    
+                <button type="submit">Zapisz workflow</button>
+                <button type="button" class="btn-secondary" onclick="renderAdminWorkflows()">Anuluj</button>
+              </form>
+            </section>
+          `;
+    
+          updateWorkflowSubcategoryOptions(meta, workflow.category, workflow.subcategory);
+    
+          document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
+            updateWorkflowSubcategoryOptions(meta, e.target.value, "*");
+          }});
+    
+          document.getElementById("workflowForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const payload = Object.fromEntries(formData.entries());
+            payload.is_active = formData.get("is_active") === "on";
+            payload.is_default = formData.get("is_default") === "on";
+            payload.steps = payload.steps || "";
+    
+            const endpoint = editing ? `/api/admin/workflows/${{workflow.id}}` : "/api/admin/workflows";
+            const method = editing ? "PUT" : "POST";
+            const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
+            const msg = document.getElementById("workflowMessage");
+            const err = document.getElementById("workflowError");
+            msg.classList.add("hidden");
+            err.classList.add("hidden");
+    
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              err.textContent = data.error || "Nie udało się zapisać workflow.";
+              err.classList.remove("hidden");
+              return;
+            }}
+    
+            msg.classList.remove("hidden");
+            setTimeout(renderAdminWorkflows, 600);
+          }});
+        }}
+    
+        async function deleteAdminWorkflow(workflowId, ticketCount = 0) {{
+          const message = ticketCount > 0
+            ? "Ten workflow jest używany przez zgłoszenia, więc zostanie dezaktywowany. Kontynuować?"
+            : "Usunąć workflow? Tej operacji nie można cofnąć.";
+          if (!confirm(message)) return;
+    
+          const res = await api(`/api/admin/workflows/${{workflowId}}`, {{ method: "DELETE" }});
+          if (!res || !res.ok) {{
+            const data = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(data.error || "Nie udało się usunąć/dezaktywować workflow.");
+            return;
+          }}
+          await renderAdminWorkflows();
+        }}
+    
+    
         function auditActionLabel(action) {{
           const map = {{
             "user_created": "Utworzono użytkownika",
@@ -2456,11 +2862,15 @@ data:
             "ticket_watcher_added": "Dodano obserwatora",
             "ticket_watcher_removed": "Usunięto obserwatora",
             "internal_note_added": "Dodano notatkę wewnętrzną",
-            "attachment_added": "Dodano załącznik"
+            "attachment_added": "Dodano załącznik",
+            "workflow_created": "Utworzono workflow",
+            "workflow_updated": "Zmieniono workflow",
+            "workflow_deactivated": "Dezaktywowano workflow",
+            "workflow_deleted": "Usunięto workflow"
           }};
           return map[action] || action;
         }}
-
+    
         function formatAuditDetails(details) {{
           if (!details) return "";
           try {{
@@ -2472,13 +2882,13 @@ data:
             return esc(details);
           }}
         }}
-
+    
         function auditPaginationControls(pagination) {{
           const page = Number(pagination.page || 1);
           const totalPages = Number(pagination.total_pages || 1);
           const disabledPrev = page <= 1 ? "disabled" : "";
           const disabledNext = page >= totalPages ? "disabled" : "";
-
+    
           return `
             <div class="pagination">
               <div class="pagination-info">
@@ -2494,7 +2904,7 @@ data:
             </div>
           `;
         }}
-
+    
         async function renderAudit(page = 1) {{
           currentView = {{ name: "audit", ticketId: null }};
           const me = await loadMe();
@@ -2503,19 +2913,19 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Audyt jest dostępny tylko dla administratorów.</p></section>`;
             return;
           }}
-
+    
           const q = sessionStorage.getItem("helpdesk_audit_q") || "";
           const action = sessionStorage.getItem("helpdesk_audit_action") || "all";
           const actor = sessionStorage.getItem("helpdesk_audit_actor") || "all";
           const pageSize = sessionStorage.getItem("helpdesk_audit_page_size") || "25";
-
+    
           const params = new URLSearchParams();
           if (q) params.set("q", q);
           if (action && action !== "all") params.set("action", action);
           if (actor && actor !== "all") params.set("actor", actor);
           params.set("page", String(page));
           params.set("page_size", String(pageSize));
-
+    
           const res = await api(`/api/audit?${{params.toString()}}`);
           if (!res) return;
           const data = await res.json();
@@ -2523,7 +2933,7 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Błąd pobierania audytu</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
             return;
           }}
-
+    
           const rows = (data.audit || []).length
             ? data.audit.map(a => `
               <tr>
@@ -2535,22 +2945,22 @@ data:
               </tr>
             `).join("")
             : `<tr><td colspan="5" class="muted">Brak wpisów audytu dla wybranych filtrów.</td></tr>`;
-
+    
           const actionOptions = [`<option value="all">Wszystkie akcje</option>`]
             .concat((data.actions || []).map(a => `<option value="${{esc(a)}}" ${{a === action ? "selected" : ""}}>${{esc(auditActionLabel(a))}}</option>`))
             .join("");
-
+    
           const actorOptions = [`<option value="all">Wszyscy aktorzy</option>`]
             .concat((data.actors || []).map(a => `<option value="${{esc(a)}}" ${{a === actor ? "selected" : ""}}>${{esc(a)}}</option>`))
             .join("");
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <h2>Audyt działań</h2>
               <p class="muted">Ślad działań administracyjnych i operatorskich: użytkownicy, role, przypisania, obserwatorzy, statusy, notatki wewnętrzne i załączniki.</p>
             </section>
-
+    
             <section class="card">
               <h3>Filtry audytu</h3>
               <div class="filter-grid">
@@ -2583,7 +2993,7 @@ data:
                 </div>
               </div>
             </section>
-
+    
             <section class="card">
               <h3>Wpisy audytu</h3>
               ${{auditPaginationControls(data.pagination || {{ page: 1, total_pages: 1, total_filtered: 0 }})}}
@@ -2596,29 +3006,29 @@ data:
               ${{auditPaginationControls(data.pagination || {{ page: 1, total_pages: 1, total_filtered: 0 }})}}
             </section>
           `;
-
+    
           document.getElementById("auditSearchForm").addEventListener("submit", (e) => {{
             e.preventDefault();
             sessionStorage.setItem("helpdesk_audit_q", document.getElementById("audit-search-input").value.trim());
             renderAudit(1);
           }});
-
+    
           document.getElementById("audit-action-filter").addEventListener("change", (e) => {{
             sessionStorage.setItem("helpdesk_audit_action", e.target.value);
             renderAudit(1);
           }});
-
+    
           document.getElementById("audit-actor-filter").addEventListener("change", (e) => {{
             sessionStorage.setItem("helpdesk_audit_actor", e.target.value);
             renderAudit(1);
           }});
-
+    
           document.getElementById("audit-page-size").addEventListener("change", (e) => {{
             sessionStorage.setItem("helpdesk_audit_page_size", e.target.value);
             renderAudit(1);
           }});
         }}
-
+    
         function clearAuditFilters() {{
           sessionStorage.removeItem("helpdesk_audit_q");
           sessionStorage.removeItem("helpdesk_audit_action");
@@ -2626,16 +3036,16 @@ data:
           sessionStorage.removeItem("helpdesk_audit_page_size");
           renderAudit(1);
         }}
-
-
+    
+    
         async function renderHome(statusFilters = loadStatusFilters(), fromLive = false) {{
           currentView = {{ name: "home", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
-
+    
           const filters = Array.isArray(statusFilters) ? statusFilters : [];
           saveStatusFilters(filters);
-
+    
           const assignedFilter = canWorkTickets(me) ? loadAssignedFilter(me) : "all";
           const priorityFilter = loadPriorityFilter();
           const slaFilter = loadSlaFilter();
@@ -2644,7 +3054,7 @@ data:
           const sortOrder = loadTicketOrder();
           const page = loadTicketPage();
           const pageSize = loadTicketPageSize();
-
+    
           const params = new URLSearchParams();
           if (filters.length) params.set("statuses", filters.join(","));
           if (canWorkTickets(me)) params.set("assigned", assignedFilter);
@@ -2655,7 +3065,7 @@ data:
           params.set("order", sortOrder);
           params.set("page", String(page));
           params.set("page_size", String(pageSize));
-
+    
           const query = params.toString() ? `?${{params.toString()}}` : "";
           const res = await api(`/api/tickets${{query}}`);
           if (!res) return;
@@ -2664,7 +3074,7 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Błąd pobierania zgłoszeń</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
             return;
           }}
-
+    
           const scope = canWorkTickets(me) ? "Zgłoszenia" : "Moje zgłoszenia";
           const activeFilterCount = filters.length + (canWorkTickets(me) && assignedFilter !== "all" ? 1 : 0) + (priorityFilter !== "all" ? 1 : 0) + (slaFilter !== "all" ? 1 : 0) + (searchQuery ? 1 : 0);
           const filterSummary = [];
@@ -2676,13 +3086,13 @@ data:
           const filteredLabel = filterSummary.length ? ` · ${{filterSummary.join(" · ")}}` : "";
           const pagination = data.pagination || {{ page: 1, page_size: pageSize, total_pages: 1, total_filtered: data.tickets.length }};
           if (pagination.page !== page) saveTicketPage(pagination.page);
-
+    
           const statusChecks = data.statuses.map(s => `
             <label class="combo-option">
               <input type="checkbox" ${{filters.includes(s) ? "checked" : ""}} onchange="toggleStatusFilter('${{esc(s)}}')">
               <span class="pill ${{statusClass(s)}}">${{esc(s)}}</span>
             </label>`).join("");
-
+    
           const assignedSelect = canWorkTickets(me) ? `
             <div class="filter-field">
               <label>Przypisane do</label>
@@ -2693,7 +3103,7 @@ data:
                 ${{(data.operators || []).map(op => `<option value="${{esc(op.email)}}" ${{assignedFilter === op.email ? "selected" : ""}}>${{esc(op.name)}} · ${{esc(op.email)}}</option>`).join("")}}
               </select>
             </div>` : "";
-
+    
           const prioritySelect = `
             <div class="filter-field">
               <label>Priorytet</label>
@@ -2702,7 +3112,7 @@ data:
                 ${{(data.priorities || []).map(p => `<option value="${{esc(p)}}" ${{priorityFilter === p ? "selected" : ""}}>${{esc(p)}}</option>`).join("")}}
               </select>
             </div>`;
-
+    
           const slaSelect = `
             <div class="filter-field">
               <label>SLA</label>
@@ -2715,9 +3125,9 @@ data:
                 <option value="none" ${{slaFilter === "none" ? "selected" : ""}}>Brak SLA</option>
               </select>
             </div>`;
-
+    
           const workViewsHtml = renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
-
+    
           const searchSortControls = `
             <div class="filter-grid" style="margin-top:14px">
               <div class="filter-field" style="grid-column: span 2">
@@ -2756,7 +3166,7 @@ data:
                 </select>
               </div>
             </div>`;
-
+    
           const rows = data.tickets.length ? data.tickets.map(t => `
             <tr>
               <td>#${{t.id}}</td>
@@ -2769,14 +3179,14 @@ data:
               <td><span class="sla-badge ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span><br><span class="muted">${{esc(t.sla_due_at || "")}}</span></td>
               <td class="muted">${{esc(t.created_at)}}</td>
             </tr>`).join("") : `<tr><td colspan="9" class="muted">Brak zgłoszeń dla wybranych filtrów.</td></tr>`;
-
+    
           const totalFiltered = Number(pagination.total_filtered || 0);
           const currentPage = Number(pagination.page || 1);
           const currentPageSize = Number(pagination.page_size || pageSize || 10);
           const totalPages = Number(pagination.total_pages || 1);
           const firstItem = totalFiltered === 0 ? 0 : ((currentPage - 1) * currentPageSize) + 1;
           const lastItem = Math.min(totalFiltered, currentPage * currentPageSize);
-
+    
           const pageControls = `
             <div class="pagination">
               <div class="pagination-info">
@@ -2787,7 +3197,7 @@ data:
                 ${{buildPaginationButtons(pagination)}}
               </div>
             </div>`;
-
+    
           appEl.innerHTML = `
             <section class="stats">
               <div class="stat"><div class="num">${{data.stats.total}}</div><div class="label">${{scope}}</div></div>
@@ -2800,7 +3210,7 @@ data:
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
-              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
+              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAdminWorkflows()">Workflow</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
               <div style="margin-top:16px">
                 <strong>Widoki robocze:</strong>
                 ${{workViewsHtml}}
@@ -2841,7 +3251,7 @@ data:
               ${{pageControls}}
             </section>`;
         }}
-
+    
         async function renderNewTicket() {{
           currentView = {{ name: "new-ticket", ticketId: null }};
           const me = await loadMe();
@@ -2877,11 +3287,11 @@ data:
                 </div>
                 <label>Priorytet</label>
                 <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
-
+    
                 <label>Załączniki opcjonalne</label>
                 <input type="file" name="attachments" multiple accept=".png,.jpg,.jpeg,.gif,.pdf,.txt,.log,.csv,.xlsx,.docx">
                 <p class="muted">Możesz dodać screenshot, PDF, log lub dokument. Maksymalnie 10 MB na plik. Załączniki zostaną zapisane automatycznie po kliknięciu „Utwórz zgłoszenie”.</p>
-
+    
                 <button type="submit">Utwórz zgłoszenie</button>
                 <button type="button" class="btn-secondary" onclick="renderHome()">Anuluj</button>
               </form>
@@ -2890,7 +3300,7 @@ data:
           document.getElementById("new-ticket-category").addEventListener("change", () => updateSubcategorySelect(meta));
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }}
-
+    
         async function createTicket(event) {{
           event.preventDefault();
           const form = event.target;
@@ -2903,37 +3313,37 @@ data:
             subcategory: formData.get("subcategory") || "Inne",
             priority: formData.get("priority") || "Normalny"
           }};
-
+    
           suppressNextLiveRefresh = true;
           const res = await api("/api/tickets", {{ method: "POST", body: JSON.stringify(payload) }});
           if (!res) return;
           if (!res.ok) {{ alert("Nie udało się utworzyć zgłoszenia."); return; }}
-
+    
           const created = await res.json();
           const ticketId = created.id;
-
+    
           if (files.length > 0) {{
             for (const file of files) {{
               const uploadData = new FormData();
               uploadData.append("file", file);
-
+    
               const uploadRes = await fetch(`/api/tickets/${{ticketId}}/attachments`, {{
                 method: "POST",
                 headers: {{ "X-Helpdesk-Session": getSid() }},
                 body: uploadData
               }});
-
+    
               if (!uploadRes.ok) {{
                 const err = await uploadRes.json().catch(() => ({{ error: "Nie udało się dodać załącznika." }}));
                 showToast("Zgłoszenie utworzone, ale nie dodano załącznika", err.error || "Błąd uploadu");
               }}
             }}
           }}
-
+    
           showToast("Zgłoszenie zostało utworzone", files.length ? `Dodano załączniki: ${{files.length}}` : "");
           await renderHome();
         }}
-
+    
         async function renderTicket(id, fromLive = false) {{
           currentView = {{ name: "ticket", ticketId: Number(id) }};
           const me = await loadMe();
@@ -2953,7 +3363,7 @@ data:
               <div>${{esc(c.content)}}</div>
             </div>
           `).join("") || `<p class="muted">Brak komentarzy.</p>`;
-
+    
           const statusPanel = canWorkTickets(me) && !isClosed ? `
             <section class="card">
               <h3>Zmień status</h3>
@@ -2963,7 +3373,7 @@ data:
                 <button type="submit">Zapisz status</button>
               </form>
             </section>` : "";
-
+    
           const assignmentPanel = canWorkTickets(me) && !isClosed ? `
             <section class="card">
               <h3>Przypisanie zgłoszenia</h3>
@@ -2976,14 +3386,14 @@ data:
                 <button type="submit">Zapisz przypisanie</button>
               </form>
             </section>` : "";
-
+    
           const reopenPanel = isClosed && isAdmin(me) ? `
             <section class="card">
               <h3>Ponowne otwarcie zgłoszenia</h3>
               <p class="muted">Tylko administrator może otworzyć zamknięte zgłoszenie ponownie. Wymagany jest powód, który zostanie zapisany w historii i audycie.</p>
               <button onclick="openReopenTicketModal(${{t.id}})">Otwórz ponownie</button>
             </section>` : "";
-
+    
           const watcherEmails = new Set((data.watchers || []).map(w => String(w.email || "").toLowerCase()));
           const watcherList = (data.watchers || []).length
             ? `<div class="watcher-list">${{data.watchers.map(w => `
@@ -2995,12 +3405,12 @@ data:
                   ${{canWorkTickets(me) && !isClosed ? `<button class="btn-secondary btn-small" onclick="removeWatcher(${{t.id}}, '${{esc(w.email)}}')">Usuń</button>` : ""}}
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak dodatkowych obserwatorów.</p>`;
-
+    
           const watcherOptions = (data.meta.watcher_candidates || [])
             .filter(w => !watcherEmails.has(String(w.email || "").toLowerCase()) && String(w.email || "").toLowerCase() !== String(t.requester_email || "").toLowerCase())
             .map(w => `<option value="${{esc(w.email)}}">${{esc(w.name)}} · ${{esc(w.email)}} · ${{esc((w.roles || []).join(", "))}}</option>`)
             .join("");
-
+    
           const linkedTickets = (data.linked_tickets || []).length
             ? `<div class="watcher-list">${{data.linked_tickets.map(l => `
                 <div class="watcher-item">
@@ -3015,7 +3425,7 @@ data:
                   ${{canWorkTickets(me) && !isClosed ? `<button class="btn-secondary btn-small" onclick="removeTicketLink(${{t.id}}, ${{l.id}})">Usuń</button>` : ""}}
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak powiązanych zgłoszeń.</p>`;
-
+    
           const linkedTicketsPanel = `
             <section class="card">
               <h3>Powiązane zgłoszenia</h3>
@@ -3029,7 +3439,7 @@ data:
                 </form>
               ` : ""}}
             </section>`;
-
+    
           const watcherPanel = `
             <section class="card">
               <h3>Obserwatorzy</h3>
@@ -3046,7 +3456,7 @@ data:
                 </form>
               ` : ""}}
             </section>`;
-
+    
           const eventHistory = (data.events || []).length
             ? `<div class="timeline">${{data.events.map(e => `
                 <div class="event-item">
@@ -3055,7 +3465,7 @@ data:
                   <div>${{esc(e.message)}}</div>
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak historii zmian.</p>`;
-
+    
           const attachmentList = (data.attachments || []).length
             ? `<div class="attachment-list">${{data.attachments.map(a => `
                 <div class="attachment-item">
@@ -3068,7 +3478,7 @@ data:
                   <button class="btn-secondary btn-small" onclick="downloadAttachment(${{a.id}})">Pobierz</button>
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak załączników.</p>`;
-
+    
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Powrót</button>
@@ -3140,7 +3550,7 @@ data:
                 </form>
               ` : `<p class="muted">Zgłoszenie zamknięte — dodawanie komentarzy jest zablokowane.</p>`}}
             </section>`;
-
+    
           const attachmentForm = document.getElementById("attachmentForm");
           if (attachmentForm) {{
             attachmentForm.addEventListener("submit", async (e) => {{
@@ -3167,7 +3577,7 @@ data:
               await renderTicket(id);
             }});
           }}
-
+    
           const commentForm = document.getElementById("commentForm");
           if (commentForm) {{
             commentForm.addEventListener("submit", async (e) => {{
@@ -3181,7 +3591,7 @@ data:
               await renderTicket(id);
             }});
           }}
-
+    
           const statusForm = document.getElementById("statusForm");
           if (statusForm) {{
             statusForm.addEventListener("submit", async (e) => {{
@@ -3206,7 +3616,7 @@ data:
               await renderTicket(id);
             }});
           }}
-
+    
           const assignmentForm = document.getElementById("assignmentForm");
           if (assignmentForm) {{
             assignmentForm.addEventListener("submit", async (e) => {{
@@ -3223,7 +3633,7 @@ data:
               await renderTicket(id);
             }});
           }}
-
+    
           const ticketLinkForm = document.getElementById("ticketLinkForm");
           if (ticketLinkForm) {{
             ticketLinkForm.addEventListener("submit", async (e) => {{
@@ -3245,7 +3655,7 @@ data:
               await renderTicket(id);
             }});
           }}
-
+    
           const watcherForm = document.getElementById("watcherForm");
           if (watcherForm) {{
             watcherForm.addEventListener("submit", async (e) => {{
@@ -3268,7 +3678,7 @@ data:
             }});
           }}
         }}
-
+    
         async function removeTicketLink(ticketId, linkedTicketId) {{
           if (!confirm("Usunąć powiązanie z tym zgłoszeniem?")) return;
           suppressNextLiveRefresh = true;
@@ -3282,7 +3692,7 @@ data:
           showToast("Usunięto powiązanie ze zgłoszenia #" + ticketId);
           await renderTicket(ticketId);
         }}
-
+    
         async function removeWatcher(ticketId, email) {{
           if (!confirm("Usunąć obserwatora z tego zgłoszenia?")) return;
           suppressNextLiveRefresh = true;
@@ -3296,58 +3706,58 @@ data:
           showToast("Usunięto obserwatora ze zgłoszenia #" + ticketId);
           await renderTicket(ticketId);
         }}
-
+    
         const closeTicketForm = document.getElementById("closeTicketForm");
         if (closeTicketForm) {{
           closeTicketForm.addEventListener("submit", async (e) => {{
             e.preventDefault();
             if (!closeTicketId) return;
-
+    
             const formData = new FormData(closeTicketForm);
             const internalToggle = document.getElementById("close-comment-internal");
             formData.set("visibility", internalToggle && internalToggle.checked ? "internal" : "public");
-
+    
             suppressNextLiveRefresh = true;
             const res = await fetch(`/api/tickets/${{closeTicketId}}/close`, {{
               method: "POST",
               headers: {{ "X-Helpdesk-Session": getSid() }},
               body: formData
             }});
-
+    
             if (res.status === 401) {{
               clearSid();
               window.location.href = "/login";
               return;
             }}
-
+    
             if (!res.ok) {{
               suppressNextLiveRefresh = false;
               const err = await res.json().catch(() => ({{ error: "Nie udało się zamknąć zgłoszenia." }}));
               alert(err.error || "Nie udało się zamknąć zgłoszenia.");
               return;
             }}
-
+    
             const closedId = closeTicketId;
             closeCloseTicketModal();
             showToast("Zgłoszenie #" + closedId + " zostało zamknięte");
             await renderTicket(closedId);
           }});
         }}
-
+    
         const reopenTicketForm = document.getElementById("reopenTicketForm");
         if (reopenTicketForm) {{
           reopenTicketForm.addEventListener("submit", async (e) => {{
             e.preventDefault();
             if (!reopenTicketId) return;
-
+    
             const payload = Object.fromEntries(new FormData(reopenTicketForm).entries());
             payload.reason = String(payload.reason || "").trim();
-
+    
             if (!payload.reason) {{
               alert("Podaj powód ponownego otwarcia zgłoszenia.");
               return;
             }}
-
+    
             suppressNextLiveRefresh = true;
             const res = await api(`/api/tickets/${{reopenTicketId}}/reopen`, {{ method: "POST", body: JSON.stringify(payload) }});
             if (!res || !res.ok) {{
@@ -3356,20 +3766,20 @@ data:
               alert(err.error || "Nie udało się otworzyć zgłoszenia ponownie.");
               return;
             }}
-
+    
             const reopenedId = reopenTicketId;
             closeReopenTicketModal();
             showToast("Zgłoszenie #" + reopenedId + " zostało otwarte ponownie");
             await renderTicket(reopenedId);
           }});
         }}
-
+    
         renderHome();
       </script>
     </body>
     </html>
     """
-
+    
     LOGIN_HTML = f"""
     <!doctype html>
     <html lang="pl">
@@ -3425,7 +3835,7 @@ data:
     </body>
     </html>
     """
-
+    
     @sock.route("/ws")
     def websocket(ws):
         client_id = id(ws)
@@ -3438,15 +3848,15 @@ data:
             if not user:
                 ws.send(json.dumps({"error": "unauthorized"}))
                 return
-
+    
             active_ws_clients.add(client_id)
             publish_event(f"{user['name']} połączony z live helpdesk", "presence")
-
+    
             while True:
                 event = last_live_event
                 if event and event.get("staff_only") and not is_staff(user):
                     event = None
-
+    
                 ws.send(json.dumps({
                     "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "active_clients": len(active_ws_clients),
@@ -3463,25 +3873,25 @@ data:
             pass
         finally:
             active_ws_clients.discard(client_id)
-
+    
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
-
+    
     @app.get("/login")
     def login_page():
         return Response(LOGIN_HTML, mimetype="text/html")
-
+    
     @app.get("/")
     def spa_page():
         return Response(SPA_HTML, mimetype="text/html")
-
+    
     @app.post("/api/login")
     def api_login():
         payload = request.get_json(silent=True) or {}
         email = clean(payload.get("email")).lower()
         password = str(payload.get("password") or "")
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -3494,20 +3904,20 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "invalid credentials"}), 401
-
+    
         first_name, last_name, user_email, department, role, password_hash, roles = user
         roles = list(roles or ["user"])
         if not check_password_hash(password_hash, password):
             cur.close()
             conn.close()
             return jsonify({"error": "invalid credentials"}), 401
-
+    
         sid = str(uuid.uuid4())
         cur.execute("INSERT INTO user_sessions (sid, user_email) VALUES (%s, %s)", (sid, user_email))
         conn.commit()
         cur.close()
         conn.close()
-
+    
         return jsonify({
             "sid": sid,
             "user": {
@@ -3520,7 +3930,7 @@ data:
                 "roles": roles,
             }
         })
-
+    
     @app.post("/api/logout")
     def api_logout():
         sid = get_sid_from_request()
@@ -3532,12 +3942,12 @@ data:
             cur.close()
             conn.close()
         return jsonify({"status": "ok"})
-
+    
     @app.get("/api/me")
     @api_login_required
     def api_me(user):
         return jsonify(user)
-
+    
     @app.put("/api/profile")
     @api_login_required
     def api_update_profile(user):
@@ -3545,12 +3955,12 @@ data:
         first_name = clean(payload.get("first_name"))
         last_name = clean(payload.get("last_name"))
         department = clean(payload.get("department"))
-
+    
         if not first_name or not last_name:
             return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "invalid department"}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -3561,9 +3971,9 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-
+    
         return jsonify({"status": "ok"})
-
+    
     @app.post("/api/profile/password")
     @api_login_required
     def api_change_password(user):
@@ -3571,12 +3981,12 @@ data:
         current_password = str(payload.get("current_password") or "")
         new_password = str(payload.get("new_password") or "")
         confirm_password = str(payload.get("confirm_password") or "")
-
+    
         if len(new_password) < 8:
             return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
         if new_password != confirm_password:
             return jsonify({"error": "Nowe hasła nie są takie same."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT password_hash FROM users WHERE email = %s", (user["email"],))
@@ -3585,7 +3995,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Obecne hasło jest nieprawidłowe."}), 400
-
+    
         cur.execute("""
             UPDATE users
             SET password_hash = %s
@@ -3594,9 +4004,9 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-
+    
         return jsonify({"status": "ok"})
-
+    
     @app.get("/api/admin/users")
     @api_login_required
     @api_admin_required
@@ -3626,7 +4036,7 @@ data:
                 for r in rows
             ]
         })
-
+    
     @app.get("/api/admin/users/<path:email>")
     @api_login_required
     @api_admin_required
@@ -3654,7 +4064,7 @@ data:
             "roles": list(row[5] or ["user"]),
             "created_at": str(row[6]),
         })
-
+    
     @app.post("/api/admin/users")
     @api_login_required
     @api_admin_required
@@ -3667,7 +4077,7 @@ data:
         roles = normalize_roles(payload.get("roles") or payload.get("role") or ["user"])
         role = role_label(roles)
         password = str(payload.get("password") or "")
-
+    
         if not first_name or not last_name or not email:
             return jsonify({"error": "Imię, nazwisko oraz e-mail są wymagane."}), 400
         if department not in DEPARTMENTS:
@@ -3676,7 +4086,7 @@ data:
             return jsonify({"error": "Nieprawidłowa rola."}), 400
         if len(password) < 8:
             return jsonify({"error": "Hasło musi mieć co najmniej 8 znaków."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (email,))
@@ -3684,7 +4094,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Użytkownik o takim adresie e-mail już istnieje."}), 409
-
+    
         cur.execute("""
             INSERT INTO users (first_name, last_name, email, department, role, roles, password_hash)
             VALUES (%s, %s, %s, %s, %s, %s, %s)
@@ -3700,7 +4110,7 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"}), 201
-
+    
     @app.put("/api/admin/users/<path:email>")
     @api_login_required
     @api_admin_required
@@ -3712,12 +4122,12 @@ data:
         department = clean(payload.get("department"))
         roles = normalize_roles(payload.get("roles") or payload.get("role") or ["user"])
         role = role_label(roles)
-
+    
         if not first_name or not last_name:
             return jsonify({"error": "Imię i nazwisko są wymagane."}), 400
         if department not in DEPARTMENTS:
             return jsonify({"error": "Nieprawidłowy dział."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT roles FROM users WHERE lower(email) = %s", (target_email,))
@@ -3726,7 +4136,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-
+    
         old_roles = list(row[0] or ["user"])
         if "admin" in old_roles and "admin" not in roles:
             cur.execute("SELECT COUNT(*) FROM users WHERE 'admin' = ANY(roles)")
@@ -3735,7 +4145,7 @@ data:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Nie można odebrać roli ostatniemu administratorowi."}), 400
-
+    
         cur.execute("""
             UPDATE users
             SET first_name = %s, last_name = %s, department = %s, role = %s, roles = %s
@@ -3753,7 +4163,7 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
-
+    
     @app.post("/api/admin/users/<path:email>/password")
     @api_login_required
     @api_admin_required
@@ -3762,12 +4172,12 @@ data:
         payload = request.get_json(silent=True) or {}
         new_password = str(payload.get("new_password") or "")
         confirm_password = str(payload.get("confirm_password") or "")
-
+    
         if len(new_password) < 8:
             return jsonify({"error": "Nowe hasło musi mieć co najmniej 8 znaków."}), 400
         if new_password != confirm_password:
             return jsonify({"error": "Nowe hasła nie są takie same."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT 1 FROM users WHERE lower(email) = %s", (target_email,))
@@ -3785,7 +4195,7 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
-
+    
     @app.delete("/api/admin/users/<path:email>")
     @api_login_required
     @api_admin_required
@@ -3793,7 +4203,7 @@ data:
         target_email = clean(email).lower()
         if target_email == user["email"].lower():
             return jsonify({"error": "Nie możesz usunąć własnego konta."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT roles FROM users WHERE lower(email) = %s", (target_email,))
@@ -3802,7 +4212,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-
+    
         if row[0] and "admin" in row[0]:
             cur.execute("SELECT COUNT(*) FROM users WHERE 'admin' = ANY(roles)")
             admin_count = cur.fetchone()[0]
@@ -3810,7 +4220,7 @@ data:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Nie można usunąć ostatniego administratora."}), 400
-
+    
         cur.execute("DELETE FROM user_sessions WHERE lower(user_email) = %s", (target_email,))
         cur.execute("DELETE FROM users WHERE lower(email) = %s", (target_email,))
         log_audit(cur, user, "user_deleted", "user", target_email, {
@@ -3821,20 +4231,20 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
-
+    
     @app.get("/api/notifications")
     @api_login_required
     def api_notifications(user):
         conn = get_conn()
         cur = conn.cursor()
-
+    
         cur.execute("""
             SELECT COUNT(*)
             FROM notifications
             WHERE user_email = %s AND is_read = FALSE
         """, (user["email"],))
         unread_count = cur.fetchone()[0]
-
+    
         cur.execute("""
             SELECT n.id, n.ticket_id, n.type, n.message, n.is_read, n.created_at, t.title
             FROM notifications n
@@ -3844,10 +4254,10 @@ data:
             LIMIT 50
         """, (user["email"],))
         rows = cur.fetchall()
-
+    
         cur.close()
         conn.close()
-
+    
         return jsonify({
             "unread_count": unread_count,
             "notifications": [
@@ -3863,8 +4273,8 @@ data:
                 for r in rows
             ],
         })
-
-
+    
+    
     @app.post("/api/notifications/<int:notification_id>/read")
     @api_login_required
     def api_notification_read(user, notification_id):
@@ -3879,8 +4289,8 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.post("/api/notifications/read-all")
     @api_login_required
     def api_notifications_read_all(user):
@@ -3895,8 +4305,8 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.get("/api/audit")
     @api_login_required
     @api_admin_required
@@ -3904,31 +4314,31 @@ data:
         q = clean(request.args.get("q") or "")
         action_filter = clean(request.args.get("action") or "all")
         actor_filter = clean(request.args.get("actor") or "all")
-
+    
         try:
             page = max(1, int(request.args.get("page", "1")))
         except ValueError:
             page = 1
-
+    
         try:
             page_size = int(request.args.get("page_size", "25"))
         except ValueError:
             page_size = 25
-
+    
         if page_size not in (25, 50, 100):
             page_size = 25
-
+    
         clauses = []
         params = []
-
+    
         if action_filter and action_filter != "all":
             clauses.append("action = %s")
             params.append(action_filter)
-
+    
         if actor_filter and actor_filter != "all":
             clauses.append("lower(actor_email) = lower(%s)")
             params.append(actor_filter)
-
+    
         if q:
             like = f"%{q.lower()}%"
             clauses.append("""(
@@ -3940,20 +4350,20 @@ data:
                 OR lower(coalesce(details, '')) LIKE %s
             )""")
             params.extend([like, like, like, like, like, like])
-
+    
         where_sql = ("WHERE " + " AND ".join(clauses)) if clauses else ""
         offset = (page - 1) * page_size
-
+    
         conn = get_conn()
         cur = conn.cursor()
-
+    
         cur.execute(f"SELECT COUNT(*) FROM audit_log {where_sql}", params)
         total = cur.fetchone()[0]
         total_pages = max(1, (total + page_size - 1) // page_size)
         if page > total_pages:
             page = total_pages
             offset = (page - 1) * page_size
-
+    
         cur.execute(f"""
             SELECT id, actor_email, actor_name, action, target_type, target_id, details, created_at
             FROM audit_log
@@ -3962,14 +4372,14 @@ data:
             LIMIT %s OFFSET %s
         """, params + [page_size, offset])
         rows = cur.fetchall()
-
+    
         cur.execute("""
             SELECT DISTINCT action
             FROM audit_log
             ORDER BY action
         """)
         actions = [r[0] for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT DISTINCT actor_email
             FROM audit_log
@@ -3977,10 +4387,10 @@ data:
             ORDER BY actor_email
         """)
         actors = [r[0] for r in cur.fetchall()]
-
+    
         cur.close()
         conn.close()
-
+    
         return jsonify({
             "audit": [
                 {
@@ -4009,9 +4419,301 @@ data:
                 "actor": actor_filter,
             },
         })
-
-
-
+    
+    
+    
+    @app.get("/api/admin/workflows")
+    @api_login_required
+    def api_admin_workflows(user):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+    
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+                wd.id,
+                wd.workflow_key,
+                wd.name,
+                wd.category,
+                wd.subcategory,
+                wd.is_default,
+                wd.is_active,
+                wd.created_at,
+                wd.updated_at,
+                COUNT(t.id) AS ticket_count
+            FROM workflow_definitions wd
+            LEFT JOIN tickets t ON t.workflow_key = wd.workflow_key
+            GROUP BY wd.id
+            ORDER BY wd.is_default DESC, lower(wd.name)
+        """)
+        workflows = []
+        for r in cur.fetchall():
+            workflows.append({
+                "id": r[0],
+                "workflow_key": r[1],
+                "name": r[2],
+                "category": r[3],
+                "subcategory": r[4],
+                "is_default": bool(r[5]),
+                "is_active": bool(r[6]),
+                "created_at": str(r[7]),
+                "updated_at": str(r[8]),
+                "ticket_count": int(r[9] or 0),
+            })
+        cur.close()
+        conn.close()
+        return jsonify({"workflows": workflows})
+    
+    
+    @app.get("/api/admin/workflows/<int:workflow_id>")
+    @api_login_required
+    def api_admin_workflow_detail(user, workflow_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+    
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, workflow_key, name, category, subcategory, is_default, is_active, created_at, updated_at
+            FROM workflow_definitions
+            WHERE id = %s
+        """, (workflow_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+    
+        cur.execute("""
+            SELECT id, step_name, step_order, is_final
+            FROM workflow_steps
+            WHERE workflow_id = %s
+            ORDER BY step_order ASC, id ASC
+        """, (workflow_id,))
+        steps = [
+            {"id": s[0], "step_name": s[1], "step_order": s[2], "is_final": bool(s[3])}
+            for s in cur.fetchall()
+        ]
+    
+        cur.execute("SELECT COUNT(*) FROM tickets WHERE workflow_key = %s", (row[1],))
+        ticket_count = cur.fetchone()[0]
+    
+        cur.close()
+        conn.close()
+    
+        return jsonify({
+            "id": row[0],
+            "workflow_key": row[1],
+            "name": row[2],
+            "category": row[3],
+            "subcategory": row[4],
+            "is_default": bool(row[5]),
+            "is_active": bool(row[6]),
+            "created_at": str(row[7]),
+            "updated_at": str(row[8]),
+            "ticket_count": int(ticket_count or 0),
+            "steps": steps,
+        })
+    
+    
+    def normalize_workflow_payload(payload, existing_key=None):
+        name = clean(payload.get("name"))
+        category = clean(payload.get("category")) or "*"
+        subcategory = clean(payload.get("subcategory")) or "*"
+        workflow_key = clean(payload.get("workflow_key")) or existing_key or workflow_key_from_name(name)
+        is_default = bool(payload.get("is_default"))
+        is_active = bool(payload.get("is_active", True))
+    
+        raw_steps = payload.get("steps")
+        if isinstance(raw_steps, str):
+            steps = [clean(x) for x in raw_steps.replace("\r", "").split("\n")]
+        elif isinstance(raw_steps, list):
+            steps = [clean(x.get("step_name") if isinstance(x, dict) else x) for x in raw_steps]
+        else:
+            steps = []
+    
+        steps = [s for s in steps if s]
+        unique_steps = []
+        for step in steps:
+            if step not in unique_steps:
+                unique_steps.append(step)
+    
+        if "Nowe" not in unique_steps:
+            unique_steps.insert(0, "Nowe")
+        if "Zamknięte" not in unique_steps:
+            unique_steps.append("Zamknięte")
+    
+        if not name:
+            return None, "Nazwa workflow jest wymagana."
+        if category != "*" and category not in CATEGORIES:
+            return None, "Nieprawidłowa kategoria."
+        if category == "*":
+            subcategory = "*"
+        elif subcategory != "*" and subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            return None, "Nieprawidłowa podkategoria."
+        if len(unique_steps) < 2:
+            return None, "Workflow musi mieć co najmniej dwa kroki."
+    
+        return {
+            "workflow_key": workflow_key,
+            "name": name,
+            "category": category,
+            "subcategory": subcategory,
+            "is_default": is_default,
+            "is_active": is_active,
+            "steps": unique_steps,
+        }, None
+    
+    
+    @app.post("/api/admin/workflows")
+    @api_login_required
+    def api_admin_create_workflow(user):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+    
+        payload = request.get_json(silent=True) or {}
+        data, error = normalize_workflow_payload(payload)
+        if error:
+            return jsonify({"error": error}), 400
+    
+        conn = get_conn()
+        cur = conn.cursor()
+    
+        if data["is_default"]:
+            cur.execute("UPDATE workflow_definitions SET is_default = FALSE")
+    
+        cur.execute("""
+            INSERT INTO workflow_definitions (
+                workflow_key, name, category, subcategory, is_default, is_active, updated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, NOW())
+            RETURNING id
+        """, (
+            data["workflow_key"], data["name"], data["category"], data["subcategory"],
+            data["is_default"], data["is_active"],
+        ))
+        workflow_id = cur.fetchone()[0]
+    
+        for idx, step_name in enumerate(data["steps"], start=1):
+            cur.execute("""
+                INSERT INTO workflow_steps (workflow_id, step_name, step_order, is_final)
+                VALUES (%s, %s, %s, %s)
+            """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
+    
+        log_audit(cur, user, "workflow_created", "workflow", workflow_id, data)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"id": workflow_id}), 201
+    
+    
+    @app.put("/api/admin/workflows/<int:workflow_id>")
+    @api_login_required
+    def api_admin_update_workflow(user, workflow_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+    
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT workflow_key, is_default FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        existing = cur.fetchone()
+        if not existing:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+    
+        payload = request.get_json(silent=True) or {}
+        data, error = normalize_workflow_payload(payload, existing_key=existing[0])
+        if error:
+            cur.close()
+            conn.close()
+            return jsonify({"error": error}), 400
+    
+        if existing[1] and not data["is_default"]:
+            cur.execute("SELECT COUNT(*) FROM workflow_definitions WHERE is_default = TRUE AND id <> %s", (workflow_id,))
+            if cur.fetchone()[0] == 0:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Musi istnieć jeden workflow domyślny."}), 400
+    
+        if data["is_default"]:
+            cur.execute("UPDATE workflow_definitions SET is_default = FALSE WHERE id <> %s", (workflow_id,))
+    
+        cur.execute("""
+            UPDATE workflow_definitions
+            SET name = %s,
+                category = %s,
+                subcategory = %s,
+                is_default = %s,
+                is_active = %s,
+                updated_at = NOW()
+            WHERE id = %s
+        """, (
+            data["name"], data["category"], data["subcategory"],
+            data["is_default"], data["is_active"], workflow_id,
+        ))
+    
+        cur.execute("DELETE FROM workflow_steps WHERE workflow_id = %s", (workflow_id,))
+        for idx, step_name in enumerate(data["steps"], start=1):
+            cur.execute("""
+                INSERT INTO workflow_steps (workflow_id, step_name, step_order, is_final)
+                VALUES (%s, %s, %s, %s)
+            """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
+    
+        log_audit(cur, user, "workflow_updated", "workflow", workflow_id, data)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
+    
+    
+    @app.delete("/api/admin/workflows/<int:workflow_id>")
+    @api_login_required
+    def api_admin_delete_workflow(user, workflow_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+    
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT workflow_key, is_default FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+    
+        workflow_key, is_default_workflow = row
+        if is_default_workflow:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie można usunąć workflow domyślnego."}), 400
+    
+        cur.execute("SELECT COUNT(*) FROM tickets WHERE workflow_key = %s", (workflow_key,))
+        ticket_count = cur.fetchone()[0]
+    
+        if ticket_count:
+            cur.execute("""
+                UPDATE workflow_definitions
+                SET is_active = FALSE, updated_at = NOW()
+                WHERE id = %s
+            """, (workflow_id,))
+            action = "workflow_deactivated"
+        else:
+            cur.execute("DELETE FROM workflow_definitions WHERE id = %s", (workflow_id,))
+            action = "workflow_deleted"
+    
+        log_audit(cur, user, action, "workflow", workflow_id, {
+            "workflow_key": workflow_key,
+            "ticket_count": ticket_count,
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "action": action})
+    
+    
+    
     @app.get("/api/meta")
     @api_login_required
     def api_meta(user):
@@ -4034,11 +4736,11 @@ data:
             "categories": CATEGORIES,
             "subcategories": SUBCATEGORIES,
             "priorities": PRIORITIES,
-            "statuses": STATUSES,
+            "statuses": all_statuses(),
             "roles": VALID_ROLES,
             "operators": operators,
         })
-
+    
     @app.get("/api/tickets")
     @api_login_required
     def api_tickets(user):
@@ -4046,43 +4748,43 @@ data:
         status_filters = []
         if raw_statuses:
             status_filters = [s.strip() for s in raw_statuses.split(",") if s.strip()]
-            invalid = [s for s in status_filters if s not in STATUSES]
+            invalid = [s for s in status_filters if s not in all_statuses()]
             if invalid:
                 return jsonify({"error": "invalid status filter", "invalid": invalid}), 400
-
+    
         assigned_filter = clean(request.args.get("assigned")) or ""
         priority_filter = clean(request.args.get("priority")) or "all"
         sla_filter = clean(request.args.get("sla")) or "all"
         search_query = clean(request.args.get("q") or request.args.get("search")) or ""
-
+    
         sort_by = clean(request.args.get("sort")) or "created_at"
         sort_order = (clean(request.args.get("order")) or "desc").lower()
         if sort_order not in ("asc", "desc"):
             sort_order = "desc"
-
+    
         try:
             page = max(1, int(request.args.get("page", "1")))
         except ValueError:
             page = 1
-
+    
         try:
             page_size = int(request.args.get("page_size", "10"))
         except ValueError:
             page_size = 10
-
+    
         if page_size not in (10, 25, 50):
             page_size = 10
-
+    
         if priority_filter not in (["all"] + PRIORITIES):
             return jsonify({"error": "invalid priority filter"}), 400
-
+    
         valid_sla_filters = ["all", "ok", "warning", "overdue", "done", "none"]
         if sla_filter not in valid_sla_filters:
             return jsonify({"error": "invalid sla filter"}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
-
+    
         cur.execute("""
             SELECT first_name, last_name, email, role, roles
             FROM users
@@ -4094,16 +4796,16 @@ data:
             for r in cur.fetchall()
         ]
         operator_emails = {op["email"].lower() for op in operators}
-
+    
         if is_staff(user):
             if not assigned_filter:
                 assigned_filter = "me" if is_operator(user) else "all"
         else:
             assigned_filter = "all"
-
+    
         base_clauses = []
         base_params = []
-
+    
         if not is_staff(user):
             base_clauses.append("""(
                 lower(t.requester_email) = lower(%s)
@@ -4128,11 +4830,11 @@ data:
                     return jsonify({"error": "invalid assigned filter"}), 400
                 base_clauses.append("lower(t.assigned_to_email) = lower(%s)")
                 base_params.append(assigned_filter)
-
+    
         if priority_filter != "all":
             base_clauses.append("t.priority = %s")
             base_params.append(priority_filter)
-
+    
         if sla_filter == "none":
             base_clauses.append("t.sla_due_at IS NULL")
         elif sla_filter == "done":
@@ -4143,31 +4845,31 @@ data:
             base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at >= NOW() AND t.sla_due_at <= NOW() + INTERVAL '4 hours'")
         elif sla_filter == "ok":
             base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at > NOW() + INTERVAL '4 hours'")
-
+    
         base_where_sql = "WHERE " + " AND ".join(base_clauses) if base_clauses else ""
-
+    
         filtered_clauses = list(base_clauses)
         filtered_params = list(base_params)
         if status_filters:
             placeholders = ",".join(["%s"] * len(status_filters))
             filtered_clauses.append(f"t.status IN ({placeholders})")
             filtered_params.extend(status_filters)
-
+    
         if search_query:
             search_terms = []
             search_params = []
-
+    
             numeric_match = None
             normalized_search = search_query.strip()
             if normalized_search.startswith("#"):
                 normalized_search = normalized_search[1:].strip()
             if normalized_search.isdigit():
                 numeric_match = int(normalized_search)
-
+    
             if numeric_match is not None:
                 search_terms.append("t.id = %s")
                 search_params.append(numeric_match)
-
+    
             like = f"%{search_query}%"
             search_terms.extend([
                 "CAST(t.id AS TEXT) ILIKE %s",
@@ -4185,12 +4887,12 @@ data:
                 "COALESCE(t.assigned_to_email, '') ILIKE %s",
             ])
             search_params.extend([like] * 13)
-
+    
             filtered_clauses.append("(" + " OR ".join(search_terms) + ")")
             filtered_params.extend(search_params)
-
+    
         filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
-
+    
         cur.execute(f"""
             SELECT
               COUNT(*),
@@ -4202,7 +4904,7 @@ data:
             {base_where_sql}
         """, tuple(base_params))
         total, new_count, in_progress, high_count, resolved_count = cur.fetchone()
-
+    
         cur.execute(f"""
             SELECT COUNT(*)
             FROM tickets t
@@ -4210,12 +4912,12 @@ data:
             {filtered_where_sql}
         """, tuple(filtered_params))
         total_filtered = cur.fetchone()[0] or 0
-
+    
         total_pages = max(1, (total_filtered + page_size - 1) // page_size)
         if page > total_pages:
             page = total_pages
         offset = (page - 1) * page_size
-
+    
         sort_map = {
             "id": "t.id",
             "created_at": "t.created_at",
@@ -4228,7 +4930,7 @@ data:
         }
         sort_expr = sort_map.get(sort_by, "t.created_at")
         nulls = "NULLS LAST"
-
+    
         cur.execute(f"""
             SELECT t.id, t.title, t.requester_name, t.requester_email, t.department, t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
                    t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
@@ -4251,7 +4953,7 @@ data:
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
+    
         tickets = []
         for row in rows:
             tickets.append({
@@ -4273,7 +4975,7 @@ data:
                 "workflow_name": row[20] or WORKFLOWS["default"]["name"],
                 "sla_state": sla_state(row[13], row[8]),
             })
-
+    
         return jsonify({
             "stats": {
                 "total": total,
@@ -4283,7 +4985,7 @@ data:
                 "resolved": resolved_count,
             },
             "tickets": tickets,
-            "statuses": STATUSES,
+            "statuses": all_statuses(),
             "priorities": PRIORITIES,
             "operators": operators,
             "sla_options": ["all", "ok", "warning", "overdue", "done", "none"],
@@ -4301,17 +5003,17 @@ data:
                 "total_pages": total_pages,
             },
         })
-
-
+    
+    
     @app.get("/api/dashboard")
     @api_login_required
     def api_dashboard(user):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         conn = get_conn()
         cur = conn.cursor()
-
+    
         cur.execute("""
             SELECT
               COUNT(*),
@@ -4322,7 +5024,7 @@ data:
             FROM tickets
         """)
         total, new_count, in_progress_count, overdue_sla_count, unassigned_count = cur.fetchone()
-
+    
         cur.execute("""
             SELECT status, COUNT(*)
             FROM tickets
@@ -4330,7 +5032,7 @@ data:
             ORDER BY array_position(ARRAY['Nowe','Otwarte','W trakcie','Oczekuje na użytkownika','Oczekuje na dostawcę','Rozwiązane','Zamknięte'], status)
         """)
         by_status = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT priority, COUNT(*)
             FROM tickets
@@ -4344,7 +5046,7 @@ data:
             END
         """)
         by_priority = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT sla_state, COUNT(*)
             FROM (
@@ -4368,7 +5070,7 @@ data:
             END
         """)
         by_sla = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT COALESCE(NULLIF(category, ''), 'Brak kategorii') AS label, COUNT(*)
             FROM tickets
@@ -4377,7 +5079,7 @@ data:
             LIMIT 12
         """)
         by_category = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT COALESCE(NULLIF(subcategory, ''), 'Inne') AS label, COUNT(*)
             FROM tickets
@@ -4386,7 +5088,7 @@ data:
             LIMIT 12
         """)
         by_subcategory = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT COALESCE(NULLIF(department, ''), 'Brak działu') AS label, COUNT(*)
             FROM tickets
@@ -4395,7 +5097,7 @@ data:
             LIMIT 12
         """)
         by_department = [{"label": r[0], "value": r[0], "count": r[1]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT
               COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), NULLIF(t.assigned_to_email, ''), 'Nieprzypisane') AS label,
@@ -4407,10 +5109,10 @@ data:
             ORDER BY COUNT(*) DESC, label ASC
         """)
         by_operator = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
-
+    
         cur.close()
         conn.close()
-
+    
         return jsonify({
             "summary": {
                 "total": total,
@@ -4427,28 +5129,28 @@ data:
             "by_department": by_department,
             "by_operator": by_operator,
         })
-
-
+    
+    
     @app.get("/api/sla-calendar")
     @api_login_required
     def api_sla_calendar(user):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         conn = get_conn()
         cur = conn.cursor()
-
+    
         params = []
         where = [
             "t.sla_due_at IS NOT NULL",
             "t.status NOT IN ('Rozwiązane', 'Zamknięte')",
         ]
-
+    
         scope = "admin" if is_admin(user) else "operator"
         if not is_admin(user):
             where.append("(lower(COALESCE(t.assigned_to_email, '')) = lower(%s) OR t.assigned_to_email IS NULL OR t.assigned_to_email = '')")
             params.append(user.get("email") or "")
-
+    
         cur.execute(f"""
             SELECT
               t.id,
@@ -4466,17 +5168,17 @@ data:
             WHERE {' AND '.join(where)}
             ORDER BY t.sla_due_at ASC, t.id ASC
         """, tuple(params))
-
+    
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
+    
         now = datetime.now()
         today = now.date()
         tomorrow = today + timedelta(days=1)
         next_7 = today + timedelta(days=7)
         next_30 = today + timedelta(days=30)
-
+    
         result = {
             "scope": scope,
             "overdue": [],
@@ -4485,7 +5187,7 @@ data:
             "next_7_days": [],
             "next_30_days": [],
         }
-
+    
         def row_to_dict(row):
             due_at = row[4]
             return {
@@ -4501,14 +5203,14 @@ data:
                 "category": row[8],
                 "subcategory": row[9],
             }
-
+    
         for row in rows:
             due_at = row[4]
             item = row_to_dict(row)
             if not due_at:
                 continue
             due_date = due_at.date()
-
+    
             if due_at < now:
                 result["overdue"].append(item)
             elif due_date == today:
@@ -4519,7 +5221,7 @@ data:
                 result["next_7_days"].append(item)
             elif due_date <= next_30:
                 result["next_30_days"].append(item)
-
+    
         result["counts"] = {
             "overdue": len(result["overdue"]),
             "today": len(result["today"]),
@@ -4527,10 +5229,10 @@ data:
             "next_7_days": len(result["next_7_days"]),
             "next_30_days": len(result["next_30_days"]),
         }
-
+    
         return jsonify(result)
-
-
+    
+    
     @app.post("/api/tickets")
     @api_login_required
     def api_create_ticket(user):
@@ -4540,7 +5242,7 @@ data:
         category = clean(payload.get("category"))
         subcategory = clean(payload.get("subcategory")) or "Inne"
         priority = clean(payload.get("priority")) or "Normalny"
-
+    
         if not title or not description:
             return jsonify({"error": "title and description are required"}), 400
         if priority not in PRIORITIES:
@@ -4549,7 +5251,7 @@ data:
             return jsonify({"error": "Nieprawidłowa kategoria."}), 400
         if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
             return jsonify({"error": "Nieprawidłowa podkategoria."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         sla_due_at = sla_due_for_priority(priority)
@@ -4589,15 +5291,15 @@ data:
         conn.close()
         publish_event(f"{user['name']} utworzył zgłoszenie #{ticket_id}: {title}", "ticket_created", ticket_id)
         return jsonify({"id": ticket_id}), 201
-
+    
     def can_view_ticket(user, ticket_id):
         if not user:
             return False
-
+    
         # Operatorzy i admini mogą widzieć wszystkie zgłoszenia oraz ich załączniki.
         if is_staff(user):
             return True
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -4616,13 +5318,13 @@ data:
         row = cur.fetchone()
         cur.close()
         conn.close()
-
+    
         if not row:
             return False
-
+    
         requester_email, assigned_to_email, is_watcher = row
         user_email = (user.get("email") or "").lower()
-
+    
         return bool(
             user_email
             and (
@@ -4631,16 +5333,16 @@ data:
                 or is_watcher
             )
         )
-
-
+    
+    
     def get_ticket_status_for_update(cur, ticket_id):
         cur.execute("SELECT status FROM tickets WHERE id = %s", (ticket_id,))
         row = cur.fetchone()
         if not row:
             return None
         return row[0]
-
-
+    
+    
     def ensure_ticket_mutable(cur, ticket_id):
         status = get_ticket_status_for_update(cur, ticket_id)
         if status is None:
@@ -4648,13 +5350,13 @@ data:
         if status == "Zamknięte":
             return False, jsonify({"error": "Zgłoszenie jest zamknięte i dostępne tylko do odczytu."}), 400
         return True, status, None
-
+    
     @app.get("/api/tickets/<int:ticket_id>")
     @api_login_required
     def api_ticket_detail(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
             return jsonify({"error": "forbidden"}), 403
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -4679,7 +5381,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
-
+    
         if is_staff(user):
             cur.execute("""
                 SELECT author, content, created_at, COALESCE(visibility, 'public') AS visibility
@@ -4696,7 +5398,7 @@ data:
                 ORDER BY id ASC
             """, (ticket_id,))
         comment_rows = cur.fetchall()
-
+    
         cur.execute("""
             SELECT actor_name, event_type, message, created_at
             FROM ticket_events
@@ -4704,7 +5406,7 @@ data:
             ORDER BY id ASC
         """, (ticket_id,))
         event_rows = cur.fetchall()
-
+    
         cur.execute("""
             SELECT id, original_filename, content_type, size_bytes, uploaded_by_name, created_at
             FROM attachments
@@ -4712,7 +5414,7 @@ data:
             ORDER BY id DESC
         """, (ticket_id,))
         attachment_rows = cur.fetchall()
-
+    
         cur.execute("""
             SELECT
               u.first_name,
@@ -4728,7 +5430,7 @@ data:
             ORDER BY lower(u.last_name), lower(u.first_name), lower(u.email)
         """, (ticket_id,))
         watcher_rows = cur.fetchall()
-
+    
         watcher_candidate_rows = []
         if is_staff(user):
             cur.execute("""
@@ -4737,7 +5439,7 @@ data:
                 ORDER BY lower(last_name), lower(first_name), lower(email)
             """)
             watcher_candidate_rows = cur.fetchall()
-
+    
         cur.execute("""
             SELECT
               l.id,
@@ -4769,10 +5471,10 @@ data:
             ORDER BY l.created_at DESC
         """, (ticket_id, ticket_id, ticket_id))
         link_rows = cur.fetchall()
-
+    
         cur.close()
         conn.close()
-
+    
         ticket = {
             "id": row[0],
             "title": row[1],
@@ -4817,7 +5519,7 @@ data:
             }
             for a in attachment_rows
         ]
-
+    
         watchers = [
             {
                 "name": f"{w[0]} {w[1]}".strip(),
@@ -4829,7 +5531,7 @@ data:
             }
             for w in watcher_rows
         ]
-
+    
         watcher_candidates = [
             {
                 "name": f"{w[0]} {w[1]}".strip(),
@@ -4840,7 +5542,7 @@ data:
             }
             for w in watcher_candidate_rows
         ]
-
+    
         linked_tickets = []
         for l in link_rows:
             linked_id = l[1]
@@ -4854,7 +5556,7 @@ data:
                     "relation_type": l[6] or "related",
                     "created_at": str(l[8]),
                 })
-
+    
         conn2 = get_conn()
         cur2 = conn2.cursor()
         cur2.execute("""
@@ -4869,7 +5571,7 @@ data:
         ]
         cur2.close()
         conn2.close()
-
+    
         return jsonify({
             "ticket": ticket,
             "comments": comments,
@@ -4879,29 +5581,29 @@ data:
             "linked_tickets": linked_tickets,
             "meta": {"statuses": workflow_statuses(ticket.get("workflow_key")), "operators": operators, "watcher_candidates": watcher_candidates},
         })
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/close")
     @api_login_required
     def api_close_ticket(user, ticket_id):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         def parse_int(value, default=0):
             try:
                 return int(value)
             except Exception:
                 return default
-
+    
         hours = max(0, parse_int(request.form.get("resolution_hours"), 0))
         minutes = max(0, min(59, parse_int(request.form.get("resolution_minutes"), 0)))
         total_minutes = hours * 60 + minutes
         resolution_summary = clean(request.form.get("resolution_summary"))
         visibility = clean(request.form.get("visibility")) or "public"
-
+    
         if visibility not in ("public", "internal"):
             visibility = "public"
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT status FROM tickets WHERE id = %s", (ticket_id,))
@@ -4910,54 +5612,54 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
-
+    
         old_status = row[0]
         if old_status == "Zamknięte":
             cur.close()
             conn.close()
             return jsonify({"error": "Zgłoszenie jest już zamknięte i dostępne tylko do odczytu."}), 400
-
+    
         uploaded_file = request.files.get("file")
         attachment_id = None
         original_filename = None
-
+    
         if uploaded_file and uploaded_file.filename:
             original_filename = uploaded_file.filename or ""
             safe_filename = secure_filename(original_filename)
-
+    
             if not safe_filename:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Nieprawidłowa nazwa pliku."}), 400
-
+    
             if not allowed_attachment(safe_filename):
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Niedozwolony typ pliku."}), 400
-
+    
             file_bytes = uploaded_file.read()
             size_bytes = len(file_bytes)
-
+    
             if size_bytes <= 0:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Pusty plik."}), 400
-
+    
             if size_bytes > MAX_ATTACHMENT_SIZE:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Plik jest za duży. Maksymalny rozmiar to 10 MB."}), 400
-
+    
             ticket_dir = os.path.join(ATTACHMENTS_DIR, str(ticket_id))
             os.makedirs(ticket_dir, exist_ok=True)
-
+    
             stored_basename = f"{uuid.uuid4().hex}_{safe_filename}"
             stored_filename = f"{ticket_id}/{stored_basename}"
             target_path = attachment_path(stored_filename)
-
+    
             with open(target_path, "wb") as f:
                 f.write(file_bytes)
-
+    
             cur.execute("""
                 INSERT INTO attachments (
                     ticket_id,
@@ -4980,7 +5682,7 @@ data:
                 user["name"],
             ))
             attachment_id = cur.fetchone()[0]
-
+    
         cur.execute("""
             UPDATE tickets
             SET status = 'Zamknięte',
@@ -4991,7 +5693,7 @@ data:
                 resolution_summary = %s
             WHERE id = %s
         """, (user["email"], total_minutes if total_minutes > 0 else None, resolution_summary or None, ticket_id))
-
+    
         time_text = ""
         if total_minutes > 0:
             h = total_minutes // 60
@@ -5002,7 +5704,7 @@ data:
                 time_text = f" Czas rozwiązania: {h}h."
             else:
                 time_text = f" Czas rozwiązania: {m}m."
-
+    
         add_ticket_event(
             cur,
             ticket_id,
@@ -5010,7 +5712,7 @@ data:
             "ticket_closed",
             f"Zgłoszenie zamknięte. Status zmieniony z {old_status} na Zamknięte.{time_text}"
         )
-
+    
         if resolution_summary:
             cur.execute("""
                 INSERT INTO comments (ticket_id, author, content, visibility)
@@ -5023,10 +5725,10 @@ data:
                 "internal_note_added" if visibility == "internal" else "comment_added",
                 "Dodano notatkę końcową przy zamknięciu zgłoszenia." if visibility == "internal" else "Dodano komentarz końcowy przy zamknięciu zgłoszenia."
             )
-
+    
         if attachment_id:
             add_ticket_event(cur, ticket_id, user, "attachment_added", f"Dodano załącznik przy zamknięciu: {original_filename}")
-
+    
         log_audit(cur, user, "ticket_closed", "ticket", ticket_id, {
             "old_status": old_status,
             "resolution_minutes": total_minutes if total_minutes > 0 else None,
@@ -5034,7 +5736,7 @@ data:
             "attachment_id": attachment_id,
             "attachment_filename": original_filename,
         })
-
+    
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -5042,7 +5744,7 @@ data:
             f"Zgłoszenie #{ticket_id} zostało zamknięte.",
             actor_email=user["email"],
         )
-
+    
         if resolution_summary and visibility == "internal":
             create_ticket_notifications(
                 cur,
@@ -5060,7 +5762,7 @@ data:
                 f"Dodano komentarz końcowy przy zamknięciu zgłoszenia #{ticket_id}.",
                 actor_email=user["email"],
             )
-
+    
         if attachment_id:
             create_ticket_notifications(
                 cur,
@@ -5069,55 +5771,55 @@ data:
                 f"Dodano załącznik przy zamknięciu zgłoszenia #{ticket_id}: {original_filename}.",
                 actor_email=user["email"],
             )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} zamknął zgłoszenie #{ticket_id}", "status_changed", ticket_id)
         return jsonify({"status": "ok", "ticket_status": "Zamknięte", "attachment_id": attachment_id})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/reopen")
     @api_login_required
     def api_reopen_ticket(user, ticket_id):
         if not is_admin(user):
             return jsonify({"error": "admin required"}), 403
-
+    
         payload = request.get_json(silent=True) or {}
         reason = clean(payload.get("reason"))
-
+    
         if not reason:
             return jsonify({"error": "Powód ponownego otwarcia jest wymagany."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT status FROM tickets WHERE id = %s", (ticket_id,))
         row = cur.fetchone()
-
+    
         if not row:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
-
+    
         old_status = row[0]
-
+    
         if old_status != "Zamknięte":
             cur.close()
             conn.close()
             return jsonify({"error": "Tylko zamknięte zgłoszenie można otworzyć ponownie."}), 400
-
+    
         cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
         workflow_key = (cur.fetchone() or ["default"])[0]
         reopen_status = reopen_status_for_workflow(workflow_key)
-
+    
         cur.execute("""
             UPDATE tickets
             SET status = %s,
                 updated_at = NOW()
             WHERE id = %s
         """, (reopen_status, ticket_id))
-
+    
         add_ticket_event(
             cur,
             ticket_id,
@@ -5125,13 +5827,13 @@ data:
             "ticket_reopened",
             f"Zgłoszenie otwarte ponownie. Powód: {reason}"
         )
-
+    
         log_audit(cur, user, "ticket_reopened", "ticket", ticket_id, {
             "old_status": old_status,
             "new_status": reopen_status,
             "reason": reason,
         })
-
+    
         create_ticket_notifications(
             cur,
             ticket_id,
@@ -5139,15 +5841,15 @@ data:
             f"Zgłoszenie #{ticket_id} zostało otwarte ponownie ze statusem {reopen_status}. Powód: {reason}",
             actor_email=user["email"],
         )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} otworzył ponownie zgłoszenie #{ticket_id}", "status_changed", ticket_id)
         return jsonify({"status": "ok", "ticket_status": "Otwarte"})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
     def api_update_status(user, ticket_id):
@@ -5157,7 +5859,7 @@ data:
         status = clean(payload.get("status")) or "Nowe"
         if status == "Zamknięte":
             return jsonify({"error": "Do zamykania zgłoszenia użyj formularza zamknięcia."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         ok, old_status, error_code = ensure_ticket_mutable(cur, ticket_id)
@@ -5165,7 +5867,7 @@ data:
             cur.close()
             conn.close()
             return old_status, error_code
-
+    
         cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
         workflow_row = cur.fetchone()
         workflow_key = workflow_row[0] if workflow_row else "default"
@@ -5192,17 +5894,17 @@ data:
         conn.close()
         publish_event(f"{user['name']} zmienił status zgłoszenia #{ticket_id} z {old_status} na {status}", "status_changed", ticket_id)
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/assign")
     @api_login_required
     def api_assign_ticket(user, ticket_id):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         payload = request.get_json(silent=True) or {}
         assigned_to_email = clean(payload.get("assigned_to_email")).lower()
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT assigned_to_email, status FROM tickets WHERE id = %s", (ticket_id,))
@@ -5215,9 +5917,9 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Zgłoszenie jest zamknięte i dostępne tylko do odczytu."}), 400
-
+    
         old_assigned = ticket_row[0]
-
+    
         assigned_to_name = "Nieprzypisane"
         if assigned_to_email:
             cur.execute("""
@@ -5232,16 +5934,16 @@ data:
                 return jsonify({"error": "Można przypisać tylko do operatora."}), 400
             assigned_to_email = operator_row[2]
             assigned_to_name = f"{operator_row[0]} {operator_row[1]}".strip()
-
+    
         cur.execute("""
             UPDATE tickets
             SET assigned_to_email = %s, updated_at = NOW()
             WHERE id = %s
         """, (assigned_to_email or None, ticket_id))
-
+    
         if assigned_to_email:
             add_ticket_watcher(cur, ticket_id, assigned_to_email, user["email"])
-
+    
         assignment_message = f"Przypisanie zmienione z {old_assigned or 'Nieprzypisane'} na {assigned_to_name}"
         add_ticket_event(
             cur,
@@ -5265,22 +5967,22 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} przypisał zgłoszenie #{ticket_id} do: {assigned_to_name}", "assignment_changed", ticket_id)
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/watchers")
     @api_login_required
     def api_add_watcher(user, ticket_id):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         payload = request.get_json(silent=True) or {}
         watcher_email = clean(payload.get("user_email") or payload.get("email")).lower()
         if not watcher_email:
             return jsonify({"error": "Wybierz obserwatora."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT title, status FROM tickets WHERE id = %s", (ticket_id,))
@@ -5293,7 +5995,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Zgłoszenie jest zamknięte i dostępne tylko do odczytu."}), 400
-
+    
         cur.execute("""
             SELECT first_name, last_name, email, roles
             FROM users
@@ -5304,10 +6006,10 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie znaleziono użytkownika."}), 404
-
+    
         watcher_email = watcher_row[2]
         watcher_name = f"{watcher_row[0]} {watcher_row[1]}".strip()
-
+    
         add_ticket_watcher(cur, ticket_id, watcher_email, user["email"])
         add_ticket_event(cur, ticket_id, user, "watcher_added", f"Dodano obserwatora: {watcher_name}")
         log_audit(cur, user, "ticket_watcher_added", "ticket", ticket_id, {
@@ -5322,23 +6024,23 @@ data:
             f"Dodano Cię jako obserwatora zgłoszenia #{ticket_id}: {ticket_row[0]}.",
             actor_email=user["email"],
         )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} dodał obserwatora do zgłoszenia #{ticket_id}: {watcher_name}", "watcher_changed", ticket_id)
         return jsonify({"status": "ok"}), 201
-
-
+    
+    
     @app.delete("/api/tickets/<int:ticket_id>/watchers/<path:watcher_email>")
     @api_login_required
     def api_remove_watcher(user, ticket_id, watcher_email):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         watcher_email = clean(watcher_email).lower()
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT assigned_to_email, status FROM tickets WHERE id = %s", (ticket_id,))
@@ -5351,12 +6053,12 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Zgłoszenie jest zamknięte i dostępne tylko do odczytu."}), 400
-
+    
         if ticket_row[0] and watcher_email == ticket_row[0].lower():
             cur.close()
             conn.close()
             return jsonify({"error": "Przypisany operator pozostaje obserwatorem zgłoszenia."}), 400
-
+    
         cur.execute("""
             SELECT first_name, last_name, email
             FROM users
@@ -5367,7 +6069,7 @@ data:
         if watcher_row:
             watcher_email = watcher_row[2]
             watcher_name = f"{watcher_row[0]} {watcher_row[1]}".strip()
-
+    
         cur.execute("""
             DELETE FROM ticket_watchers
             WHERE ticket_id = %s AND lower(user_email) = %s
@@ -5377,38 +6079,38 @@ data:
             "watcher_email": watcher_email,
             "watcher_name": watcher_name,
         })
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} usunął obserwatora ze zgłoszenia #{ticket_id}: {watcher_name}", "watcher_changed", ticket_id)
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/links")
     @api_login_required
     def api_add_ticket_link(user, ticket_id):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         payload = request.get_json(silent=True) or {}
         linked_ticket_id_raw = payload.get("linked_ticket_id") or payload.get("ticket_id")
         try:
             linked_ticket_id = int(linked_ticket_id_raw)
         except Exception:
             return jsonify({"error": "Podaj poprawne ID zgłoszenia."}), 400
-
+    
         if linked_ticket_id == ticket_id:
             return jsonify({"error": "Nie można powiązać zgłoszenia z samym sobą."}), 400
-
+    
         relation_type = clean(payload.get("relation_type")) or "related"
         if relation_type not in ("related",):
             relation_type = "related"
-
+    
         a_id = min(ticket_id, linked_ticket_id)
         b_id = max(ticket_id, linked_ticket_id)
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -5427,7 +6129,7 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie można zmieniać powiązań zamkniętego zgłoszenia."}), 400
-
+    
         cur.execute("""
             INSERT INTO ticket_links (ticket_id, linked_ticket_id, relation_type, created_by_email)
             VALUES (%s, %s, %s, %s)
@@ -5435,12 +6137,12 @@ data:
             RETURNING id
         """, (a_id, b_id, relation_type, user["email"]))
         inserted = cur.fetchone()
-
+    
         if not inserted:
             cur.close()
             conn.close()
             return jsonify({"error": "Te zgłoszenia są już powiązane."}), 409
-
+    
         add_ticket_event(
             cur,
             ticket_id,
@@ -5475,28 +6177,28 @@ data:
             f"Zgłoszenie #{linked_ticket_id}: {titles[linked_ticket_id]} powiązano ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}.",
             actor_email=user["email"],
         )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} powiązał zgłoszenie #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
         publish_event(f"{user['name']} powiązał zgłoszenie #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
         return jsonify({"status": "ok"}), 201
-
-
+    
+    
     @app.delete("/api/tickets/<int:ticket_id>/links/<int:linked_ticket_id>")
     @api_login_required
     def api_remove_ticket_link(user, ticket_id, linked_ticket_id):
         if not is_staff(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         if linked_ticket_id == ticket_id:
             return jsonify({"error": "Nieprawidłowe powiązanie."}), 400
-
+    
         a_id = min(ticket_id, linked_ticket_id)
         b_id = max(ticket_id, linked_ticket_id)
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -5515,17 +6217,17 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Nie można zmieniać powiązań zamkniętego zgłoszenia."}), 400
-
+    
         cur.execute("""
             DELETE FROM ticket_links
             WHERE ticket_id = %s AND linked_ticket_id = %s AND relation_type = 'related'
         """, (a_id, b_id))
-
+    
         if cur.rowcount == 0:
             cur.close()
             conn.close()
             return jsonify({"error": "Powiązanie nie istnieje."}), 404
-
+    
         add_ticket_event(
             cur,
             ticket_id,
@@ -5559,16 +6261,16 @@ data:
             f"Usunięto powiązanie zgłoszenia #{linked_ticket_id}: {titles[linked_ticket_id]} ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}.",
             actor_email=user["email"],
         )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} usunął powiązanie zgłoszenia #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
         publish_event(f"{user['name']} usunął powiązanie zgłoszenia #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
         return jsonify({"status": "ok"})
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/comments")
     @api_login_required
     def api_add_comment(user, ticket_id):
@@ -5577,16 +6279,16 @@ data:
         payload = request.get_json(silent=True) or {}
         content = clean(payload.get("content"))
         visibility = clean(payload.get("visibility")) or "public"
-
+    
         if not is_staff(user):
             visibility = "public"
-
+    
         if visibility not in ("public", "internal"):
             visibility = "public"
-
+    
         if not content:
             return jsonify({"error": "content is required"}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         ok, ticket_status, error_code = ensure_ticket_mutable(cur, ticket_id)
@@ -5594,14 +6296,14 @@ data:
             cur.close()
             conn.close()
             return ticket_status, error_code
-
+    
         event_type = "internal_note_added" if visibility == "internal" else "comment_added"
         event_message = (
             f"Dodano notatkę wewnętrzną: {content[:120]}"
             if visibility == "internal"
             else f"Dodano komentarz publiczny: {content[:120]}"
         )
-
+    
         cur.execute("""
             INSERT INTO comments (ticket_id, author, content, visibility)
             VALUES (%s, %s, %s, %s)
@@ -5627,23 +6329,23 @@ data:
         conn.commit()
         cur.close()
         conn.close()
-
+    
         if visibility == "public":
             publish_event(f"{user['name']} dodał komentarz do zgłoszenia #{ticket_id}", "comment_added", ticket_id)
         else:
             # Nie publikujemy treści notatki wewnętrznej globalnie do zwykłych użytkowników.
             # Widok operatorów/adminów odświeży się po wejściu w zgłoszenie albo po kolejnej akcji.
             publish_event(f"{user['name']} dodał notatkę wewnętrzną do zgłoszenia #{ticket_id}", "internal_note_added", ticket_id, staff_only=True)
-
+    
         return jsonify({"status": "ok", "visibility": visibility})
-
-
+    
+    
     @app.get("/api/tickets/<int:ticket_id>/attachments")
     @api_login_required
     def api_ticket_attachments(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
             return jsonify({"error": "forbidden"}), 403
-
+    
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -5655,7 +6357,7 @@ data:
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
+    
         return jsonify({
             "attachments": [
                 {
@@ -5669,36 +6371,36 @@ data:
                 for r in rows
             ]
         })
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/attachments")
     @api_login_required
     def api_upload_attachment(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
             return jsonify({"error": "forbidden"}), 403
-
+    
         if "file" not in request.files:
             return jsonify({"error": "Brak pliku."}), 400
-
+    
         uploaded_file = request.files["file"]
         original_filename = uploaded_file.filename or ""
         safe_filename = secure_filename(original_filename)
-
+    
         if not safe_filename:
             return jsonify({"error": "Nieprawidłowa nazwa pliku."}), 400
-
+    
         if not allowed_attachment(safe_filename):
             return jsonify({"error": "Niedozwolony typ pliku."}), 400
-
+    
         file_bytes = uploaded_file.read()
         size_bytes = len(file_bytes)
-
+    
         if size_bytes <= 0:
             return jsonify({"error": "Pusty plik."}), 400
-
+    
         if size_bytes > MAX_ATTACHMENT_SIZE:
             return jsonify({"error": "Plik jest za duży. Maksymalny rozmiar to 10 MB."}), 400
-
+    
         conn = get_conn()
         cur = conn.cursor()
         ok, ticket_status, error_code = ensure_ticket_mutable(cur, ticket_id)
@@ -5706,17 +6408,17 @@ data:
             cur.close()
             conn.close()
             return ticket_status, error_code
-
+    
         ticket_dir = os.path.join(ATTACHMENTS_DIR, str(ticket_id))
         os.makedirs(ticket_dir, exist_ok=True)
-
+    
         stored_basename = f"{uuid.uuid4().hex}_{safe_filename}"
         stored_filename = f"{ticket_id}/{stored_basename}"
         target_path = attachment_path(stored_filename)
-
+    
         with open(target_path, "wb") as f:
             f.write(file_bytes)
-
+    
         cur.execute("""
             INSERT INTO attachments (
                 ticket_id,
@@ -5739,7 +6441,7 @@ data:
             user["name"],
         ))
         attachment_id = cur.fetchone()[0]
-
+    
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
         add_ticket_event(cur, ticket_id, user, "attachment_added", f"Dodano załącznik: {original_filename}")
         log_audit(cur, user, "attachment_added", "ticket", ticket_id, {
@@ -5754,15 +6456,15 @@ data:
             f"Dodano załącznik do zgłoszenia #{ticket_id}: {original_filename}.",
             actor_email=user["email"],
         )
-
+    
         conn.commit()
         cur.close()
         conn.close()
-
+    
         publish_event(f"{user['name']} dodał załącznik do zgłoszenia #{ticket_id}: {original_filename}", "attachment_added", ticket_id)
         return jsonify({"status": "ok", "attachment_id": attachment_id}), 201
-
-
+    
+    
     @app.get("/api/attachments/<int:attachment_id>/download")
     @api_login_required
     def api_download_attachment(user, attachment_id):
@@ -5776,23 +6478,23 @@ data:
         row = cur.fetchone()
         cur.close()
         conn.close()
-
+    
         if not row:
             return jsonify({"error": "not found"}), 404
-
+    
         ticket_id, original_filename, stored_filename, content_type = row
-
+    
         if not can_view_ticket(user, ticket_id):
             return jsonify({"error": "forbidden"}), 403
-
+    
         try:
             target_path = attachment_path(stored_filename)
         except ValueError:
             return jsonify({"error": "invalid attachment path"}), 400
-
+    
         if not os.path.exists(target_path):
             return jsonify({"error": "file not found"}), 404
-
+    
         return send_file(
             target_path,
             as_attachment=True,
