@@ -662,6 +662,14 @@ data:
                         UNIQUE(workflow_id, step_name)
                     );
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workflow_operators (
+                        workflow_id INTEGER REFERENCES workflow_definitions(id) ON DELETE CASCADE,
+                        user_email TEXT REFERENCES users(email) ON DELETE CASCADE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        PRIMARY KEY (workflow_id, user_email)
+                    );
+                """)
                 seed_workflows(cur)
                 cur.execute("""
                     UPDATE workflow_definitions
@@ -1005,6 +1013,80 @@ data:
             VALUES (%s, %s, %s)
             ON CONFLICT (ticket_id, user_email) DO NOTHING
         """, (ticket_id, user_email, added_by_email))
+    def workflow_operator_entries(cur, workflow_id):
+        cur.execute("""
+            SELECT
+                wo.user_email,
+                COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), wo.user_email) AS name
+            FROM workflow_operators wo
+            LEFT JOIN users u ON lower(u.email) = lower(wo.user_email)
+            WHERE wo.workflow_id = %s
+            ORDER BY lower(name), lower(wo.user_email)
+        """, (workflow_id,))
+        return [{"email": r[0], "name": r[1]} for r in cur.fetchall()]
+    def workflow_operator_emails_by_key(cur, workflow_key):
+        cur.execute("""
+            SELECT wo.user_email
+            FROM workflow_operators wo
+            JOIN workflow_definitions wd ON wd.id = wo.workflow_id
+            JOIN users u ON lower(u.email) = lower(wo.user_email)
+            WHERE wd.workflow_key = %s
+              AND wd.is_active = TRUE
+              AND u.roles IS NOT NULL
+              AND ('operator' = ANY(u.roles) OR 'admin' = ANY(u.roles))
+            ORDER BY lower(wo.user_email)
+        """, (workflow_key,))
+        return [r[0] for r in cur.fetchall() if r and r[0]]
+    def normalize_workflow_operator_emails(payload):
+        raw = payload.get("operator_emails") or payload.get("operators") or []
+        if isinstance(raw, str):
+            raw = [x.strip() for x in raw.replace(";", ",").split(",")]
+        result = []
+        seen = set()
+        for email in raw:
+            email = clean(email).lower()
+            if email and email not in seen:
+                seen.add(email)
+                result.append(email)
+        return result
+    def validate_workflow_operator_emails(cur, emails):
+        if not emails:
+            return []
+        cur.execute("""
+            SELECT lower(email), email
+            FROM users
+            WHERE lower(email) = ANY(%s)
+              AND roles IS NOT NULL
+              AND ('operator' = ANY(roles) OR 'admin' = ANY(roles))
+        """, (emails,))
+        valid = {r[0]: r[1] for r in cur.fetchall()}
+        missing = [email for email in emails if email not in valid]
+        if missing:
+            raise ValueError("Nieprawidłowi operatorzy workflow: " + ", ".join(missing))
+        return [valid[email] for email in emails]
+    def replace_workflow_operators(cur, workflow_id, operator_emails):
+        cur.execute("DELETE FROM workflow_operators WHERE workflow_id = %s", (workflow_id,))
+        for email in operator_emails:
+            cur.execute("""
+                INSERT INTO workflow_operators (workflow_id, user_email)
+                VALUES (%s, %s)
+                ON CONFLICT (workflow_id, user_email) DO NOTHING
+            """, (workflow_id, email))
+    def add_workflow_watchers_to_ticket(cur, ticket_id, workflow_key):
+        operator_emails = workflow_operator_emails_by_key(cur, workflow_key)
+        added = []
+        for email in operator_emails:
+            add_ticket_watcher(cur, ticket_id, email, None)
+            added.append(email)
+        if added:
+            add_ticket_event(
+                cur,
+                ticket_id,
+                None,
+                "workflow_watchers_added",
+                "System dodał operatorów workflow jako obserwatorów: " + ", ".join(added),
+            )
+        return added
     def ticket_notification_recipients(cur, ticket_id, event_type):
         """Return notification recipients according to the helpdesk workflow.
         Workflow:
@@ -2396,7 +2478,8 @@ data:
             <tr>
               <td>
                 <strong>${{esc(w.name)}}</strong><br>
-                <span class="muted">${{esc(w.workflow_key)}}</span>
+                <span class="muted">${{esc(w.workflow_key)}}</span><br>
+                <span class="muted">Operatorzy: ${{(w.operators || []).map(o => esc(o.name || o.email)).join(", ") || "Brak"}}</span>
               </td>
               <td>${{workflowMatchLabel(w)}}</td>
               <td>
@@ -2453,6 +2536,9 @@ data:
           if (!me || !isAdmin(me)) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
+          const usersRes = await api("/api/admin/users");
+          const usersData = usersRes && usersRes.ok ? await usersRes.json() : { users: [] };
+          const workflowOperatorUsers = (usersData.users || []).filter(u => (u.roles || []).includes("operator") || (u.roles || []).includes("admin"));
           let workflow = {{
             id: null,
             workflow_key: "",
@@ -2462,6 +2548,8 @@ data:
             is_default: false,
             is_active: true,
             ticket_count: 0,
+            operator_emails: [],
+            operators: [],
             steps: [
               {{ step_name: "Nowe" }},
               {{ step_name: "Otwarte" }},
@@ -2485,6 +2573,18 @@ data:
               ${{c === "*" ? "Dowolna kategoria" : esc(c)}}
             </option>
           `).join("");
+          const selectedWorkflowOperators = new Set((workflow.operator_emails || []).map(e => String(e).toLowerCase()));
+          const operatorOptions = workflowOperatorUsers.map(u => {{
+            const email = String(u.email || "").toLowerCase();
+            const checked = selectedWorkflowOperators.has(email) ? "checked" : "";
+            return `
+              <label style="display:block;margin:6px 0;">
+                <input type="checkbox" name="operator_emails" value="${{esc(email)}}" ${{checked}}>
+                <strong>${{esc(u.full_name || u.email)}}</strong>
+                <span class="muted">(${{esc((u.roles || []).join(", "))}})</span>
+              </label>
+            `;
+          }}).join("") || `<p class="muted">Brak operatorów/adminów do wyboru.</p>`;
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
@@ -2513,6 +2613,11 @@ data:
                   <label><input type="checkbox" name="is_default" ${{workflow.is_default ? "checked" : ""}}> Workflow domyślny</label>
                   <div class="attachment-upload-hint">Workflow domyślny jest używany, gdy nie ma dopasowania do kategorii lub podkategorii.</div>
                 </div>
+                <label>Operatorzy workflow / domyślni obserwatorzy</label>
+                <div class="card" style="padding:12px;margin-bottom:12px">
+                  <div class="attachment-upload-hint">Wybrane osoby zostaną automatycznie dodane jako obserwatorzy nowych zgłoszeń utworzonych w tym workflow. Pole „Przypisane do” nadal pozostaje osobną decyzją.</div>
+                  ${{operatorOptions}}
+                </div>
                 <label>Kroki / statusy workflow</label>
                 <textarea name="steps" rows="10" required>${{esc(workflowStepsText(workflow))}}</textarea>
                 <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
@@ -2538,6 +2643,7 @@ data:
             payload.is_active = formData.get("is_active") === "on";
             payload.is_default = formData.get("is_default") === "on";
             payload.steps = payload.steps || "";
+            payload.operator_emails = Array.from(document.querySelectorAll('input[name="operator_emails"]:checked')).map(cb => cb.value);
             const endpoint = editing ? `/api/admin/workflows/${{workflow.id}}` : "/api/admin/workflows";
             const method = editing ? "PUT" : "POST";
             const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
@@ -2583,7 +2689,8 @@ data:
             "workflow_created": "Utworzono workflow",
             "workflow_updated": "Zmieniono workflow",
             "workflow_deactivated": "Dezaktywowano workflow",
-            "workflow_deleted": "Usunięto workflow"
+            "workflow_deleted": "Usunięto workflow",
+            "workflow_watchers_added": "Dodano operatorów workflow jako obserwatorów"
           }};
           return map[action] || action;
         }}
@@ -4018,6 +4125,7 @@ data:
         """)
         workflows = []
         for r in cur.fetchall():
+            operators = workflow_operator_entries(cur, r[0])
             workflows.append({
                 "id": r[0],
                 "workflow_key": r[1],
@@ -4029,6 +4137,8 @@ data:
                 "created_at": str(r[7]),
                 "updated_at": str(r[8]),
                 "ticket_count": int(r[9] or 0),
+                "operators": operators,
+                "operator_emails": [o["email"] for o in operators],
             })
         cur.close()
         conn.close()
@@ -4063,6 +4173,7 @@ data:
         ]
         cur.execute("SELECT COUNT(*) FROM tickets WHERE workflow_key = %s", (row[1],))
         ticket_count = cur.fetchone()[0]
+        operators = workflow_operator_entries(cur, row[0])
         cur.close()
         conn.close()
         return jsonify({
@@ -4077,6 +4188,8 @@ data:
             "updated_at": str(row[8]),
             "ticket_count": int(ticket_count or 0),
             "steps": steps,
+            "operators": operators,
+            "operator_emails": [o["email"] for o in operators],
         })
     def normalize_workflow_payload(payload, existing_key=None):
         name = clean(payload.get("name"))
@@ -4132,6 +4245,13 @@ data:
             return jsonify({"error": error}), 400
         conn = get_conn()
         cur = conn.cursor()
+        operator_emails = normalize_workflow_operator_emails(payload)
+        try:
+            operator_emails = validate_workflow_operator_emails(cur, operator_emails)
+        except ValueError as exc:
+            cur.close()
+            conn.close()
+            return jsonify({"error": str(exc)}), 400
         if data["is_default"]:
             cur.execute("UPDATE workflow_definitions SET is_default = FALSE")
         cur.execute("""
@@ -4150,7 +4270,10 @@ data:
                 INSERT INTO workflow_steps (workflow_id, step_name, step_order, is_final)
                 VALUES (%s, %s, %s, %s)
             """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
-        log_audit(cur, user, "workflow_created", "workflow", workflow_id, data)
+        replace_workflow_operators(cur, workflow_id, operator_emails)
+        audit_details = dict(data)
+        audit_details["operator_emails"] = operator_emails
+        log_audit(cur, user, "workflow_created", "workflow", workflow_id, audit_details)
         conn.commit()
         cur.close()
         conn.close()
@@ -4175,6 +4298,13 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": error}), 400
+        operator_emails = normalize_workflow_operator_emails(payload)
+        try:
+            operator_emails = validate_workflow_operator_emails(cur, operator_emails)
+        except ValueError as exc:
+            cur.close()
+            conn.close()
+            return jsonify({"error": str(exc)}), 400
         if existing[1] and not data["is_default"]:
             cur.execute("SELECT COUNT(*) FROM workflow_definitions WHERE is_default = TRUE AND id <> %s", (workflow_id,))
             if cur.fetchone()[0] == 0:
@@ -4202,7 +4332,10 @@ data:
                 INSERT INTO workflow_steps (workflow_id, step_name, step_order, is_final)
                 VALUES (%s, %s, %s, %s)
             """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
-        log_audit(cur, user, "workflow_updated", "workflow", workflow_id, data)
+        replace_workflow_operators(cur, workflow_id, operator_emails)
+        audit_details = dict(data)
+        audit_details["operator_emails"] = operator_emails
+        log_audit(cur, user, "workflow_updated", "workflow", workflow_id, audit_details)
         conn.commit()
         cur.close()
         conn.close()
@@ -4741,6 +4874,7 @@ data:
             workflow_key, workflow_name,
         ))
         ticket_id = cur.fetchone()[0]
+        workflow_watchers = add_workflow_watchers_to_ticket(cur, ticket_id, workflow_key)
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
         log_audit(cur, user, "ticket_created", "ticket", ticket_id, {
             "title": title,
@@ -4749,6 +4883,7 @@ data:
             "priority": priority,
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
+            "workflow_watchers": workflow_watchers,
         })
         create_ticket_notifications(
             cur,
