@@ -2104,7 +2104,7 @@ data:
           if (!res) return null;
           const data = await res.json();
           const dashboardLink = canWorkTickets(data) ? ` · <a href="#" onclick="renderDashboard();return false;">Dashboard</a> · <a href="#" onclick="renderSlaCalendar();return false;">Kalendarz SLA</a>` : "";
-          const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a> · <a href="#" onclick="renderAudit();return false;">Audyt</a>` : "";
+          const adminLink = isAdmin(data) ? ` · <a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a> · <a href="#" onclick="renderAdminWorkflows();return false;">Workflow</a> · <a href="#" onclick="renderAudit();return false;">Audyt</a>` : "";
           userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{dashboardLink}}${{adminLink}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           await loadNotifications();
@@ -4422,6 +4422,7 @@ data:
     
     
     
+    @app.get("/api/workflows")
     @app.get("/api/admin/workflows")
     @api_login_required
     def api_admin_workflows(user):
@@ -4466,6 +4467,7 @@ data:
         return jsonify({"workflows": workflows})
     
     
+    @app.get("/api/workflows/<int:workflow_id>")
     @app.get("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
     def api_admin_workflow_detail(user, workflow_id):
@@ -4566,6 +4568,7 @@ data:
         }, None
     
     
+    @app.post("/api/workflows")
     @app.post("/api/admin/workflows")
     @api_login_required
     def api_admin_create_workflow(user):
@@ -4608,6 +4611,7 @@ data:
         return jsonify({"id": workflow_id}), 201
     
     
+    @app.put("/api/workflows/<int:workflow_id>")
     @app.put("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
     def api_admin_update_workflow(user, workflow_id):
@@ -4668,6 +4672,7 @@ data:
         return jsonify({"status": "ok"})
     
     
+    @app.delete("/api/workflows/<int:workflow_id>")
     @app.delete("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
     def api_admin_delete_workflow(user, workflow_id):
