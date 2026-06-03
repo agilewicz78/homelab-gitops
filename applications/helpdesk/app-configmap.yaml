@@ -142,7 +142,7 @@ data:
 
     PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
 
-    STATUSES = [
+    STANDARD_STATUSES = [
         "Nowe",
         "Otwarte",
         "W trakcie",
@@ -151,6 +151,149 @@ data:
         "Rozwiązane",
         "Zamknięte",
     ]
+
+    WORKFLOWS = {
+        "default": {
+            "name": "Standardowy workflow zgłoszenia",
+            "match": {"category": "*", "subcategory": "*"},
+            "statuses": STANDARD_STATUSES,
+        },
+        "hardware_repair": {
+            "name": "Naprawa sprzętu komputerowego",
+            "match": {"category": "Komputer i laptop", "subcategory": "Awaria sprzętu"},
+            "statuses": [
+                "Nowe",
+                "Diagnostyka",
+                "W naprawie",
+                "Oczekuje na części",
+                "Oczekuje na użytkownika",
+                "Rozwiązane",
+                "Zamknięte",
+            ],
+        },
+        "computer_support": {
+            "name": "Wsparcie komputera i laptopa",
+            "match": {"category": "Komputer i laptop", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Diagnostyka",
+                "W trakcie",
+                "Oczekuje na użytkownika",
+                "Rozwiązane",
+                "Zamknięte",
+            ],
+        },
+        "system_access": {
+            "name": "Wniosek o dostęp do systemu",
+            "match": {"category": "Dostępy do systemów", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Weryfikacja wniosku",
+                "Oczekuje na akceptację",
+                "Zaakceptowane",
+                "W realizacji",
+                "Zrealizowane",
+                "Zamknięte",
+            ],
+        },
+        "printer_support": {
+            "name": "Obsługa drukarek i skanerów",
+            "match": {"category": "Drukarki i skanery", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Diagnostyka",
+                "W trakcie",
+                "Oczekuje na dostawcę",
+                "Oczekuje na użytkownika",
+                "Rozwiązane",
+                "Zamknięte",
+            ],
+        },
+        "vpn_remote_work": {
+            "name": "VPN i praca zdalna",
+            "match": {"category": "VPN i praca zdalna", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Analiza",
+                "W trakcie",
+                "Oczekuje na użytkownika",
+                "Rozwiązane",
+                "Zamknięte",
+            ],
+        },
+        "email_support": {
+            "name": "Obsługa poczty e-mail",
+            "match": {"category": "Poczta e-mail", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Analiza",
+                "W trakcie",
+                "Oczekuje na użytkownika",
+                "Rozwiązane",
+                "Zamknięte",
+            ],
+        },
+        "account_password": {
+            "name": "Konta, hasła i MFA",
+            "match": {"category": "Konta i hasła", "subcategory": "*"},
+            "statuses": [
+                "Nowe",
+                "Weryfikacja",
+                "W realizacji",
+                "Oczekuje na użytkownika",
+                "Zrealizowane",
+                "Zamknięte",
+            ],
+        },
+    }
+
+    def workflow_statuses(workflow_key):
+        workflow = WORKFLOWS.get(workflow_key) or WORKFLOWS["default"]
+        statuses = list(workflow.get("statuses") or STANDARD_STATUSES)
+        if "Zamknięte" not in statuses:
+            statuses.append("Zamknięte")
+        return statuses
+
+    def all_statuses():
+        values = []
+        for workflow in WORKFLOWS.values():
+            for status in workflow_statuses(next((k for k, v in WORKFLOWS.items() if v is workflow), "default")):
+                if status not in values:
+                    values.append(status)
+        return values
+
+    def choose_workflow(category, subcategory):
+        category = str(category or "").strip()
+        subcategory = str(subcategory or "").strip() or "Inne"
+
+        for key, workflow in WORKFLOWS.items():
+            if key == "default":
+                continue
+            match = workflow.get("match") or {}
+            if match.get("category") == category and match.get("subcategory") == subcategory:
+                return key, workflow["name"]
+
+        for key, workflow in WORKFLOWS.items():
+            if key == "default":
+                continue
+            match = workflow.get("match") or {}
+            if match.get("category") == category and match.get("subcategory") == "*":
+                return key, workflow["name"]
+
+        return "default", WORKFLOWS["default"]["name"]
+
+    def reopen_status_for_workflow(workflow_key):
+        statuses = workflow_statuses(workflow_key)
+        if "Otwarte" in statuses:
+            return "Otwarte"
+        if "Nowe" in statuses:
+            return "Nowe"
+        for status in statuses:
+            if status != "Zamknięte":
+                return status
+        return "Nowe"
+
+    STATUSES = all_statuses()
 
     SLA_HOURS = {
         "Krytyczny": 4,
@@ -395,6 +538,14 @@ data:
                     ADD COLUMN IF NOT EXISTS resolution_summary TEXT
                 """)
                 cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS workflow_key TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS workflow_name TEXT
+                """)
+                cur.execute("""
                     UPDATE tickets
                     SET sla_due_at = created_at + CASE priority
                         WHEN 'Krytyczny' THEN INTERVAL '4 hours'
@@ -405,6 +556,20 @@ data:
                     END
                     WHERE sla_due_at IS NULL
                 """)
+                cur.execute("""
+                    SELECT id, category, COALESCE(subcategory, 'Inne')
+                    FROM tickets
+                    WHERE workflow_key IS NULL OR workflow_key = '' OR workflow_name IS NULL OR workflow_name = ''
+                """)
+                for ticket_id, category, subcategory in cur.fetchall():
+                    workflow_key, workflow_name = choose_workflow(category, subcategory)
+                    cur.execute("""
+                        UPDATE tickets
+                        SET workflow_key = %s,
+                            workflow_name = %s
+                        WHERE id = %s
+                    """, (workflow_key, workflow_name, ticket_id))
+
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS ticket_events (
                         id SERIAL PRIMARY KEY,
@@ -510,13 +675,15 @@ data:
                     for ticket in SEED_TICKETS:
                         priority = ticket[6]
                         sla_due_at = datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
+                        workflow_key, workflow_name = choose_workflow(ticket[5], "Inne")
                         cur.execute("""
                             INSERT INTO tickets (
                                 title, description, requester_name, requester_email,
-                                department, category, subcategory, priority, status, sla_due_at
+                                department, category, subcategory, priority, status, sla_due_at,
+                                workflow_key, workflow_name
                             )
-                            VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s)
-                        """, ticket + (sla_due_at,))
+                            VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s, %s, %s)
+                        """, ticket + (sla_due_at, workflow_key, workflow_name))
 
                 conn.commit()
                 cur.close()
@@ -2923,6 +3090,7 @@ data:
               <p><strong>SLA:</strong> <span class="sla-badge ${{slaClass(t.sla_state)}}">${{slaLabel(t.sla_state)}}</span> <span class="muted">${{esc(t.sla_due_at || "")}}</span></p>
               <p><strong>Przypisane do:</strong> ${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</p>
               <p><strong>Kategoria:</strong> ${{esc(t.category)}} / ${{esc(t.subcategory || "Inne")}}</p>
+              <p><strong>Workflow:</strong> ${{esc(t.workflow_name || "Standardowy workflow zgłoszenia")}}</p>
               <p><strong>Zgłaszający:</strong> ${{esc(t.requester_name)}} · ${{esc(t.requester_email)}}</p>
               <p><strong>Dział:</strong> ${{esc(t.department)}}</p>
               <h3>Opis</h3><p>${{esc(t.description)}}</p>
@@ -4010,12 +4178,13 @@ data:
                 "t.department ILIKE %s",
                 "t.category ILIKE %s",
                 "COALESCE(t.subcategory, '') ILIKE %s",
+                "COALESCE(t.workflow_name, '') ILIKE %s",
                 "t.status ILIKE %s",
                 "t.priority ILIKE %s",
                 "COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, '') ILIKE %s",
                 "COALESCE(t.assigned_to_email, '') ILIKE %s",
             ])
-            search_params.extend([like] * 12)
+            search_params.extend([like] * 13)
 
             filtered_clauses.append("(" + " OR ".join(search_terms) + ")")
             filtered_params.extend(search_params)
@@ -4069,14 +4238,16 @@ data:
                    t.closed_at,
                    t.closed_by_email,
                    COALESCE(NULLIF(trim(concat(cu.first_name, ' ', cu.last_name)), ''), t.closed_by_email) AS closed_by_name,
-                   t.resolution_summary
+                   t.resolution_summary,
+                   COALESCE(t.workflow_key, 'default') AS workflow_key,
+                   COALESCE(t.workflow_name, %s) AS workflow_name
             FROM tickets t
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             {filtered_where_sql}
             ORDER BY {sort_expr} {sort_order.upper()} {nulls}, t.id DESC
             LIMIT %s OFFSET %s
-        """, tuple(filtered_params + [page_size, offset]))
+        """, tuple([WORKFLOWS["default"]["name"]] + filtered_params + [page_size, offset]))
         rows = cur.fetchall()
         cur.close()
         conn.close()
@@ -4098,6 +4269,8 @@ data:
                 "assigned_to_email": row[11],
                 "assigned_to_name": row[12],
                 "sla_due_at": str(row[13]) if row[13] else "",
+                "workflow_key": row[19] or "default",
+                "workflow_name": row[20] or WORKFLOWS["default"]["name"],
                 "sla_state": sla_state(row[13], row[8]),
             })
 
@@ -4380,16 +4553,19 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         sla_due_at = sla_due_for_priority(priority)
+        workflow_key, workflow_name = choose_workflow(category, subcategory)
         cur.execute("""
             INSERT INTO tickets (
                 title, description, requester_name, requester_email,
-                department, category, subcategory, priority, status, sla_due_at
+                department, category, subcategory, priority, status, sla_due_at,
+                workflow_key, workflow_name
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Nowe', %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'Nowe', %s, %s, %s)
             RETURNING id
         """, (
             title, description, user["name"], user["email"],
             user["department"], category, subcategory, priority, sla_due_at,
+            workflow_key, workflow_name,
         ))
         ticket_id = cur.fetchone()[0]
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
@@ -4398,6 +4574,8 @@ data:
             "category": category,
             "subcategory": subcategory,
             "priority": priority,
+            "workflow_key": workflow_key,
+            "workflow_name": workflow_name,
         })
         create_ticket_notifications(
             cur,
@@ -4488,12 +4666,14 @@ data:
                    t.closed_at,
                    t.closed_by_email,
                    COALESCE(NULLIF(trim(concat(cu.first_name, ' ', cu.last_name)), ''), t.closed_by_email) AS closed_by_name,
-                   t.resolution_summary
+                   t.resolution_summary,
+                   COALESCE(t.workflow_key, 'default') AS workflow_key,
+                   COALESCE(t.workflow_name, %s) AS workflow_name
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
             WHERE t.id = %s
-        """, (ticket_id,))
+        """, (WORKFLOWS["default"]["name"], ticket_id,))
         row = cur.fetchone()
         if not row:
             cur.close()
@@ -4614,6 +4794,8 @@ data:
             "closed_by_email": row[17] or "",
             "closed_by_name": row[18] or "",
             "resolution_summary": row[19] or "",
+            "workflow_key": row[20] or "default",
+            "workflow_name": row[21] or WORKFLOWS["default"]["name"],
             "sla_state": sla_state(row[14], row[9]),
         }
         comments = [
@@ -4695,7 +4877,7 @@ data:
             "attachments": attachments,
             "watchers": watchers,
             "linked_tickets": linked_tickets,
-            "meta": {"statuses": STATUSES, "operators": operators, "watcher_candidates": watcher_candidates},
+            "meta": {"statuses": workflow_statuses(ticket.get("workflow_key")), "operators": operators, "watcher_candidates": watcher_candidates},
         })
 
 
@@ -4925,12 +5107,16 @@ data:
             conn.close()
             return jsonify({"error": "Tylko zamknięte zgłoszenie można otworzyć ponownie."}), 400
 
+        cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
+        workflow_key = (cur.fetchone() or ["default"])[0]
+        reopen_status = reopen_status_for_workflow(workflow_key)
+
         cur.execute("""
             UPDATE tickets
-            SET status = 'Otwarte',
+            SET status = %s,
                 updated_at = NOW()
             WHERE id = %s
-        """, (ticket_id,))
+        """, (reopen_status, ticket_id))
 
         add_ticket_event(
             cur,
@@ -4942,7 +5128,7 @@ data:
 
         log_audit(cur, user, "ticket_reopened", "ticket", ticket_id, {
             "old_status": old_status,
-            "new_status": "Otwarte",
+            "new_status": reopen_status,
             "reason": reason,
         })
 
@@ -4950,7 +5136,7 @@ data:
             cur,
             ticket_id,
             "status_changed",
-            f"Zgłoszenie #{ticket_id} zostało otwarte ponownie. Powód: {reason}",
+            f"Zgłoszenie #{ticket_id} zostało otwarte ponownie ze statusem {reopen_status}. Powód: {reason}",
             actor_email=user["email"],
         )
 
@@ -4969,8 +5155,6 @@ data:
             return jsonify({"error": "forbidden"}), 403
         payload = request.get_json(silent=True) or {}
         status = clean(payload.get("status")) or "Nowe"
-        if status not in STATUSES:
-            return jsonify({"error": "Nieprawidłowy status."}), 400
         if status == "Zamknięte":
             return jsonify({"error": "Do zamykania zgłoszenia użyj formularza zamknięcia."}), 400
 
@@ -4981,6 +5165,15 @@ data:
             cur.close()
             conn.close()
             return old_status, error_code
+
+        cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
+        workflow_row = cur.fetchone()
+        workflow_key = workflow_row[0] if workflow_row else "default"
+        allowed_statuses = workflow_statuses(workflow_key)
+        if status not in allowed_statuses:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Status nie jest dostępny w workflow tego zgłoszenia.", "allowed_statuses": allowed_statuses}), 400
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
         add_ticket_event(cur, ticket_id, user, "status_changed", f"Status zmieniony z {old_status} na {status}")
         log_audit(cur, user, "ticket_status_changed", "ticket", ticket_id, {
