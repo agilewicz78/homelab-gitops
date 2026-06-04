@@ -1086,6 +1086,22 @@ data:
                 "workflow_watchers_added",
                 "System dodał operatorów workflow jako obserwatorów: " + ", ".join(added),
             )
+            cur.execute("""
+                SELECT title, workflow_name
+                FROM tickets
+                WHERE id = %s
+            """, (ticket_id,))
+            ticket_row = cur.fetchone()
+            ticket_title = ticket_row[0] if ticket_row and ticket_row[0] else f"#{ticket_id}"
+            workflow_name = ticket_row[1] if ticket_row and ticket_row[1] else "workflow"
+            create_notifications(
+                cur,
+                added,
+                ticket_id,
+                "workflow_watcher_added",
+                f'Dodano Cię jako obserwatora zgłoszenia #{ticket_id}: {ticket_title} (workflow: {workflow_name})',
+                actor_email=None,
+            )
         return added
     def ticket_notification_recipients(cur, ticket_id, event_type):
         """Return notification recipients according to the helpdesk workflow.
