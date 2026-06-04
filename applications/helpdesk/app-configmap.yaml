@@ -1021,7 +1021,7 @@ data:
             FROM workflow_operators wo
             LEFT JOIN users u ON lower(u.email) = lower(wo.user_email)
             WHERE wo.workflow_id = %s
-            ORDER BY lower(name), lower(wo.user_email)
+            ORDER BY lower(COALESCE(NULLIF(trim(COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'')), ''), wo.user_email)), lower(wo.user_email)
         """, (workflow_id,))
         return [{"email": r[0], "name": r[1]} for r in cur.fetchall()]
     def workflow_operator_emails_by_key(cur, workflow_key):
