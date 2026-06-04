@@ -2537,7 +2537,7 @@ data:
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
           const usersRes = await api("/api/admin/users");
-          const usersData = usersRes && usersRes.ok ? await usersRes.json() : { users: [] };
+          const usersData = usersRes && usersRes.ok ? await usersRes.json() : {{ users: [] }};
           const workflowOperatorUsers = (usersData.users || []).filter(u => (u.roles || []).includes("operator") || (u.roles || []).includes("admin"));
           let workflow = {{
             id: null,
