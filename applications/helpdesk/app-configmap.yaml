@@ -3089,6 +3089,7 @@ data:
                   action_order: 1,
                 }}];
             return {{
+              id: r.id || null,
               name: r.name || `Reguła ${{idx + 1}}`,
               event_type: r.event_type || "comment_added",
               condition_status: r.condition_status || "",
