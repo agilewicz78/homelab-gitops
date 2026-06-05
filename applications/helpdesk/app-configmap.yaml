@@ -2022,6 +2022,16 @@ data:
       .status-action-card select { margin-bottom: 8px; }
       .workflow-hint { border: 1px solid rgba(56,189,248,.28); border-radius: 16px; padding: 12px; background: rgba(56,189,248,.08); color: var(--muted); font-size: 13px; line-height: 1.55; margin-top: 12px; }
       .workflow-hint strong { color: var(--text); }
+      .status-requirements-panel { margin-top: 12px; display: grid; gap: 8px; }
+      .requirement-box { border: 1px solid var(--border); border-radius: 16px; padding: 12px; background: rgba(31,41,55,.54); font-size: 13px; line-height: 1.45; }
+      .requirement-box.ok { border-color: rgba(34,197,94,.48); background: rgba(34,197,94,.08); }
+      .requirement-box.blocked { border-color: rgba(248,113,113,.58); background: rgba(248,113,113,.10); }
+      .requirement-box.neutral { border-color: rgba(148,163,184,.30); background: rgba(31,41,55,.38); }
+      .requirement-box strong { color: var(--text); }
+      .requirement-list { margin: 8px 0 0; padding-left: 18px; color: var(--muted); }
+      .requirement-list li { margin: 4px 0; }
+      .requirement-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+      .requirement-actions button { margin-top: 0; }
       .form-actions { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
       .form-actions button { margin-top: 14px; }
       .section-focus { animation: sectionFocus 1.6s ease; }
@@ -4456,11 +4466,14 @@ data:
               </div>
               <form id="statusForm">
                 <label>Nowy status</label>
-                <select name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
+                <select id="statusSelect" name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
                 <div class="workflow-hint">
-                  <strong>Ważne:</strong> jeżeli workflow wymaga komentarza lub załącznika, dodaj go najpierw w sekcji
-                  <strong>Komentarze</strong> albo <strong>Załączniki</strong>. Liczy się nowy wpis/plik dodany przez aktualnego operatora
+                  <strong>Ważne:</strong> przed zmianą statusu system sprawdzi wymagania dla wybranego przejścia.
+                  Jeżeli workflow wymaga komentarza albo załącznika, liczy się wyłącznie nowy wpis/plik dodany przez aktualnego operatora
                   po wejściu zgłoszenia w obecny status.
+                </div>
+                <div id="statusRequirementsPanel" class="status-requirements-panel">
+                  <div class="requirement-box neutral">Wybierz status, aby sprawdzić wymagania workflow.</div>
                 </div>
                 <div class="form-actions">
                   <button type="submit">Zapisz status</button>
@@ -4723,6 +4736,11 @@ data:
           }}
           const statusForm = document.getElementById("statusForm");
           if (statusForm) {{
+            const statusSelect = document.getElementById("statusSelect");
+            if (statusSelect) {{
+              statusSelect.addEventListener("change", () => loadStatusRequirements(id));
+              await loadStatusRequirements(id);
+            }}
             statusForm.addEventListener("submit", async (e) => {{
               e.preventDefault();
               const payload = Object.fromEntries(new FormData(statusForm).entries());
@@ -4737,16 +4755,17 @@ data:
                 suppressNextLiveRefresh = false;
                 const err = res ? await res.json().catch(() => ({{ error: "Nie udało się zmienić statusu." }})) : {{ error: "Nie udało się zmienić statusu." }};
                 alert(err.error || "Nie udało się zmienić statusu.");
+                if (err.validation) {{
+                  renderStatusRequirementsBox(Object.assign({{ requested_status: newStatus }}, err.validation, {{
+                    missing_requirements: err.missing_requirements || err.validation.missing || [],
+                    guidance: err.guidance || err.validation.guidance || "Uzupełnij brakujące elementy przed zmianą statusu."
+                  }}));
+                }}
                 const missing = err.missing_requirements || [];
-                const targetId = missing.includes("comment") ? "commentsSection" : (missing.includes("attachment") ? "attachmentsSection" : null);
-                if (targetId) {{
-                  const target = document.getElementById(targetId);
-                  if (target) {{
-                    target.scrollIntoView({{ behavior: "smooth", block: "center" }});
-                    target.classList.remove("section-focus");
-                    void target.offsetWidth;
-                    target.classList.add("section-focus");
-                  }}
+                if (missing.includes("comment")) {{
+                  focusRequirementSection("comment");
+                }} else if (missing.includes("attachment")) {{
+                  focusRequirementSection("attachment");
                 }}
                 return;
               }}
@@ -4815,6 +4834,67 @@ data:
               await renderTicket(id);
             }});
           }}
+        }}
+        function focusRequirementSection(kind) {{
+          const targetId = kind === "comment" ? "commentsSection" : (kind === "attachment" ? "attachmentsSection" : null);
+          if (!targetId) return;
+          const target = document.getElementById(targetId);
+          if (!target) return;
+          target.scrollIntoView({{ behavior: "smooth", block: "center" }});
+          target.classList.remove("section-focus");
+          void target.offsetWidth;
+          target.classList.add("section-focus");
+        }}
+        function renderStatusRequirementsBox(info) {{
+          const panel = document.getElementById("statusRequirementsPanel");
+          if (!panel) return;
+          const required = info.required || [];
+          const missing = info.missing_requirements || info.missing || [];
+          const ruleNames = info.rule_names || [];
+          const requested = info.requested_status || "";
+          if (!required.length) {{
+            panel.innerHTML = `<div class="requirement-box ok"><strong>Brak dodatkowych wymagań.</strong><br><span class="muted">Status można zmienić na „${{esc(requested)}}” bez dodatkowego komentarza lub załącznika.</span></div>`;
+            return;
+          }}
+          const rows = [];
+          if (required.includes("comment")) {{
+            rows.push(`<li><strong>Komentarz:</strong> ${{info.comment_validated ? "spełniono — dodano nowy komentarz dla bieżącego statusu." : "wymagany — dodaj nowy komentarz w sekcji Komentarze."}}</li>`);
+          }}
+          if (required.includes("attachment")) {{
+            rows.push(`<li><strong>Załącznik:</strong> ${{info.attachment_validated ? "spełniono — dodano nowy załącznik dla bieżącego statusu." : "wymagany — dodaj nowy plik w sekcji Załączniki."}}</li>`);
+          }}
+          const cls = missing.length ? "blocked" : "ok";
+          const title = missing.length ? "Zmiana statusu będzie zablokowana." : "Wymagania spełnione.";
+          const guidance = info.guidance || (missing.length ? "Uzupełnij brakujące elementy przed kliknięciem „Zapisz status”." : "Możesz zapisać zmianę statusu.");
+          const buttons = missing.length ? `
+            <div class="requirement-actions">
+              ${{missing.includes("comment") ? `<button type="button" class="btn-secondary btn-small" onclick="focusRequirementSection('comment')">Przejdź do komentarzy</button>` : ""}}
+              ${{missing.includes("attachment") ? `<button type="button" class="btn-secondary btn-small" onclick="focusRequirementSection('attachment')">Przejdź do załączników</button>` : ""}}
+            </div>` : "";
+          panel.innerHTML = `
+            <div class="requirement-box ${{cls}}">
+              <strong>${{title}}</strong><br>
+              <span class="muted">Przejście do statusu: <strong>${{esc(requested)}}</strong></span>
+              ${{ruleNames.length ? `<div class="muted">Reguła: ${{esc(ruleNames.join(", "))}}</div>` : ""}}
+              <ul class="requirement-list">${{rows.join("")}}</ul>
+              <div class="muted">${{esc(guidance)}}</div>
+              ${{buttons}}
+            </div>`;
+        }}
+        async function loadStatusRequirements(ticketId) {{
+          const select = document.getElementById("statusSelect");
+          const panel = document.getElementById("statusRequirementsPanel");
+          if (!select || !panel) return;
+          const status = select.value || "";
+          if (!status) return;
+          panel.innerHTML = `<div class="requirement-box neutral">Sprawdzam wymagania workflow...</div>`;
+          const res = await api(`/api/tickets/${{ticketId}}/status-requirements?status=${{encodeURIComponent(status)}}`);
+          if (!res || !res.ok) {{
+            panel.innerHTML = `<div class="requirement-box blocked"><strong>Nie udało się sprawdzić wymagań.</strong><br><span class="muted">Spróbuj odświeżyć zgłoszenie.</span></div>`;
+            return;
+          }}
+          const info = await res.json();
+          renderStatusRequirementsBox(info);
         }}
         async function removeTicketLink(ticketId, linkedTicketId) {{
           if (!confirm("Usunąć powiązanie z tym zgłoszeniem?")) return;
@@ -7656,12 +7736,70 @@ data:
             if name and name not in unique_rule_names:
                 unique_rule_names.append(name)
 
-        message = "Ta zmiana statusu wymaga dodania: " + " i ".join(labels) + "."
+        message = status_requirement_guidance(missing_requirements, old_status, new_status)
         if unique_rule_names:
             message += " Reguła: " + ", ".join(unique_rule_names)
 
         validation_details["missing"] = list(missing_requirements)
+        validation_details["guidance"] = status_requirement_guidance(missing_requirements, old_status, new_status)
         return False, message, missing_requirements, validation_details
+
+
+    def status_requirement_guidance(missing_requirements, old_status=None, new_status=None):
+        parts = []
+        if old_status and new_status:
+            parts.append(f"Nie można zmienić statusu z „{old_status}” na „{new_status}”.")
+        else:
+            parts.append("Nie można zmienić statusu.")
+        if "comment" in (missing_requirements or []):
+            parts.append("Dodaj nowy komentarz w sekcji Komentarze.")
+        if "attachment" in (missing_requirements or []):
+            parts.append("Dodaj nowy załącznik w sekcji Załączniki.")
+        parts.append("Liczy się element dodany przez aktualnego operatora po wejściu zgłoszenia w obecny status.")
+        return " ".join(parts)
+
+
+    @app.get("/api/tickets/<int:ticket_id>/status-requirements")
+    @api_login_required
+    def api_ticket_status_requirements(user, ticket_id):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+        requested_status = clean(request.args.get("status"))
+        conn = get_conn()
+        cur = conn.cursor()
+        ok, old_status, error_code = ensure_ticket_mutable(cur, ticket_id)
+        if not ok:
+            cur.close()
+            conn.close()
+            return old_status, error_code
+        cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
+        workflow_row = cur.fetchone()
+        workflow_key = workflow_row[0] if workflow_row else "default"
+        allowed_statuses = workflow_statuses(workflow_key)
+        if not requested_status:
+            requested_status = old_status
+        if requested_status not in allowed_statuses:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Status nie jest dostępny w workflow tego zgłoszenia.", "allowed_statuses": allowed_statuses}), 400
+        validation_ok, validation_error, missing_requirements, validation_details = validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, requested_status)
+        guidance = status_requirement_guidance(missing_requirements, old_status, requested_status) if missing_requirements else "Wymagania workflow dla tego przejścia są spełnione."
+        cur.close()
+        conn.close()
+        return jsonify({
+            "ticket_id": ticket_id,
+            "current_status": old_status,
+            "requested_status": requested_status,
+            "valid": validation_ok,
+            "error": validation_error,
+            "guidance": guidance,
+            "missing_requirements": missing_requirements,
+            "required": validation_details.get("required") or [],
+            "missing": validation_details.get("missing") or [],
+            "rule_names": validation_details.get("rule_names") or [],
+            "comment_validated": validation_details.get("comment_validated", False),
+            "attachment_validated": validation_details.get("attachment_validated", False),
+        })
 
 
     @app.post("/api/tickets/<int:ticket_id>/status")
@@ -7692,7 +7830,12 @@ data:
         if not validation_ok:
             cur.close()
             conn.close()
-            return jsonify({"error": validation_error, "missing_requirements": missing_requirements}), 409
+            return jsonify({
+                "error": validation_error,
+                "missing_requirements": missing_requirements,
+                "guidance": validation_details.get("guidance") or status_requirement_guidance(missing_requirements, old_status, status),
+                "validation": validation_details,
+            }), 409
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
         add_ticket_status_history(
             cur,
