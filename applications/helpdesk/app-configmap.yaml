@@ -4350,13 +4350,7 @@ data:
               <form id="statusForm">
                 <label>Status</label>
                 <select name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
-                <label>Komentarz do zmiany statusu</label>
-                <textarea name="status_comment" rows="3" placeholder="Opcjonalnie. Może być wymagany przez regułę workflow."></textarea>
-                <label class="checkbox-row" style="margin-top:8px">
-                  <input type="checkbox" name="status_comment_internal">
-                  Zapisz komentarz jako notatkę wewnętrzną
-                </label>
-                <p class="muted">Jeżeli reguła workflow wymaga załącznika, zgłoszenie musi mieć co najmniej jeden załącznik przed zmianą statusu.</p>
+                <p class="muted">Jeżeli workflow wymaga komentarza lub załącznika, dodaj je najpierw w sekcji Komentarze / Załączniki. System zablokuje zmianę statusu do czasu spełnienia warunku.</p>
                 <button type="submit">Zapisz status</button>
               </form>
             </section>` : "";
@@ -4492,7 +4486,7 @@ data:
               <h3>Historia zmian</h3>
               ${{eventHistory}}
             </section>
-            <section class="card">
+            <section class="card" id="attachmentsSection">
               <h3>Załączniki</h3>
               ${{attachmentList}}
               ${{!isClosed ? `
@@ -4504,7 +4498,7 @@ data:
                 </form>
               ` : `<p class="muted">Zgłoszenie zamknięte — dodawanie załączników jest zablokowane.</p>`}}
             </section>
-            <section class="card">
+            <section class="card" id="commentsSection">
               <h3>Komentarze</h3>
               ${{comments}}
               ${{!isClosed ? `
@@ -4571,8 +4565,6 @@ data:
             statusForm.addEventListener("submit", async (e) => {{
               e.preventDefault();
               const payload = Object.fromEntries(new FormData(statusForm).entries());
-              payload.status_comment_visibility = payload.status_comment_internal === "on" ? "internal" : "public";
-              delete payload.status_comment_internal;
               const newStatus = payload.status || "";
               if (newStatus === "Zamknięte") {{
                 openCloseTicketModal(id);
@@ -4584,6 +4576,12 @@ data:
                 suppressNextLiveRefresh = false;
                 const err = res ? await res.json().catch(() => ({{ error: "Nie udało się zmienić statusu." }})) : {{ error: "Nie udało się zmienić statusu." }};
                 alert(err.error || "Nie udało się zmienić statusu.");
+                const missing = err.missing_requirements || [];
+                const targetId = missing.includes("comment") ? "commentsSection" : (missing.includes("attachment") ? "attachmentsSection" : null);
+                if (targetId) {{
+                  const target = document.getElementById(targetId);
+                  if (target) target.scrollIntoView({{ behavior: "smooth", block: "center" }});
+                }}
                 return;
               }}
               showToast(
@@ -7011,15 +7009,18 @@ data:
         conn.close()
         publish_event(f"{user['name']} otworzył ponownie zgłoszenie #{ticket_id}", "status_changed", ticket_id)
         return jsonify({"status": "ok", "ticket_status": "Otwarte"})
-    def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status, status_comment=""):
+    def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status):
         """
         Walidacje workflow wykonywane PRZED zmianą statusu.
         Reguły automatyzacji dla eventu status_changed mogą zawierać akcje:
-        - require_comment: blokuje przejście, jeśli nie podano komentarza do zmiany statusu,
+        - require_comment: blokuje przejście, jeśli zgłoszenie nie ma żadnego komentarza,
         - require_attachment: blokuje przejście, jeśli zgłoszenie nie ma żadnego załącznika.
+
+        Komentarz i załącznik są dodawane w standardowych sekcjach zgłoszenia,
+        a nie w formularzu zmiany statusu.
         """
         if old_status == new_status:
-            return True, None
+            return True, None, []
         cur.execute("SELECT COALESCE(workflow_key, 'default'), assigned_to_email FROM tickets WHERE id = %s", (ticket_id,))
         row = cur.fetchone()
         workflow_key = row[0] if row else "default"
@@ -7045,14 +7046,42 @@ data:
                     required_comment_rules.append(rule.get("name") or "Reguła workflow")
                 elif action_type == "require_attachment":
                     required_attachment_rules.append(rule.get("name") or "Reguła workflow")
-        if required_comment_rules and not clean(status_comment):
-            return False, "Ta zmiana statusu wymaga komentarza. Reguła: " + ", ".join(required_comment_rules)
+        missing_requirements = []
+        if required_comment_rules:
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM comments
+                WHERE ticket_id = %s
+                  AND COALESCE(NULLIF(TRIM(content), ''), '') <> ''
+            """, (ticket_id,))
+            comment_count = cur.fetchone()[0]
+            if comment_count <= 0:
+                missing_requirements.append("comment")
         if required_attachment_rules:
             cur.execute("SELECT COUNT(*) FROM attachments WHERE ticket_id = %s", (ticket_id,))
             attachment_count = cur.fetchone()[0]
             if attachment_count <= 0:
-                return False, "Ta zmiana statusu wymaga załącznika w zgłoszeniu. Reguła: " + ", ".join(required_attachment_rules)
-        return True, None
+                missing_requirements.append("attachment")
+        if missing_requirements:
+            labels = []
+            if "comment" in missing_requirements:
+                labels.append("komentarza")
+            if "attachment" in missing_requirements:
+                labels.append("załącznika")
+            rule_names = []
+            if "comment" in missing_requirements:
+                rule_names.extend(required_comment_rules)
+            if "attachment" in missing_requirements:
+                rule_names.extend(required_attachment_rules)
+            unique_rule_names = []
+            for name in rule_names:
+                if name and name not in unique_rule_names:
+                    unique_rule_names.append(name)
+            message = "Ta zmiana statusu wymaga dodania: " + " i ".join(labels) + "."
+            if unique_rule_names:
+                message += " Reguła: " + ", ".join(unique_rule_names)
+            return False, message, missing_requirements
+        return True, None, []
 
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
@@ -7061,10 +7090,6 @@ data:
             return jsonify({"error": "forbidden"}), 403
         payload = request.get_json(silent=True) or {}
         status = clean(payload.get("status")) or "Nowe"
-        status_comment = clean(payload.get("status_comment"))
-        status_comment_visibility = clean(payload.get("status_comment_visibility")) or "public"
-        if status_comment_visibility not in ("public", "internal"):
-            status_comment_visibility = "public"
         if status == "Zamknięte":
             return jsonify({"error": "Do zamykania zgłoszenia użyj formularza zamknięcia."}), 400
         conn = get_conn()
@@ -7082,25 +7107,13 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Status nie jest dostępny w workflow tego zgłoszenia.", "allowed_statuses": allowed_statuses}), 400
-        validation_ok, validation_error = validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, status, status_comment)
+        validation_ok, validation_error, missing_requirements = validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, status)
         if not validation_ok:
             cur.close()
             conn.close()
-            return jsonify({"error": validation_error}), 400
+            return jsonify({"error": validation_error, "missing_requirements": missing_requirements}), 409
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (status, ticket_id))
         add_ticket_event(cur, ticket_id, user, "status_changed", f"Status zmieniony z {old_status} na {status}")
-        if status_comment:
-            cur.execute("""
-                INSERT INTO comments (ticket_id, author, content, visibility)
-                VALUES (%s, %s, %s, %s)
-            """, (ticket_id, user["name"], status_comment, status_comment_visibility))
-            add_ticket_event(
-                cur,
-                ticket_id,
-                user,
-                "internal_note_added" if status_comment_visibility == "internal" else "comment_added",
-                "Dodano notatkę przy zmianie statusu." if status_comment_visibility == "internal" else "Dodano komentarz przy zmianie statusu."
-            )
         log_audit(cur, user, "ticket_status_changed", "ticket", ticket_id, {
             "old_status": old_status,
             "new_status": status,
