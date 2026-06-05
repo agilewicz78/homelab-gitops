@@ -7009,44 +7009,183 @@ data:
         conn.close()
         publish_event(f"{user['name']} otworzył ponownie zgłoszenie #{ticket_id}", "status_changed", ticket_id)
         return jsonify({"status": "ok", "ticket_status": "Otwarte"})
+    def workflow_requirement_action_types(rule):
+        """
+        Zwraca typy akcji wymagających walidacji dla reguły workflow.
+
+        Ważne:
+        - nowe wersje zapisują akcje w workflow_automation_actions,
+        - starsze / zmigrowane rekordy mogą mieć action_type bezpośrednio
+          w workflow_automations.
+        Dlatego sprawdzamy oba miejsca.
+        """
+        result = set()
+        for action in rule.get("actions") or []:
+            if action.get("is_active") is False:
+                continue
+            action_type = action.get("action_type") or ""
+            if action_type in ("require_comment", "require_attachment"):
+                result.add(action_type)
+
+        legacy_action_type = rule.get("action_type") or ""
+        if legacy_action_type in ("require_comment", "require_attachment"):
+            result.add(legacy_action_type)
+
+        return result
+
+
+    def workflow_status_requirement_rule_matches(rule, old_status, new_status, user, assigned_to_email=None):
+        """
+        Dopasowanie reguły wymagającej komentarza / załącznika.
+
+        Dla eventu status_changed system rozumie:
+        - condition_status + condition_to_status: dokładnie przejście z -> na,
+        - tylko condition_to_status: wejście do danego statusu,
+        - tylko condition_status: status przed zmianą ALBO status docelowy.
+          Ten ostatni wariant jest celowo tolerancyjny, bo w UI łatwo było
+          zinterpretować pole "Status / status przed zmianą" jako status,
+          dla którego wymagamy komentarza lub załącznika.
+        """
+        if not rule.get("is_active", True):
+            return False
+
+        condition_status = rule.get("condition_status")
+        condition_to_status = rule.get("condition_to_status")
+
+        if condition_status and condition_to_status:
+            if condition_status != old_status or condition_to_status != new_status:
+                return False
+        elif condition_to_status:
+            if condition_to_status != new_status:
+                return False
+        elif condition_status:
+            if condition_status not in (old_status, new_status):
+                return False
+
+        condition_role = rule.get("condition_role")
+        if condition_role and condition_role not in ("*", ""):
+            if condition_role == "staff" and not is_staff(user):
+                return False
+            if condition_role == "user" and is_staff(user):
+                return False
+            if condition_role == "operator" and not is_operator(user):
+                return False
+            if condition_role == "admin" and not is_admin(user):
+                return False
+
+        assigned_state = rule.get("assigned_state") or "*"
+        has_assignee = bool(assigned_to_email)
+        if assigned_state == "assigned" and not has_assignee:
+            return False
+        if assigned_state == "unassigned" and has_assignee:
+            return False
+
+        return True
+
+
+    def workflow_status_requirement_rules(cur, workflow_key, old_status, new_status, user, assigned_to_email=None):
+        """
+        Pobiera aktywne reguły status_changed i wybiera te, które wymagają
+        komentarza lub załącznika dla danej zmiany statusu.
+
+        Nie używamy tutaj wyłącznie workflow_automations_for_event(), ponieważ
+        tamto dopasowanie było zbyt ścisłe dla walidacji blokującej zmianę statusu.
+        Skutek był taki, że reguła widoczna w panelu workflow mogła nie zablokować
+        zapisu statusu, jeśli warunek statusu był zapisany w mniej oczywisty sposób.
+        """
+        workflow_id = workflow_id_by_key(cur, workflow_key)
+        if not workflow_id:
+            return []
+
+        cur.execute("""
+            SELECT id, name, event_type, condition_status, condition_to_status, condition_role,
+                   condition_comment_visibility, COALESCE(assigned_state, '*'), action_type,
+                   action_status, is_active, COALESCE(stop_processing, TRUE), COALESCE(priority, 100)
+            FROM workflow_automations
+            WHERE workflow_id = %s
+              AND event_type = 'status_changed'
+              AND COALESCE(is_active, TRUE) = TRUE
+            ORDER BY COALESCE(priority, 100) ASC, id ASC
+        """, (workflow_id,))
+
+        result = []
+        for r in cur.fetchall():
+            actions = workflow_automation_action_entries(cur, r[0])
+
+            rule = {
+                "id": r[0],
+                "workflow_id": workflow_id,
+                "workflow_key": workflow_key,
+                "name": r[1] or "Reguła workflow",
+                "event_type": r[2],
+                "condition_status": r[3],
+                "condition_to_status": r[4],
+                "condition_role": r[5],
+                "condition_comment_visibility": r[6],
+                "assigned_state": r[7] or "*",
+                "action_type": r[8],
+                "action_status": r[9],
+                "actions": actions,
+                "is_active": bool(r[10]),
+                "stop_processing": bool(r[11]),
+                "priority": int(r[12] or 100),
+            }
+
+            requirement_types = workflow_requirement_action_types(rule)
+            if not requirement_types:
+                continue
+
+            if workflow_status_requirement_rule_matches(rule, old_status, new_status, user, assigned_to_email):
+                rule["requirement_types"] = requirement_types
+                result.append(rule)
+
+        return result
+
+
     def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status):
         """
         Walidacje workflow wykonywane PRZED zmianą statusu.
-        Reguły automatyzacji dla eventu status_changed mogą zawierać akcje:
-        - require_comment: blokuje przejście, jeśli zgłoszenie nie ma żadnego komentarza,
-        - require_attachment: blokuje przejście, jeśli zgłoszenie nie ma żadnego załącznika.
+
+        Jeżeli reguła workflow dla status_changed ma akcję:
+        - require_comment: blokuje zmianę, dopóki zgłoszenie nie ma komentarza,
+        - require_attachment: blokuje zmianę, dopóki zgłoszenie nie ma załącznika.
 
         Komentarz i załącznik są dodawane w standardowych sekcjach zgłoszenia,
         a nie w formularzu zmiany statusu.
         """
         if old_status == new_status:
             return True, None, []
-        cur.execute("SELECT COALESCE(workflow_key, 'default'), assigned_to_email FROM tickets WHERE id = %s", (ticket_id,))
+
+        cur.execute("""
+            SELECT COALESCE(workflow_key, 'default'), assigned_to_email
+            FROM tickets
+            WHERE id = %s
+        """, (ticket_id,))
         row = cur.fetchone()
         workflow_key = row[0] if row else "default"
         assigned_to_email = row[1] if row else None
-        rules = workflow_automations_for_event(
+
+        rules = workflow_status_requirement_rules(
             cur,
             workflow_key,
-            "status_changed",
             old_status,
+            new_status,
             user,
-            None,
             assigned_to_email,
-            event_new_status=new_status,
         )
+
         required_comment_rules = []
         required_attachment_rules = []
+
         for rule in rules:
-            for action in rule.get("actions") or []:
-                if action.get("is_active") is False:
-                    continue
-                action_type = action.get("action_type") or "change_status"
-                if action_type == "require_comment":
-                    required_comment_rules.append(rule.get("name") or "Reguła workflow")
-                elif action_type == "require_attachment":
-                    required_attachment_rules.append(rule.get("name") or "Reguła workflow")
+            requirement_types = rule.get("requirement_types") or workflow_requirement_action_types(rule)
+            if "require_comment" in requirement_types:
+                required_comment_rules.append(rule.get("name") or "Reguła workflow")
+            if "require_attachment" in requirement_types:
+                required_attachment_rules.append(rule.get("name") or "Reguła workflow")
+
         missing_requirements = []
+
         if required_comment_rules:
             cur.execute("""
                 SELECT COUNT(*)
@@ -7054,33 +7193,42 @@ data:
                 WHERE ticket_id = %s
                   AND COALESCE(NULLIF(TRIM(content), ''), '') <> ''
             """, (ticket_id,))
-            comment_count = cur.fetchone()[0]
-            if comment_count <= 0:
+            if cur.fetchone()[0] <= 0:
                 missing_requirements.append("comment")
+
         if required_attachment_rules:
-            cur.execute("SELECT COUNT(*) FROM attachments WHERE ticket_id = %s", (ticket_id,))
-            attachment_count = cur.fetchone()[0]
-            if attachment_count <= 0:
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM attachments
+                WHERE ticket_id = %s
+            """, (ticket_id,))
+            if cur.fetchone()[0] <= 0:
                 missing_requirements.append("attachment")
+
         if missing_requirements:
             labels = []
             if "comment" in missing_requirements:
                 labels.append("komentarza")
             if "attachment" in missing_requirements:
                 labels.append("załącznika")
+
             rule_names = []
             if "comment" in missing_requirements:
                 rule_names.extend(required_comment_rules)
             if "attachment" in missing_requirements:
                 rule_names.extend(required_attachment_rules)
+
             unique_rule_names = []
             for name in rule_names:
                 if name and name not in unique_rule_names:
                     unique_rule_names.append(name)
+
             message = "Ta zmiana statusu wymaga dodania: " + " i ".join(labels) + "."
             if unique_rule_names:
                 message += " Reguła: " + ", ".join(unique_rule_names)
+
             return False, message, missing_requirements
+
         return True, None, []
 
     @app.post("/api/tickets/<int:ticket_id>/status")
