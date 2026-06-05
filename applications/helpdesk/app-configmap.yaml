@@ -1376,6 +1376,100 @@ data:
                     action.get("action_value"),
                     bool(action.get("is_active", True)),
                 ))
+    def workflow_steps_for_id(cur, workflow_id):
+        cur.execute("""
+            SELECT step_name
+            FROM workflow_steps
+            WHERE workflow_id = %s
+            ORDER BY step_order ASC, id ASC
+        """, (workflow_id,))
+        return [r[0] for r in cur.fetchall()]
+    def save_workflow_automation(cur, workflow_id, payload, automation_id=None):
+        steps = workflow_steps_for_id(cur, workflow_id)
+        normalized = normalize_workflow_automations({"automations": [payload]}, steps)
+        if not normalized:
+            raise ValueError("Nieprawidłowa reguła automatyzacji.")
+        item = normalized[0]
+        if automation_id is not None:
+            cur.execute("""
+                SELECT id
+                FROM workflow_automations
+                WHERE id = %s AND workflow_id = %s
+            """, (automation_id, workflow_id))
+            if not cur.fetchone():
+                raise LookupError("Reguła automatyzacji nie istnieje.")
+            cur.execute("""
+                UPDATE workflow_automations
+                SET name = %s,
+                    event_type = %s,
+                    condition_status = %s,
+                    condition_to_status = %s,
+                    condition_role = %s,
+                    condition_comment_visibility = %s,
+                    assigned_state = %s,
+                    action_type = %s,
+                    action_status = %s,
+                    is_active = %s,
+                    stop_processing = %s,
+                    priority = %s
+                WHERE id = %s AND workflow_id = %s
+            """, (
+                item.get("name") or "Reguła workflow",
+                item.get("event_type"),
+                item.get("condition_status"),
+                item.get("condition_to_status"),
+                item.get("condition_role"),
+                item.get("condition_comment_visibility"),
+                item.get("assigned_state") or "*",
+                item.get("action_type") or "change_status",
+                item.get("action_status"),
+                bool(item.get("is_active", True)),
+                bool(item.get("stop_processing", True)),
+                int(item.get("priority", 100) or 100),
+                automation_id,
+                workflow_id,
+            ))
+            saved_id = automation_id
+        else:
+            cur.execute("""
+                INSERT INTO workflow_automations (
+                    workflow_id, name, event_type, condition_status, condition_to_status, condition_role,
+                    condition_comment_visibility, assigned_state, action_type, action_status,
+                    is_active, stop_processing, priority
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """, (
+                workflow_id,
+                item.get("name") or "Reguła workflow",
+                item.get("event_type"),
+                item.get("condition_status"),
+                item.get("condition_to_status"),
+                item.get("condition_role"),
+                item.get("condition_comment_visibility"),
+                item.get("assigned_state") or "*",
+                item.get("action_type") or "change_status",
+                item.get("action_status"),
+                bool(item.get("is_active", True)),
+                bool(item.get("stop_processing", True)),
+                int(item.get("priority", 100) or 100),
+            ))
+            saved_id = cur.fetchone()[0]
+        cur.execute("DELETE FROM workflow_automation_actions WHERE automation_id = %s", (saved_id,))
+        for action in item.get("actions") or []:
+            cur.execute("""
+                INSERT INTO workflow_automation_actions (
+                    automation_id, action_order, action_type, action_value, is_active
+                )
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                saved_id,
+                int(action.get("action_order", 1) or 1),
+                action.get("action_type") or "change_status",
+                action.get("action_value"),
+                bool(action.get("is_active", True)),
+            ))
+        return saved_id
     def workflow_comment_event_type(user):
         return "staff_comment_added" if is_staff(user) else "user_comment_added"
     def workflow_actor_role(user):
@@ -3384,30 +3478,61 @@ data:
             priority: Number(formData.get("priority") || 100),
           }};
         }}
-        function saveWorkflowAutomationRuleForm(e) {{
+        async function saveWorkflowAutomationRuleForm(e) {{
           e.preventDefault();
           const rule = workflowAutomationRuleFromForm(e.target);
           if (!rule.actions || !rule.actions.length) {{
             alert("Dodaj przynajmniej jedną poprawną akcję reguły.");
             return;
           }}
-          if (workflowAutomationEditingIndex === null) {{
-            workflowAutomationEditor.push(rule);
+          const workflowId = workflowAutomationEditorWorkflow?.id;
+          if (workflowId) {{
+            const currentRule = workflowAutomationEditingIndex === null ? null : workflowAutomationEditor[workflowAutomationEditingIndex];
+            const endpoint = currentRule && currentRule.id
+              ? `/api/admin/workflows/${{workflowId}}/automations/${{currentRule.id}}`
+              : `/api/admin/workflows/${{workflowId}}/automations`;
+            const method = currentRule && currentRule.id ? "PUT" : "POST";
+            const res = await api(endpoint, {{ method, body: JSON.stringify(rule) }});
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              alert(data.error || "Nie udało się zapisać reguły automatyzacji.");
+              return;
+            }}
+            const data = await res.json();
+            workflowAutomationEditor = workflowDefaultAutomationRules({{ ...workflowAutomationEditorWorkflow, automations: data.automations || [] }});
+            workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
           }} else {{
-            workflowAutomationEditor[workflowAutomationEditingIndex] = rule;
+            if (workflowAutomationEditingIndex === null) {{
+              workflowAutomationEditor.push(rule);
+            }} else {{
+              workflowAutomationEditor[workflowAutomationEditingIndex] = rule;
+            }}
+            workflowAutomationEditor.sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
           }}
-          workflowAutomationEditor.sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
           closeWorkflowAutomationRuleForm();
           renderWorkflowAutomationRules();
         }}
         function addWorkflowAutomationRule() {{
           openWorkflowAutomationRuleForm();
         }}
-        function deleteWorkflowAutomationRule(idx) {{
+        async function deleteWorkflowAutomationRule(idx) {{
           const rule = workflowAutomationEditor[idx];
           if (!rule) return;
           if (!confirm(`Usunąć regułę automatyzacji „${{rule.name || "Reguła workflow"}}”?`)) return;
-          workflowAutomationEditor.splice(idx, 1);
+          const workflowId = workflowAutomationEditorWorkflow?.id;
+          if (workflowId && rule.id) {{
+            const res = await api(`/api/admin/workflows/${{workflowId}}/automations/${{rule.id}}`, {{ method: "DELETE" }});
+            if (!res || !res.ok) {{
+              const data = res ? await res.json().catch(() => ({{}})) : {{}};
+              alert(data.error || "Nie udało się usunąć reguły automatyzacji.");
+              return;
+            }}
+            const data = await res.json();
+            workflowAutomationEditor = workflowDefaultAutomationRules({{ ...workflowAutomationEditorWorkflow, automations: data.automations || [] }});
+            workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
+          }} else {{
+            workflowAutomationEditor.splice(idx, 1);
+          }}
           renderWorkflowAutomationRules();
         }}
         function removeWorkflowAutomationRule(idx) {{
@@ -3640,7 +3765,7 @@ data:
                   <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm()">Dodaj regułę automatyzacji</button>
                   <div id="workflowAutomationRuleModal" class="modal-backdrop hidden"></div>
                   <div class="attachment-upload-hint">
-                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”. Po dodaniu lub edycji reguł kliknij „Zapisz workflow”, aby utrwalić zmiany.
+                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”. Reguły zapisują się osobno po kliknięciu „Zapisz regułę”. Przycisk „Zapisz workflow” zapisuje tylko dane workflow, kroki i operatorów.
                   </div>
                 </section>
                 ${{editing && workflow.ticket_count > 0 ? `
@@ -3669,30 +3794,32 @@ data:
             payload.is_default = formData.get("is_default") === "on";
             payload.steps = payload.steps || "";
             payload.operator_emails = Array.from(document.querySelectorAll('input[name="operator_emails"]:checked')).map(cb => cb.value);
-            payload.automations = workflowAutomationEditor
-              .map(rule => ({{
-                name: rule.name || "Reguła workflow",
-                event_type: rule.event_type || "comment_added",
-                condition_status: rule.condition_status || "",
-                condition_to_status: rule.condition_to_status || "",
-                condition_role: rule.condition_role || "*",
-                condition_comment_visibility: rule.condition_comment_visibility || "*",
-                assigned_state: rule.assigned_state || "*",
-                action_type: (workflowAutomationRuleActions(rule)[0]?.action_type) || rule.action_type || "change_status",
-                action_status: (workflowAutomationRuleActions(rule)[0]?.action_value) || rule.action_status || "",
-                actions: workflowAutomationRuleActions(rule).map((action, idx) => ({{
-                  action_type: action.action_type || "change_status",
-                  action_value: action.action_value || "",
-                  is_active: action.is_active !== false,
-                  action_order: Number(action.action_order || (idx + 1)),
-                }})),
-                is_active: rule.is_active !== false,
-                stop_processing: rule.stop_processing !== false,
-                priority: Number(rule.priority || 100),
-              }}))
-              .filter(rule => {{
-                return !!rule.event_type && Array.isArray(rule.actions) && rule.actions.length > 0;
-              }});
+            if (!editing) {{
+              payload.automations = workflowAutomationEditor
+                .map(rule => ({{
+                  name: rule.name || "Reguła workflow",
+                  event_type: rule.event_type || "comment_added",
+                  condition_status: rule.condition_status || "",
+                  condition_to_status: rule.condition_to_status || "",
+                  condition_role: rule.condition_role || "*",
+                  condition_comment_visibility: rule.condition_comment_visibility || "*",
+                  assigned_state: rule.assigned_state || "*",
+                  action_type: (workflowAutomationRuleActions(rule)[0]?.action_type) || rule.action_type || "change_status",
+                  action_status: (workflowAutomationRuleActions(rule)[0]?.action_value) || rule.action_status || "",
+                  actions: workflowAutomationRuleActions(rule).map((action, idx) => ({{
+                    action_type: action.action_type || "change_status",
+                    action_value: action.action_value || "",
+                    is_active: action.is_active !== false,
+                    action_order: Number(action.action_order || (idx + 1)),
+                  }})),
+                  is_active: rule.is_active !== false,
+                  stop_processing: rule.stop_processing !== false,
+                  priority: Number(rule.priority || 100),
+                }}))
+                .filter(rule => {{
+                  return !!rule.event_type && Array.isArray(rule.actions) && rule.actions.length > 0;
+                }});
+            }}
             const endpoint = editing ? `/api/admin/workflows/${{workflow.id}}` : "/api/admin/workflows";
             const method = editing ? "PUT" : "POST";
             const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
@@ -5327,7 +5454,8 @@ data:
                 VALUES (%s, %s, %s, %s)
             """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
         replace_workflow_operators(cur, workflow_id, operator_emails)
-        replace_workflow_automations(cur, workflow_id, data.get("automations") or [])
+        if "automations" in payload:
+            replace_workflow_automations(cur, workflow_id, data.get("automations") or [])
         audit_details = dict(data)
         audit_details["operator_emails"] = operator_emails
         log_audit(cur, user, "workflow_created", "workflow", workflow_id, audit_details)
@@ -5390,7 +5518,8 @@ data:
                 VALUES (%s, %s, %s, %s)
             """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
         replace_workflow_operators(cur, workflow_id, operator_emails)
-        replace_workflow_automations(cur, workflow_id, data.get("automations") or [])
+        if "automations" in payload:
+            replace_workflow_automations(cur, workflow_id, data.get("automations") or [])
         audit_details = dict(data)
         audit_details["operator_emails"] = operator_emails
         log_audit(cur, user, "workflow_updated", "workflow", workflow_id, audit_details)
@@ -5398,6 +5527,132 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
+    @app.get("/api/workflows/<int:workflow_id>/automations")
+    @app.get("/api/admin/workflows/<int:workflow_id>/automations")
+    @api_login_required
+    def api_admin_workflow_automations(user, workflow_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        if not cur.fetchone():
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        automations = workflow_automation_entries(cur, workflow_id)
+        cur.close()
+        conn.close()
+        return jsonify({"automations": automations})
+    @app.post("/api/workflows/<int:workflow_id>/automations")
+    @app.post("/api/admin/workflows/<int:workflow_id>/automations")
+    @api_login_required
+    def api_admin_create_workflow_automation(user, workflow_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        workflow_row = cur.fetchone()
+        if not workflow_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        try:
+            automation_id = save_workflow_automation(cur, workflow_id, payload)
+            log_audit(cur, user, "workflow_automation_created", "workflow", workflow_id, {
+                "workflow_key": workflow_row[0],
+                "workflow_name": workflow_row[1],
+                "automation_id": automation_id,
+                "automation": payload,
+            })
+            conn.commit()
+        except ValueError as exc:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": str(exc)}), 400
+        cur.execute("UPDATE workflow_definitions SET updated_at = NOW() WHERE id = %s", (workflow_id,))
+        automations = workflow_automation_entries(cur, workflow_id)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "automation_id": automation_id, "automations": automations}), 201
+    @app.put("/api/workflows/<int:workflow_id>/automations/<int:automation_id>")
+    @app.put("/api/admin/workflows/<int:workflow_id>/automations/<int:automation_id>")
+    @api_login_required
+    def api_admin_update_workflow_automation(user, workflow_id, automation_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        workflow_row = cur.fetchone()
+        if not workflow_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        try:
+            save_workflow_automation(cur, workflow_id, payload, automation_id=automation_id)
+            log_audit(cur, user, "workflow_automation_updated", "workflow", workflow_id, {
+                "workflow_key": workflow_row[0],
+                "workflow_name": workflow_row[1],
+                "automation_id": automation_id,
+                "automation": payload,
+            })
+            cur.execute("UPDATE workflow_definitions SET updated_at = NOW() WHERE id = %s", (workflow_id,))
+            automations = workflow_automation_entries(cur, workflow_id)
+            conn.commit()
+        except LookupError as exc:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": str(exc)}), 404
+        except ValueError as exc:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": str(exc)}), 400
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "automations": automations})
+    @app.delete("/api/workflows/<int:workflow_id>/automations/<int:automation_id>")
+    @app.delete("/api/admin/workflows/<int:workflow_id>/automations/<int:automation_id>")
+    @api_login_required
+    def api_admin_delete_workflow_automation(user, workflow_id, automation_id):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        workflow_row = cur.fetchone()
+        if not workflow_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        cur.execute("""
+            DELETE FROM workflow_automations
+            WHERE id = %s AND workflow_id = %s
+            RETURNING id
+        """, (automation_id, workflow_id))
+        deleted = cur.fetchone()
+        if not deleted:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        log_audit(cur, user, "workflow_automation_deleted", "workflow", workflow_id, {
+            "workflow_key": workflow_row[0],
+            "workflow_name": workflow_row[1],
+            "automation_id": automation_id,
+        })
+        cur.execute("UPDATE workflow_definitions SET updated_at = NOW() WHERE id = %s", (workflow_id,))
+        automations = workflow_automation_entries(cur, workflow_id)
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "automations": automations})
     @app.delete("/api/workflows/<int:workflow_id>")
     @app.delete("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
