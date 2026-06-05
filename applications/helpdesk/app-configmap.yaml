@@ -3378,7 +3378,7 @@ data:
                 </div>
                 <button type="button" class="btn-secondary btn-small" onclick="closeWorkflowAutomationRuleForm(); return false;">✕</button>
               </div>
-              <form id="workflowAutomationRuleForm">
+              <form id="workflowAutomationRuleForm" data-automation-rule-form="true">
                 <div class="grid">
                   <div>
                     <label>Nazwa reguły</label>
@@ -3760,10 +3760,10 @@ data:
                 <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
                 <section class="card" style="padding:12px;margin:12px 0">
                   <h3>Reguły automatyzacji workflow</h3>
+                  <div class="attachment-upload-hint">Tryb edycji reguł: osobne Dodaj / Edytuj / Usuń, bez zapisywania całego workflow.</div>
                   <p class="muted">Każda reguła działa według schematu: zdarzenie → warunki → akcja. Na tym etapie obsługujemy zmianę statusu, powiadomienie i wpis do historii.</p>
                   <div id="workflowAutomationRules"></div>
-                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm()">Dodaj regułę automatyzacji</button>
-                  <div id="workflowAutomationRuleModal" class="modal-backdrop hidden"></div>
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(); return false;">Dodaj regułę automatyzacji</button>
                   <div class="attachment-upload-hint">
                     Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”. Reguły zapisują się osobno po kliknięciu „Zapisz regułę”. Przycisk „Zapisz workflow” zapisuje tylko dane workflow, kroki i operatorów.
                   </div>
@@ -3778,6 +3778,7 @@ data:
                 <button type="button" class="btn-secondary" onclick="renderAdminWorkflows()">Anuluj</button>
               </form>
             </section>
+            <div id="workflowAutomationRuleModal" class="modal-backdrop hidden"></div>
           `;
           updateWorkflowSubcategoryOptions(meta, workflow.category, workflow.subcategory);
           workflowAutomationEditorWorkflow = workflow;
