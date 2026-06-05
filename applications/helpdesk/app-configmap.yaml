@@ -2854,115 +2854,47 @@ data:
           ];
           return parts.filter(Boolean).join(" · ");
         }}
-        function workflowAutomationRuleRow(rule, idx) {{
-          const workflow = workflowAutomationEditorWorkflow || {{}};
-          const statusOptions = workflowStatusOptions(workflow, rule.condition_status || "", true);
-          const targetOptions = workflowStatusOptions(workflow, rule.action_status || "", true);
-          const eventOptions = automationSelectOptions([
-            {{ value: "ticket_created", label: "Utworzono zgłoszenie" }},
-            {{ value: "comment_added", label: "Dodano komentarz/notatkę" }},
-            {{ value: "attachment_added", label: "Dodano załącznik" }},
-            {{ value: "status_changed", label: "Zmieniono status" }},
-          ], rule.event_type || "comment_added");
-          const roleOptions = automationSelectOptions([
-            {{ value: "*", label: "dowolna" }},
-            {{ value: "user", label: "user" }},
-            {{ value: "staff", label: "operator lub admin" }},
-            {{ value: "operator", label: "operator" }},
-            {{ value: "admin", label: "admin" }},
-          ], rule.condition_role || "*");
-          const visibilityOptions = automationSelectOptions([
-            {{ value: "*", label: "dowolny" }},
-            {{ value: "public", label: "publiczny" }},
-            {{ value: "internal", label: "wewnętrzny" }},
-          ], rule.condition_comment_visibility || "*");
-          const assignedOptions = automationSelectOptions([
-            {{ value: "*", label: "dowolne" }},
-            {{ value: "assigned", label: "zgłoszenie przypisane" }},
-            {{ value: "unassigned", label: "zgłoszenie nieprzypisane" }},
-          ], rule.assigned_state || "*");
-          const actionOptions = automationSelectOptions([
-            {{ value: "change_status", label: "Zmień status" }},
-            {{ value: "notify", label: "Wyślij powiadomienie" }},
-            {{ value: "add_history", label: "Dodaj wpis do historii" }},
-          ], rule.action_type || "change_status");
+        function workflowAutomationRuleBadge(text) {{
+          return `<span class="status-badge status-progress">${{esc(text || "")}}</span>`;
+        }}
+        function workflowAutomationRuleListItem(rule, idx) {{
+          const activeBadge = rule.is_active !== false
+            ? `<span class="status-badge status-new">Aktywna</span>`
+            : `<span class="status-badge status-closed">Nieaktywna</span>`;
+          const stopBadge = rule.stop_processing !== false
+            ? `<span class="status-badge status-wait">Stop po wykonaniu</span>`
+            : `<span class="status-badge status-open">Kontynuuj reguły</span>`;
           return `
-            <div class="card workflow-rule-card" style="padding:10px;margin:10px 0">
-              <div class="attachment-upload-hint">${{esc(workflowAutomationRuleSummary(rule))}}</div>
-              <div class="grid">
+            <div class="card workflow-rule-card" style="padding:12px;margin:10px 0">
+              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
                 <div>
-                  <label>Nazwa reguły</label>
-                  <input data-rule-index="${{idx}}" data-rule-field="name" value="${{esc(rule.name || "")}}">
+                  <h4 style="margin:0 0 6px">${{esc(rule.name || `Reguła ${{idx + 1}}`)}}</h4>
+                  <div class="attachment-upload-hint">${{esc(workflowAutomationRuleSummary(rule))}}</div>
+                  <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                    ${{activeBadge}}
+                    ${{stopBadge}}
+                    ${{workflowAutomationRuleBadge("Priorytet " + Number(rule.priority || 100))}}
+                  </div>
                 </div>
-                <div>
-                  <label>Priorytet</label>
-                  <input type="number" min="1" max="9999" data-rule-index="${{idx}}" data-rule-field="priority" value="${{Number(rule.priority || 100)}}">
-                </div>
-                <div>
-                  <label>Zdarzenie</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="event_type">${{eventOptions}}</select>
-                </div>
-                <div>
-                  <label>Jeżeli status</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="condition_status">${{statusOptions}}</select>
-                </div>
-                <div>
-                  <label>Rola wykonawcy</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="condition_role">${{roleOptions}}</select>
-                </div>
-                <div>
-                  <label>Typ komentarza</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="condition_comment_visibility">${{visibilityOptions}}</select>
-                </div>
-                <div>
-                  <label>Przypisanie zgłoszenia</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="assigned_state">${{assignedOptions}}</select>
-                </div>
-                <div>
-                  <label>Akcja</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="action_type">${{actionOptions}}</select>
-                </div>
-                <div>
-                  <label>Status docelowy</label>
-                  <select data-rule-index="${{idx}}" data-rule-field="action_status">${{targetOptions}}</select>
+                <div class="actions">
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{idx}})">Edytuj</button>
+                  <button type="button" class="btn-danger btn-small" onclick="deleteWorkflowAutomationRule(${{idx}})">Usuń</button>
                 </div>
               </div>
-              <label class="checkbox-row" style="margin-top:8px">
-                <input type="checkbox" data-rule-index="${{idx}}" data-rule-field="is_active" ${{rule.is_active !== false ? "checked" : ""}}>
-                Aktywna
-              </label>
-              <label class="checkbox-row" style="margin-top:8px">
-                <input type="checkbox" data-rule-index="${{idx}}" data-rule-field="stop_processing" ${{rule.stop_processing !== false ? "checked" : ""}}>
-                Po wykonaniu zatrzymaj dalsze reguły
-              </label>
-              <button type="button" class="btn-danger btn-small" onclick="removeWorkflowAutomationRule(${{idx}})">Usuń regułę</button>
             </div>
           `;
         }}
         function renderWorkflowAutomationRules() {{
           const box = document.getElementById("workflowAutomationRules");
           if (!box) return;
-          box.innerHTML = workflowAutomationEditor.map((rule, idx) => workflowAutomationRuleRow(rule, idx)).join("") || `<p class="muted">Brak reguł automatyzacji.</p>`;
-          box.querySelectorAll("[data-rule-index]").forEach(el => {{
-            el.addEventListener("change", updateWorkflowAutomationRuleFromInput);
-            el.addEventListener("input", updateWorkflowAutomationRuleFromInput);
-          }});
+          const rules = workflowAutomationEditor
+            .map((rule, idx) => workflowAutomationRuleListItem(rule, idx))
+            .join("");
+          box.innerHTML = rules || `<p class="muted">Brak reguł automatyzacji. Kliknij „Dodaj regułę automatyzacji”, aby utworzyć pierwszą regułę.</p>`;
         }}
-        function updateWorkflowAutomationRuleFromInput(e) {{
-          const el = e.target;
-          const idx = Number(el.dataset.ruleIndex);
-          const field = el.dataset.ruleField;
-          if (!workflowAutomationEditor[idx] || !field) return;
-          if (field === "is_active" || field === "stop_processing") {{
-            workflowAutomationEditor[idx][field] = el.checked;
-          }} else if (field === "priority") {{
-            workflowAutomationEditor[idx][field] = Number(el.value || 100);
-          }} else {{
-            workflowAutomationEditor[idx][field] = el.value;
-          }}
-        }}
-        function addWorkflowAutomationRule() {{
-          workflowAutomationEditor.push({{
+        let workflowAutomationEditingIndex = null;
+        function workflowAutomationEmptyRule() {{
+          return {{
             name: "Nowa reguła",
             event_type: "comment_added",
             condition_status: "",
@@ -2974,12 +2906,181 @@ data:
             is_active: true,
             stop_processing: true,
             priority: ((workflowAutomationEditor.length + 1) * 10),
+          }};
+        }}
+        function workflowAutomationFormOptions(rule) {{
+          const workflow = workflowAutomationEditorWorkflow || {{}};
+          return {{
+            statusOptions: workflowStatusOptions(workflow, rule.condition_status || "", true),
+            targetOptions: workflowStatusOptions(workflow, rule.action_status || "", true),
+            eventOptions: automationSelectOptions([
+              {{ value: "ticket_created", label: "Utworzono zgłoszenie" }},
+              {{ value: "comment_added", label: "Dodano komentarz/notatkę" }},
+              {{ value: "attachment_added", label: "Dodano załącznik" }},
+              {{ value: "status_changed", label: "Zmieniono status" }},
+            ], rule.event_type || "comment_added"),
+            roleOptions: automationSelectOptions([
+              {{ value: "*", label: "dowolna" }},
+              {{ value: "user", label: "user" }},
+              {{ value: "staff", label: "operator lub admin" }},
+              {{ value: "operator", label: "operator" }},
+              {{ value: "admin", label: "admin" }},
+            ], rule.condition_role || "*"),
+            visibilityOptions: automationSelectOptions([
+              {{ value: "*", label: "dowolny" }},
+              {{ value: "public", label: "publiczny" }},
+              {{ value: "internal", label: "wewnętrzny" }},
+            ], rule.condition_comment_visibility || "*"),
+            assignedOptions: automationSelectOptions([
+              {{ value: "*", label: "dowolne" }},
+              {{ value: "assigned", label: "zgłoszenie przypisane" }},
+              {{ value: "unassigned", label: "zgłoszenie nieprzypisane" }},
+            ], rule.assigned_state || "*"),
+            actionOptions: automationSelectOptions([
+              {{ value: "change_status", label: "Zmień status" }},
+              {{ value: "notify", label: "Wyślij powiadomienie" }},
+              {{ value: "add_history", label: "Dodaj wpis do historii" }},
+            ], rule.action_type || "change_status"),
+          }};
+        }}
+        function openWorkflowAutomationRuleForm(idx = null) {{
+          workflowAutomationEditingIndex = idx === null || idx === undefined ? null : Number(idx);
+          const sourceRule = workflowAutomationEditingIndex === null
+            ? workflowAutomationEmptyRule()
+            : {{ ...workflowAutomationEmptyRule(), ...(workflowAutomationEditor[workflowAutomationEditingIndex] || {{}}) }};
+          const opts = workflowAutomationFormOptions(sourceRule);
+          const modal = document.getElementById("workflowAutomationRuleModal");
+          if (!modal) return;
+          modal.innerHTML = `
+            <div class="modal-card">
+              <div class="modal-header">
+                <div>
+                  <h2>${{workflowAutomationEditingIndex === null ? "Dodaj regułę automatyzacji" : "Edytuj regułę automatyzacji"}}</h2>
+                  <p class="muted">Reguła składa się ze zdarzenia, warunków i akcji. Zapisanie reguły doda ją do listy automatyzacji workflow.</p>
+                </div>
+                <button type="button" class="btn-secondary btn-small" onclick="closeWorkflowAutomationRuleForm(); return false;">✕</button>
+              </div>
+              <form id="workflowAutomationRuleForm">
+                <div class="grid">
+                  <div>
+                    <label>Nazwa reguły</label>
+                    <input name="name" value="${{esc(sourceRule.name || "")}}" required placeholder="np. Operator rozpoczyna obsługę">
+                  </div>
+                  <div>
+                    <label>Priorytet</label>
+                    <input name="priority" type="number" min="1" max="9999" value="${{Number(sourceRule.priority || 100)}}" required>
+                  </div>
+                  <div>
+                    <label>Zdarzenie</label>
+                    <select name="event_type">${{opts.eventOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Jeżeli status</label>
+                    <select name="condition_status">${{opts.statusOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Rola wykonawcy</label>
+                    <select name="condition_role">${{opts.roleOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Typ komentarza</label>
+                    <select name="condition_comment_visibility">${{opts.visibilityOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Przypisanie zgłoszenia</label>
+                    <select name="assigned_state">${{opts.assignedOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Akcja</label>
+                    <select name="action_type">${{opts.actionOptions}}</select>
+                  </div>
+                  <div>
+                    <label>Status docelowy</label>
+                    <select name="action_status">${{opts.targetOptions}}</select>
+                  </div>
+                </div>
+                <label class="checkbox-row" style="margin-top:8px">
+                  <input name="is_active" type="checkbox" ${{sourceRule.is_active !== false ? "checked" : ""}}>
+                  Aktywna
+                </label>
+                <label class="checkbox-row" style="margin-top:8px">
+                  <input name="stop_processing" type="checkbox" ${{sourceRule.stop_processing !== false ? "checked" : ""}}>
+                  Po wykonaniu zatrzymaj dalsze reguły
+                </label>
+                <div id="workflowAutomationRulePreview" class="attachment-upload-hint" style="margin-top:12px"></div>
+                <div class="modal-actions">
+                  <button type="button" class="btn-secondary" onclick="closeWorkflowAutomationRuleForm(); return false;">Anuluj</button>
+                  <button type="submit">Zapisz regułę</button>
+                </div>
+              </form>
+            </div>
+          `;
+          modal.classList.remove("hidden");
+          const form = document.getElementById("workflowAutomationRuleForm");
+          const updatePreview = () => {{
+            const previewRule = workflowAutomationRuleFromForm(form);
+            const preview = document.getElementById("workflowAutomationRulePreview");
+            if (preview) preview.textContent = workflowAutomationRuleSummary(previewRule);
+          }};
+          form.querySelectorAll("input,select").forEach(el => {{
+            el.addEventListener("input", updatePreview);
+            el.addEventListener("change", updatePreview);
           }});
+          form.addEventListener("submit", saveWorkflowAutomationRuleForm);
+          updatePreview();
+        }}
+        function closeWorkflowAutomationRuleForm() {{
+          const modal = document.getElementById("workflowAutomationRuleModal");
+          if (modal) {{
+            modal.classList.add("hidden");
+            modal.innerHTML = "";
+          }}
+          workflowAutomationEditingIndex = null;
+        }}
+        function workflowAutomationRuleFromForm(form) {{
+          const formData = new FormData(form);
+          return {{
+            name: String(formData.get("name") || "").trim() || "Reguła workflow",
+            event_type: formData.get("event_type") || "comment_added",
+            condition_status: formData.get("condition_status") || "",
+            condition_role: formData.get("condition_role") || "*",
+            condition_comment_visibility: formData.get("condition_comment_visibility") || "*",
+            assigned_state: formData.get("assigned_state") || "*",
+            action_type: formData.get("action_type") || "change_status",
+            action_status: formData.get("action_status") || "",
+            is_active: formData.get("is_active") === "on",
+            stop_processing: formData.get("stop_processing") === "on",
+            priority: Number(formData.get("priority") || 100),
+          }};
+        }}
+        function saveWorkflowAutomationRuleForm(e) {{
+          e.preventDefault();
+          const rule = workflowAutomationRuleFromForm(e.target);
+          if (rule.action_type === "change_status" && !rule.action_status) {{
+            alert("Dla akcji „Zmień status” wybierz status docelowy.");
+            return;
+          }}
+          if (workflowAutomationEditingIndex === null) {{
+            workflowAutomationEditor.push(rule);
+          }} else {{
+            workflowAutomationEditor[workflowAutomationEditingIndex] = rule;
+          }}
+          workflowAutomationEditor.sort((a, b) => Number(a.priority || 100) - Number(b.priority || 100));
+          closeWorkflowAutomationRuleForm();
+          renderWorkflowAutomationRules();
+        }}
+        function addWorkflowAutomationRule() {{
+          openWorkflowAutomationRuleForm();
+        }}
+        function deleteWorkflowAutomationRule(idx) {{
+          const rule = workflowAutomationEditor[idx];
+          if (!rule) return;
+          if (!confirm(`Usunąć regułę automatyzacji „${{rule.name || "Reguła workflow"}}”?`)) return;
+          workflowAutomationEditor.splice(idx, 1);
           renderWorkflowAutomationRules();
         }}
         function removeWorkflowAutomationRule(idx) {{
-          workflowAutomationEditor.splice(idx, 1);
-          renderWorkflowAutomationRules();
+          deleteWorkflowAutomationRule(idx);
         }}
         async function renderAdminWorkflows() {{
           const me = await loadMe();
@@ -3145,9 +3246,10 @@ data:
                   <h3>Reguły automatyzacji workflow</h3>
                   <p class="muted">Każda reguła działa według schematu: zdarzenie → warunki → akcja. Na tym etapie obsługujemy zmianę statusu, powiadomienie i wpis do historii.</p>
                   <div id="workflowAutomationRules"></div>
-                  <button type="button" class="btn-secondary btn-small" onclick="addWorkflowAutomationRule()">Dodaj regułę</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm()">Dodaj regułę automatyzacji</button>
+                  <div id="workflowAutomationRuleModal" class="modal-backdrop hidden"></div>
                   <div class="attachment-upload-hint">
-                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”.
+                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”. Po dodaniu lub edycji reguł kliknij „Zapisz workflow”, aby utrwalić zmiany.
                   </div>
                 </section>
                 ${{editing && workflow.ticket_count > 0 ? `
