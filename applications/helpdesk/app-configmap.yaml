@@ -761,6 +761,24 @@ data:
                         WHERE waa.automation_id = wa.id
                     )
                 """)
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS workflow_rule_executions (
+                        id SERIAL PRIMARY KEY,
+                        automation_id INTEGER REFERENCES workflow_automations(id) ON DELETE SET NULL,
+                        workflow_id INTEGER REFERENCES workflow_definitions(id) ON DELETE SET NULL,
+                        workflow_key TEXT,
+                        ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,
+                        event_type TEXT NOT NULL,
+                        matched BOOLEAN DEFAULT TRUE,
+                        actions_executed TEXT,
+                        reason TEXT,
+                        created_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+                cur.execute("ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS workflow_key TEXT")
+                cur.execute("ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS matched BOOLEAN DEFAULT TRUE")
+                cur.execute("ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actions_executed TEXT")
+                cur.execute("ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS reason TEXT")
                 seed_workflows(cur)
                 cur.execute("""
                     UPDATE workflow_definitions
@@ -977,6 +995,23 @@ data:
             target_type,
             str(target_id) if target_id is not None else None,
             details,
+        ))
+    def log_workflow_rule_execution(cur, automation_id, workflow_id, workflow_key, ticket_id, event_type, matched=True, actions_executed=None, reason=""):
+        if isinstance(actions_executed, (dict, list)):
+            actions_executed = json.dumps(actions_executed, ensure_ascii=False)
+        elif actions_executed is None:
+            actions_executed = "[]"
+        else:
+            actions_executed = str(actions_executed)
+        cur.execute("""
+            INSERT INTO workflow_rule_executions (
+                automation_id, workflow_id, workflow_key, ticket_id, event_type,
+                matched, actions_executed, reason
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+        """, (
+            automation_id, workflow_id, workflow_key, ticket_id, event_type,
+            bool(matched), actions_executed, reason or "",
         ))
     def get_sid_from_request():
         return request.headers.get("X-Helpdesk-Session", "").strip()
@@ -1396,6 +1431,8 @@ data:
                 }]
             item = {
                 "id": r[0],
+                "workflow_id": workflow_id,
+                "workflow_key": workflow_key,
                 "name": r[1] or "Reguła workflow",
                 "event_type": r[2],
                 "condition_status": r[3],
@@ -3349,6 +3386,63 @@ data:
         function removeWorkflowAutomationRule(idx) {{
           deleteWorkflowAutomationRule(idx);
         }}
+        function workflowRuleExecutionActionSummary(actions) {{
+          if (!actions) return "—";
+          if (typeof actions === "string") return actions;
+          if (!Array.isArray(actions)) return JSON.stringify(actions);
+          if (!actions.length) return "—";
+          return actions.map(a => {{
+            const type = a.action_type || "akcja";
+            const result = a.result || "";
+            if (type === "change_status" && a.result === "executed") return `zmiana statusu: ${{a.old_status || "?"}} → ${{a.new_status || "?"}}`;
+            if (type === "change_status") return `zmiana statusu: ${{result}} ${{a.reason ? "(" + a.reason + ")" : ""}}`;
+            if (type === "notify") return `powiadomienie: ${{result}}`;
+            if (type === "add_history") return `historia: ${{result}}`;
+            return `${{type}}: ${{result}}`;
+          }}).join("; ");
+        }}
+        async function renderWorkflowRuleExecutions(workflowId = "", page = 1) {{
+          const me = await loadMe();
+          if (!me || !isAdmin(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Log automatyzacji jest dostępny tylko dla administratora.</p></section>`;
+            return;
+          }}
+          const params = new URLSearchParams();
+          params.set("page", String(page || 1));
+          params.set("page_size", "25");
+          if (workflowId) params.set("workflow_id", String(workflowId));
+          const res = await api(`/api/admin/workflow-rule-executions?${{params.toString()}}`);
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Błąd pobierania logu automatyzacji</h2></section>`;
+            return;
+          }}
+          const data = await res.json();
+          const pagination = data.pagination || {{ page: 1, total_pages: 1, total_filtered: 0 }};
+          const rows = (data.executions || []).map(e => `
+            <tr>
+              <td><strong>${{esc(e.automation_name || "Reguła workflow")}}</strong><br><span class="muted">${{esc(e.workflow_name || e.workflow_key || "-")}}</span></td>
+              <td>${{e.ticket_id ? `<button class="btn-link" onclick="renderTicket(${{Number(e.ticket_id)}})">#${{e.ticket_id}}</button>` : "-"}}<br><span class="muted">${{esc(e.ticket_title || "")}}</span></td>
+              <td>${{esc(e.event_type || "-")}}</td>
+              <td>${{e.matched ? `<span class="status-badge status-new">Dopasowana</span>` : `<span class="status-badge status-closed">Niedopasowana</span>`}}</td>
+              <td>${{esc(workflowRuleExecutionActionSummary(e.actions_executed))}}</td>
+              <td>${{esc(e.reason || "")}}</td>
+              <td>${{esc(e.created_at || "")}}</td>
+            </tr>
+          `).join("");
+          const prevDisabled = Number(pagination.page || 1) <= 1 ? "disabled" : "";
+          const nextDisabled = Number(pagination.page || 1) >= Number(pagination.total_pages || 1) ? "disabled" : "";
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              <h2>Log automatyzacji workflow</h2>
+              <p class="muted">Lista pokazuje, które reguły workflow zostały uruchomione, dla jakiego zgłoszenia i jakie akcje wykonały.</p>
+            </section>
+            <section class="card">
+              <div class="pagination-bar"><span>Wpisy: ${{pagination.total_filtered || 0}} · Strona ${{pagination.page || 1}} z ${{pagination.total_pages || 1}}</span><div class="actions"><button class="btn-secondary btn-small" ${{prevDisabled}} onclick="renderWorkflowRuleExecutions('${{esc(workflowId || "")}}', ${{Number(pagination.page || 1) - 1}})">Poprzednia</button><button class="btn-secondary btn-small" ${{nextDisabled}} onclick="renderWorkflowRuleExecutions('${{esc(workflowId || "")}}', ${{Number(pagination.page || 1) + 1}})">Następna</button></div></div>
+              <table><thead><tr><th>Reguła / workflow</th><th>Zgłoszenie</th><th>Zdarzenie</th><th>Wynik</th><th>Akcje</th><th>Powód</th><th>Data</th></tr></thead><tbody>${{rows || `<tr><td colspan="7" class="muted">Brak wpisów logu.</td></tr>`}}</tbody></table>
+            </section>
+          `;
+        }}
         async function renderAdminWorkflows() {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) {{
@@ -3377,6 +3471,7 @@ data:
               <td>
                 <div class="actions">
                   <button class="btn-secondary btn-small" onclick="renderAdminWorkflowForm(${{w.id}})">Edytuj</button>
+                  <button class="btn-secondary btn-small" onclick="renderWorkflowRuleExecutions(${{w.id}})">Log</button>
                   <button class="btn-danger btn-small" onclick="deleteAdminWorkflow(${{w.id}}, ${{w.ticket_count || 0}})">Usuń/dezaktywuj</button>
                 </div>
               </td>
@@ -3388,6 +3483,7 @@ data:
               <h2>Workflow zgłoszeń</h2>
               <p class="muted">Workflow określa proces obsługi zgłoszenia zależnie od kategorii i podkategorii. Na tym etapie edytujemy nazwę, dopasowanie i listę kroków/statusów.</p>
               <button onclick="renderAdminWorkflowForm()">Dodaj workflow</button>
+              <button class="btn-secondary" onclick="renderWorkflowRuleExecutions()">Log automatyzacji</button>
             </section>
             <section class="card">
               <h3>Definicje workflow</h3>
@@ -3476,6 +3572,7 @@ data:
           appEl.innerHTML = `
             <section class="card">
               <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              ${{editing ? `<button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{workflow.id}})">Log automatyzacji</button>` : ""}}
               <h2>${{editing ? "Edytuj workflow" : "Dodaj workflow"}}</h2>
               <p class="muted">Podaj dopasowanie kategorii/podkategorii oraz kroki procesu. Każdy krok wpisz w osobnej linii.</p>
               <p id="workflowMessage" class="success hidden">Zapisano workflow.</p>
@@ -5338,6 +5435,112 @@ data:
             "roles": VALID_ROLES,
             "operators": operators,
         })
+    @app.get("/api/workflow-rule-executions")
+    @app.get("/api/admin/workflow-rule-executions")
+    @api_login_required
+    def api_admin_workflow_rule_executions(user):
+        if not is_admin(user):
+            return jsonify({"error": "forbidden"}), 403
+        workflow_id = request.args.get("workflow_id", "").strip()
+        ticket_id = request.args.get("ticket_id", "").strip()
+        automation_id = request.args.get("automation_id", "").strip()
+        q = request.args.get("q", "").strip()
+        page = max(1, int(request.args.get("page", "1") or 1))
+        page_size = min(100, max(10, int(request.args.get("page_size", "25") or 25)))
+        clauses = []
+        params = []
+        if workflow_id.isdigit():
+            clauses.append("wre.workflow_id = %s")
+            params.append(int(workflow_id))
+        if ticket_id.isdigit():
+            clauses.append("wre.ticket_id = %s")
+            params.append(int(ticket_id))
+        if automation_id.isdigit():
+            clauses.append("wre.automation_id = %s")
+            params.append(int(automation_id))
+        if q:
+            like = f"%{q}%"
+            clauses.append("(" + " OR ".join([
+                "COALESCE(wa.name, '') ILIKE %s",
+                "COALESCE(wd.name, '') ILIKE %s",
+                "COALESCE(t.title, '') ILIKE %s",
+                "COALESCE(wre.event_type, '') ILIKE %s",
+                "COALESCE(wre.reason, '') ILIKE %s",
+                "COALESCE(wre.actions_executed, '') ILIKE %s",
+            ]) + ")")
+            params.extend([like] * 6)
+        where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(f"SELECT COUNT(*) FROM workflow_rule_executions wre LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id LEFT JOIN workflow_definitions wd ON wd.id = wre.workflow_id LEFT JOIN tickets t ON t.id = wre.ticket_id {where_sql}", tuple(params))
+        total = cur.fetchone()[0] or 0
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        if page > total_pages:
+            page = total_pages
+        offset = (page - 1) * page_size
+        cur.execute(f"""
+            SELECT
+                wre.id,
+                wre.automation_id,
+                COALESCE(wa.name, 'Reguła usunięta') AS automation_name,
+                wre.workflow_id,
+                COALESCE(wd.name, wre.workflow_key, 'Workflow usunięty') AS workflow_name,
+                COALESCE(wd.workflow_key, wre.workflow_key, '') AS workflow_key,
+                wre.ticket_id,
+                COALESCE(t.title, '') AS ticket_title,
+                wre.event_type,
+                COALESCE(wre.matched, TRUE) AS matched,
+                COALESCE(wre.actions_executed, '[]') AS actions_executed,
+                COALESCE(wre.reason, '') AS reason,
+                wre.created_at
+            FROM workflow_rule_executions wre
+            LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id
+            LEFT JOIN workflow_definitions wd ON wd.id = wre.workflow_id
+            LEFT JOIN tickets t ON t.id = wre.ticket_id
+            {where_sql}
+            ORDER BY wre.id DESC
+            LIMIT %s OFFSET %s
+        """, tuple(params + [page_size, offset]))
+        rows = cur.fetchall()
+        cur.close()
+        conn.close()
+        items = []
+        for r in rows:
+            actions_raw = r[10] or "[]"
+            try:
+                actions = json.loads(actions_raw)
+            except Exception:
+                actions = actions_raw
+            items.append({
+                "id": r[0],
+                "automation_id": r[1],
+                "automation_name": r[2],
+                "workflow_id": r[3],
+                "workflow_name": r[4],
+                "workflow_key": r[5],
+                "ticket_id": r[6],
+                "ticket_title": r[7],
+                "event_type": r[8],
+                "matched": bool(r[9]),
+                "actions_executed": actions,
+                "reason": r[11],
+                "created_at": str(r[12]),
+            })
+        return jsonify({
+            "executions": items,
+            "pagination": {
+                "page": page,
+                "page_size": page_size,
+                "total_filtered": total,
+                "total_pages": total_pages,
+            },
+            "filters": {
+                "workflow_id": workflow_id,
+                "ticket_id": ticket_id,
+                "automation_id": automation_id,
+                "q": q,
+            },
+        })
     @app.get("/api/tickets")
     @api_login_required
     def api_tickets(user):
@@ -5890,6 +6093,7 @@ data:
         """
         Elastyczne reguły workflow: zdarzenie + warunki + wiele akcji.
         Obsługiwane akcje MVP: change_status, notify, add_history.
+        Każde dopasowanie reguły zapisujemy w workflow_rule_executions.
         """
         if current_status == "Zamknięte":
             return []
@@ -5897,12 +6101,14 @@ data:
         row = cur.fetchone()
         workflow_key = row[0] if row else "default"
         assigned_to_email = row[1] if row else None
+        workflow_id = workflow_id_by_key(cur, workflow_key)
         statuses = workflow_statuses(workflow_key)
         rules = workflow_automations_for_event(cur, workflow_key, event_type, current_status, user, visibility, assigned_to_email)
         executed = []
         for rule in rules:
             rule_name = rule.get("name") or "Reguła workflow"
             action_executed = False
+            action_results = []
             actions = rule.get("actions") or [{
                 "action_type": rule.get("action_type") or "change_status",
                 "action_value": rule.get("action_status"),
@@ -5911,11 +6117,23 @@ data:
             }]
             for action in actions:
                 if action.get("is_active") is False:
+                    action_results.append({
+                        "action_type": action.get("action_type") or "change_status",
+                        "result": "skipped",
+                        "reason": "akcja nieaktywna",
+                    })
                     continue
                 action_type = action.get("action_type") or "change_status"
                 if action_type == "change_status":
                     target_status = action.get("action_value") or rule.get("action_status")
-                    if not target_status or target_status not in statuses or target_status == current_status:
+                    if not target_status:
+                        action_results.append({"action_type": action_type, "result": "skipped", "reason": "brak statusu docelowego"})
+                        continue
+                    if target_status not in statuses:
+                        action_results.append({"action_type": action_type, "result": "skipped", "reason": "status docelowy nie istnieje w workflow", "target_status": target_status})
+                        continue
+                    if target_status == current_status:
+                        action_results.append({"action_type": action_type, "result": "skipped", "reason": "status docelowy jest taki sam", "target_status": target_status})
                         continue
                     old_status = current_status
                     cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (target_status, ticket_id))
@@ -5941,6 +6159,12 @@ data:
                         "old_status": old_status,
                         "new_status": target_status,
                     })
+                    action_results.append({
+                        "action_type": action_type,
+                        "result": "executed",
+                        "old_status": old_status,
+                        "new_status": target_status,
+                    })
                     action_executed = True
                     current_status = target_status
                 elif action_type == "notify":
@@ -5951,18 +6175,28 @@ data:
                         f"Reguła workflow „{rule_name}” została uruchomiona dla zgłoszenia #{ticket_id}.",
                         actor_email=user["email"],
                     )
-                    executed.append({
-                        "rule": rule_name,
-                        "action_type": action_type,
-                    })
+                    executed.append({"rule": rule_name, "action_type": action_type})
+                    action_results.append({"action_type": action_type, "result": "executed"})
                     action_executed = True
                 elif action_type == "add_history":
                     add_ticket_event(cur, ticket_id, user, "workflow_rule_history", f"Uruchomiono regułę workflow „{rule_name}”.")
-                    executed.append({
-                        "rule": rule_name,
-                        "action_type": action_type,
-                    })
+                    executed.append({"rule": rule_name, "action_type": action_type})
+                    action_results.append({"action_type": action_type, "result": "executed"})
                     action_executed = True
+                else:
+                    action_results.append({"action_type": action_type, "result": "skipped", "reason": "nieobsługiwany typ akcji"})
+            reason = "wykonano" if action_executed else "reguła pasowała, ale żadna akcja nie została wykonana"
+            log_workflow_rule_execution(
+                cur,
+                rule.get("id"),
+                rule.get("workflow_id") or workflow_id,
+                rule.get("workflow_key") or workflow_key,
+                ticket_id,
+                event_type,
+                matched=True,
+                actions_executed=action_results,
+                reason=reason,
+            )
             if action_executed and rule.get("stop_processing", True):
                 break
         return executed
