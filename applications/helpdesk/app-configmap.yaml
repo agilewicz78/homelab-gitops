@@ -638,6 +638,10 @@ data:
                     ADD COLUMN IF NOT EXISTS visibility TEXT DEFAULT 'public'
                 """)
                 cur.execute("""
+                    ALTER TABLE comments
+                    ADD COLUMN IF NOT EXISTS author_email TEXT
+                """)
+                cur.execute("""
                     UPDATE comments
                     SET visibility = 'public'
                     WHERE visibility IS NULL OR visibility NOT IN ('public', 'internal')
@@ -4350,7 +4354,7 @@ data:
               <form id="statusForm">
                 <label>Status</label>
                 <select name="status">${{data.meta.statuses.map(s => `<option ${{s === t.status ? "selected" : ""}}>${{esc(s)}}</option>`).join("")}}</select>
-                <p class="muted">Jeżeli workflow wymaga komentarza lub załącznika, dodaj je najpierw w sekcji Komentarze / Załączniki. System zablokuje zmianę statusu do czasu spełnienia warunku.</p>
+                <p class="muted">Jeżeli workflow wymaga komentarza lub załącznika, aktualny operator musi dodać go w sekcji Komentarze / Załączniki przed tą zmianą statusu. Starsze komentarze i pliki nie spełniają warunku.</p>
                 <button type="submit">Zapisz status</button>
               </form>
             </section>` : "";
@@ -7023,10 +7027,10 @@ data:
     # Ten kod celowo nie polega wyłącznie na funkcji wykonującej automatyzacje,
     # ponieważ akcje require_comment / require_attachment są walidacjami blokującymi,
     # a nie akcjami wykonywanymi po zmianie statusu.
-
-
+    
+    
     def workflow_requirement_normalize(value):
-        """Zamienia dowolny zapis akcji na prosty tekst do porównywania."""
+        """Zamienia dowolny zapis akcji/warunku na prosty tekst do porównywania."""
         text = clean(value).lower()
         if not text:
             return ""
@@ -7042,26 +7046,29 @@ data:
             "ź": "z",
             "-": "_",
             " ": "_",
+            "/": "_",
         }
         for source, target in replacements.items():
             text = text.replace(source, target)
         while "__" in text:
             text = text.replace("__", "_")
         return text.strip("_")
-
-
+    
+    
     def workflow_requirement_type_from_value(value):
         """
-        Rozpoznaje typ wymagania z różnych możliwych zapisów.
-
-        Dlaczego szeroko:
-        w bazie akcja mogła zostać zapisana jako action_type, action_value albo
-        action_status, a starsze wersje UI mogły zapisać tekst opisowy po polsku.
+        Rozpoznaje wymóg workflow niezależnie od tego, gdzie i jak został zapisany.
+    
+        Obsługiwane są między innymi:
+        - require_comment / require_attachment,
+        - Wymagaj komentarza / Wymagaj załącznika,
+        - starsze zapisy w workflow_automations.action_type / action_status,
+        - nowsze zapisy w workflow_automation_actions.action_type / action_value.
         """
         text = workflow_requirement_normalize(value)
         if not text:
             return None
-
+    
         comment_tokens = {
             "require_comment",
             "required_comment",
@@ -7083,43 +7090,44 @@ data:
             "wymaga_zalacznika",
             "wymagany_zalacznik",
             "zalacznik_wymagany",
+            "wymagaj_pliku",
+            "wymaga_pliku",
+            "plik_wymagany",
         }
-
+    
         if text in comment_tokens:
             return "comment"
         if text in attachment_tokens:
             return "attachment"
-
-        # Tolerancyjne dopasowanie dla opisów typu "wymagaj komentarza".
-        # Używamy go tylko na polach akcji, nie na nazwie reguły.
+    
         requires = any(token in text for token in ("require", "required", "wymagaj", "wymaga", "wymagany"))
         mentions_comment = any(token in text for token in ("comment", "comments", "komentarz", "komentarza"))
         mentions_attachment = any(token in text for token in ("attachment", "attachments", "zalacznik", "zalacznika", "plik", "pliku"))
-
+    
         if requires and mentions_comment:
             return "comment"
         if requires and mentions_attachment:
             return "attachment"
-
+    
         return None
-
-
+    
+    
     def workflow_condition_is_any(value):
         """Czy warunek workflow oznacza dowolną wartość."""
         return workflow_requirement_normalize(value) in ("", "*", "any", "dowolny", "dowolna")
-
-
+    
+    
     def workflow_status_requirement_rule_matches(rule, old_status, new_status, user, assigned_to_email=None):
         """Sprawdza, czy reguła status_changed dotyczy tej konkretnej zmiany statusu."""
         if not rule.get("is_active", True):
             return False
-
+    
         condition_status = clean(rule.get("condition_status"))
         condition_to_status = clean(rule.get("condition_to_status"))
-
+    
         has_from = not workflow_condition_is_any(condition_status)
         has_to = not workflow_condition_is_any(condition_to_status)
-
+    
         if has_from and has_to:
             if condition_status != old_status or condition_to_status != new_status:
                 return False
@@ -7127,11 +7135,11 @@ data:
             if condition_to_status != new_status:
                 return False
         elif has_from:
-            # Tolerancja dla starszego UI: część reguł mogła mieć ustawiony tylko
-            # jeden status i użytkownik traktował go jako status docelowy.
+            # Starszy formularz mógł zapisać tylko jedno pole statusu.
+            # Dla kompatybilności traktujemy je jako status źródłowy albo docelowy.
             if condition_status not in (old_status, new_status):
                 return False
-
+    
         condition_role = workflow_requirement_normalize(rule.get("condition_role"))
         if condition_role not in ("", "*", "any", "dowolna", "dowolny"):
             if condition_role == "staff" and not is_staff(user):
@@ -7142,31 +7150,27 @@ data:
                 return False
             if condition_role == "admin" and not is_admin(user):
                 return False
-
+    
         assigned_state = workflow_requirement_normalize(rule.get("assigned_state")) or "*"
         has_assignee = bool(assigned_to_email)
         if assigned_state == "assigned" and not has_assignee:
             return False
         if assigned_state == "unassigned" and has_assignee:
             return False
-
+    
         return True
-
-
+    
+    
     def workflow_status_requirement_rules(cur, workflow_key, old_status, new_status, user, assigned_to_email=None):
         """
-        Zwraca reguły status_changed, które wymagają komentarza i/lub załącznika.
-
-        Ta wersja czyta akcje bezpośrednio z bazy przez LEFT JOIN i równolegle
-        sprawdza pola historyczne z workflow_automations. Dzięki temu działa dla:
-        - nowych reguł z tabelą workflow_automation_actions,
-        - starszych reguł, gdzie akcja była zapisana w workflow_automations,
-        - mieszanych danych po migracjach.
+        Zwraca aktywne reguły status_changed, które wymagają komentarza i/lub załącznika.
+        Funkcja celowo czyta dane bezpośrednio z bazy, żeby nie zgubić starszych
+        zapisów akcji po migracjach.
         """
         workflow_id = workflow_id_by_key(cur, workflow_key)
         if not workflow_id:
             return []
-
+    
         cur.execute("""
             SELECT
                 wa.id,
@@ -7192,7 +7196,7 @@ data:
                      COALESCE(waa.action_order, 1) ASC,
                      waa.id ASC
         """, (workflow_id,))
-
+    
         rules_by_id = {}
         for row in cur.fetchall():
             rule_id = row[0]
@@ -7207,23 +7211,22 @@ data:
                 "requirement_types": set(),
                 "debug_actions": [],
             })
-
-            # 1. Stary zapis w workflow_automations.
+    
+            # Stary zapis w workflow_automations.
             for value in (row[7], row[8]):
                 requirement_type = workflow_requirement_type_from_value(value)
                 if requirement_type:
                     rule["requirement_types"].add(requirement_type)
                     rule["debug_actions"].append(clean(value))
-
-            # 2. Nowy zapis w workflow_automation_actions.
-            action_is_active = bool(row[11])
-            if action_is_active:
+    
+            # Nowy zapis w workflow_automation_actions.
+            if bool(row[11]):
                 for value in (row[9], row[10]):
                     requirement_type = workflow_requirement_type_from_value(value)
                     if requirement_type:
                         rule["requirement_types"].add(requirement_type)
                         rule["debug_actions"].append(clean(value))
-
+    
         matched_rules = []
         for rule in rules_by_id.values():
             if not rule["requirement_types"]:
@@ -7232,40 +7235,106 @@ data:
                 continue
             rule["requirement_types"] = sorted(rule["requirement_types"])
             matched_rules.append(rule)
-
+    
         return matched_rules
-
-
-    def ticket_has_comment(cur, ticket_id):
-        """Czy zgłoszenie ma dodany komentarz/notatkę w sekcji Komentarze."""
+    
+    
+    def ticket_current_status_started_at(cur, ticket_id):
+        """
+        Zwraca moment wejścia zgłoszenia w obecny status.
+    
+        To jest kluczowa różnica względem wcześniejszej wersji:
+        nie sprawdzamy, czy zgłoszenie ma jakikolwiek historyczny komentarz/załącznik,
+        tylko czy operator dodał wymagany element po wejściu zgłoszenia w aktualny status.
+        """
+        cur.execute("""
+            SELECT COALESCE(
+                (
+                    SELECT te.created_at
+                    FROM ticket_events te
+                    WHERE te.ticket_id = %s
+                      AND te.event_type IN ('status_changed', 'auto_status_changed', 'ticket_reopened')
+                    ORDER BY te.created_at DESC, te.id DESC
+                    LIMIT 1
+                ),
+                (
+                    SELECT t.created_at
+                    FROM tickets t
+                    WHERE t.id = %s
+                ),
+                TIMESTAMP '1970-01-01 00:00:00'
+            )
+        """, (ticket_id, ticket_id))
+        row = cur.fetchone()
+        return row[0] if row else None
+    
+    
+    def operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at):
+        """
+        Sprawdza, czy aktualny operator dodał komentarz/notatkę dla bieżącego statusu.
+    
+        Dla nowych komentarzy używamy author_email.
+        Dla starszych danych zostawiamy awaryjne dopasowanie po nazwie autora.
+        """
         cur.execute("""
             SELECT EXISTS (
                 SELECT 1
                 FROM comments
                 WHERE ticket_id = %s
+                  AND created_at >= %s
                   AND COALESCE(NULLIF(TRIM(content), ''), '') <> ''
+                  AND (
+                        lower(COALESCE(author_email, '')) = lower(%s)
+                        OR (
+                            COALESCE(author_email, '') = ''
+                            AND lower(COALESCE(author, '')) = lower(%s)
+                        )
+                  )
             )
-        """, (ticket_id,))
+        """, (
+            ticket_id,
+            status_started_at,
+            user.get("email") or "",
+            user.get("name") or "",
+        ))
         return bool(cur.fetchone()[0])
-
-
-    def ticket_has_attachment(cur, ticket_id):
-        """Czy zgłoszenie ma przynajmniej jeden załącznik w sekcji Załączniki."""
+    
+    
+    def operator_added_attachment_for_current_status(cur, ticket_id, user, status_started_at):
+        """Sprawdza, czy aktualny operator dodał załącznik dla bieżącego statusu."""
         cur.execute("""
             SELECT EXISTS (
                 SELECT 1
                 FROM attachments
                 WHERE ticket_id = %s
+                  AND created_at >= %s
+                  AND (
+                        lower(COALESCE(uploaded_by_email, '')) = lower(%s)
+                        OR (
+                            COALESCE(uploaded_by_email, '') = ''
+                            AND lower(COALESCE(uploaded_by_name, '')) = lower(%s)
+                        )
+                  )
             )
-        """, (ticket_id,))
+        """, (
+            ticket_id,
+            status_started_at,
+            user.get("email") or "",
+            user.get("name") or "",
+        ))
         return bool(cur.fetchone()[0])
-
-
+    
+    
     def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status):
-        """Blokuje zmianę statusu, jeśli workflow wymaga komentarza lub załącznika."""
+        """
+        Blokuje zmianę statusu, jeżeli reguła workflow wymaga komentarza/załącznika,
+        a operator nie dodał wymaganego elementu dla tej konkretnej próby przejścia.
+    
+        Ważne: stare komentarze i stare załączniki nie spełniają warunku.
+        """
         if old_status == new_status:
             return True, None, []
-
+    
         cur.execute("""
             SELECT COALESCE(workflow_key, 'default'), assigned_to_email
             FROM tickets
@@ -7274,7 +7343,7 @@ data:
         row = cur.fetchone()
         workflow_key = row[0] if row else "default"
         assigned_to_email = row[1] if row else None
-
+    
         requirement_rules = workflow_status_requirement_rules(
             cur,
             workflow_key,
@@ -7283,21 +7352,31 @@ data:
             user,
             assigned_to_email,
         )
-
+    
         required = set()
         rule_names = []
         for rule in requirement_rules:
             required.update(rule.get("requirement_types") or [])
             rule_names.append(rule.get("name") or "Reguła workflow")
-
+    
+        status_started_at = ticket_current_status_started_at(cur, ticket_id)
+        operator_has_comment = (
+            operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at)
+            if "comment" in required
+            else False
+        )
+        operator_has_attachment = (
+            operator_added_attachment_for_current_status(cur, ticket_id, user, status_started_at)
+            if "attachment" in required
+            else False
+        )
+    
         missing_requirements = []
-        if "comment" in required and not ticket_has_comment(cur, ticket_id):
+        if "comment" in required and not operator_has_comment:
             missing_requirements.append("comment")
-        if "attachment" in required and not ticket_has_attachment(cur, ticket_id):
+        if "attachment" in required and not operator_has_attachment:
             missing_requirements.append("attachment")
-
-        # Celowy, czytelny log diagnostyczny. Po wdrożeniu widać w kubectl logs,
-        # czy backend wykrył wymóg komentarza i/lub załącznika.
+    
         print(
             "workflow status validation:",
             {
@@ -7305,34 +7384,39 @@ data:
                 "workflow_key": workflow_key,
                 "old_status": old_status,
                 "new_status": new_status,
+                "status_started_at": str(status_started_at),
+                "operator_email": user.get("email"),
+                "operator_name": user.get("name"),
                 "required": sorted(required),
+                "operator_added_comment_for_current_status": operator_has_comment,
+                "operator_added_attachment_for_current_status": operator_has_attachment,
                 "missing": missing_requirements,
                 "rules": rule_names,
             },
             flush=True,
         )
-
+    
         if not missing_requirements:
             return True, None, []
-
+    
         labels = []
         if "comment" in missing_requirements:
             labels.append("komentarza")
         if "attachment" in missing_requirements:
             labels.append("załącznika")
-
+    
         unique_rule_names = []
         for name in rule_names:
             if name and name not in unique_rule_names:
                 unique_rule_names.append(name)
-
+    
         message = "Ta zmiana statusu wymaga dodania: " + " i ".join(labels) + "."
         if unique_rule_names:
             message += " Reguła: " + ", ".join(unique_rule_names)
-
+    
         return False, message, missing_requirements
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
     def api_update_status(user, ticket_id):
@@ -7734,9 +7818,9 @@ data:
             else f"Dodano komentarz publiczny: {content[:120]}"
         )
         cur.execute("""
-            INSERT INTO comments (ticket_id, author, content, visibility)
-            VALUES (%s, %s, %s, %s)
-        """, (ticket_id, user["name"], content, visibility))
+            INSERT INTO comments (ticket_id, author, author_email, content, visibility)
+            VALUES (%s, %s, %s, %s, %s)
+        """, (ticket_id, user["name"], user["email"], content, visibility))
         cur.execute("UPDATE tickets SET updated_at = NOW() WHERE id = %s", (ticket_id,))
         add_ticket_event(cur, ticket_id, user, event_type, event_message)
         auto_status_change = apply_auto_status_after_comment(cur, ticket_id, user, ticket_status, visibility)
