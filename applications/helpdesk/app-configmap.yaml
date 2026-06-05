@@ -2042,8 +2042,8 @@ data:
           if (!liveEvent || !liveEvent.id || liveEvent.id === lastLiveEventId) return;
           lastLiveEventId = liveEvent.id;
           await loadNotifications();
-          if (!["ticket_created", "status_changed", "comment_added", "internal_note_added", "assignment_changed", "attachment_added", "watcher_changed", "ticket_link_changed"].includes(liveEvent.type)) return;
-          if (liveEvent.type === "status_changed" && !suppressNextLiveRefresh) {{
+          if (!["ticket_created", "status_changed", "auto_status_changed", "workflow_rule_status_changed", "ticket_closed", "ticket_reopened", "comment_added", "internal_note_added", "assignment_changed", "attachment_added", "watcher_changed", "watcher_added", "watcher_removed", "ticket_link_changed", "ticket_link_added", "ticket_link_removed", "workflow_rule_notification"].includes(liveEvent.type)) return;
+          if (["status_changed", "auto_status_changed", "workflow_rule_status_changed", "ticket_closed", "ticket_reopened"].includes(liveEvent.type) && !suppressNextLiveRefresh) {{
             showToast(
               "Zmieniono status zgłoszenia #" + liveEvent.ticket_id,
               liveEvent.message || ""
