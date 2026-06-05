@@ -250,21 +250,21 @@ data:
         user_target = default_automation_target(statuses, ("Otwarte", "W trakcie", "Diagnostyka", "W realizacji", "Nowe"))
         staff_target = default_automation_target(statuses, ("W trakcie", "Diagnostyka", "Weryfikacja wniosku", "Analiza", "W realizacji", "Otwarte"))
         defaults = [
-            ("ticket_created", None, None, None, "change_status", initial_status, True),
-            ("user_comment_added", "Oczekuje na użytkownika", "user", "public", "change_status", user_target, True),
-            ("staff_comment_added", "Nowe", "staff", None, "change_status", staff_target, True),
+            ("Status początkowy", "ticket_created", None, None, None, "change_status", initial_status, True, 10),
+            ("Użytkownik odpowiedział", "comment_added", "Oczekuje na użytkownika", "user", "public", "change_status", user_target, True, 20),
+            ("Operator rozpoczął obsługę", "comment_added", "Nowe", "staff", "*", "change_status", staff_target, True, 30),
         ]
-        for event_type, condition_status, condition_role, condition_visibility, action_type, action_status, is_active in defaults:
+        for name, event_type, condition_status, condition_role, condition_visibility, action_type, action_status, is_active, priority in defaults:
             if action_status and action_status in statuses:
                 cur.execute("""
                     INSERT INTO workflow_automations (
-                        workflow_id, event_type, condition_status, condition_role,
-                        condition_comment_visibility, action_type, action_status, is_active
+                        workflow_id, name, event_type, condition_status, condition_role,
+                        condition_comment_visibility, action_type, action_status, is_active, priority
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
-                    workflow_id, event_type, condition_status, condition_role,
-                    condition_visibility, action_type, action_status, is_active,
+                    workflow_id, name, event_type, condition_status, condition_role,
+                    condition_visibility, action_type, action_status, is_active, priority,
                 ))
     def seed_workflows(cur):
         for key, workflow in WORKFLOWS.items():
@@ -718,6 +718,9 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
+                cur.execute("ALTER TABLE workflow_automations ADD COLUMN IF NOT EXISTS name TEXT")
+                cur.execute("ALTER TABLE workflow_automations ADD COLUMN IF NOT EXISTS priority INTEGER DEFAULT 100")
+                cur.execute("UPDATE workflow_automations SET priority = 100 WHERE priority IS NULL")
                 seed_workflows(cur)
                 cur.execute("""
                     UPDATE workflow_definitions
@@ -1087,22 +1090,24 @@ data:
         return [r[0] for r in cur.fetchall() if r and r[0]]
     def workflow_automation_entries(cur, workflow_id):
         cur.execute("""
-            SELECT id, event_type, condition_status, condition_role,
-                   condition_comment_visibility, action_type, action_status, is_active
+            SELECT id, name, event_type, condition_status, condition_role,
+                   condition_comment_visibility, action_type, action_status, is_active, COALESCE(priority, 100)
             FROM workflow_automations
             WHERE workflow_id = %s
-            ORDER BY id ASC
+            ORDER BY COALESCE(priority, 100) ASC, id ASC
         """, (workflow_id,))
         return [
             {
                 "id": r[0],
-                "event_type": r[1],
-                "condition_status": r[2],
-                "condition_role": r[3],
-                "condition_comment_visibility": r[4],
-                "action_type": r[5],
-                "action_status": r[6],
-                "is_active": bool(r[7]),
+                "name": r[1] or "",
+                "event_type": r[2],
+                "condition_status": r[3],
+                "condition_role": r[4],
+                "condition_comment_visibility": r[5],
+                "action_type": r[6],
+                "action_status": r[7],
+                "is_active": bool(r[8]),
+                "priority": int(r[9] or 100),
             }
             for r in cur.fetchall()
         ]
@@ -1118,12 +1123,21 @@ data:
             except Exception:
                 raw = []
         normalized = []
-        valid_events = {"ticket_created", "user_comment_added", "staff_comment_added"}
-        valid_roles = {"user", "staff", "operator", "admin", "*", ""}
-        valid_visibility = {"public", "internal", "*", ""}
+        valid_events = {
+            "ticket_created",
+            "comment_added",
+            "user_comment_added",
+            "staff_comment_added",
+            "attachment_added",
+            "status_changed",
+        }
+        valid_roles = {"user", "staff", "operator", "admin", "*", "any", ""}
+        valid_visibility = {"public", "internal", "*", "any", ""}
+        valid_actions = {"change_status", "notify", "add_history"}
         for item in raw:
             if not isinstance(item, dict):
                 continue
+            name = clean(item.get("name")) or "Reguła workflow"
             event_type = clean(item.get("event_type"))
             condition_status = clean(item.get("condition_status")) or None
             condition_role = clean(item.get("condition_role")) or None
@@ -1131,21 +1145,31 @@ data:
             action_type = clean(item.get("action_type")) or "change_status"
             action_status = clean(item.get("action_status")) or None
             is_active = bool(item.get("is_active", True))
+            try:
+                priority = int(item.get("priority", 100))
+            except Exception:
+                priority = 100
+            priority = max(1, min(priority, 9999))
             if event_type not in valid_events:
                 continue
-            if action_type != "change_status":
+            if action_type not in valid_actions:
                 continue
             if condition_role and condition_role not in valid_roles:
                 condition_role = None
+            if condition_role == "any":
+                condition_role = "*"
             if condition_visibility and condition_visibility not in valid_visibility:
                 condition_visibility = None
+            if condition_visibility == "any":
+                condition_visibility = "*"
             if condition_status and condition_status not in steps:
                 continue
             if action_status and action_status not in steps:
                 continue
-            if not action_status:
+            if action_type == "change_status" and not action_status:
                 continue
             normalized.append({
+                "name": name,
                 "event_type": event_type,
                 "condition_status": condition_status,
                 "condition_role": condition_role,
@@ -1153,6 +1177,7 @@ data:
                 "action_type": action_type,
                 "action_status": action_status,
                 "is_active": is_active,
+                "priority": priority,
             })
         return normalized
     def replace_workflow_automations(cur, workflow_id, automations):
@@ -1160,12 +1185,13 @@ data:
         for item in automations:
             cur.execute("""
                 INSERT INTO workflow_automations (
-                    workflow_id, event_type, condition_status, condition_role,
-                    condition_comment_visibility, action_type, action_status, is_active
+                    workflow_id, name, event_type, condition_status, condition_role,
+                    condition_comment_visibility, action_type, action_status, is_active, priority
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 workflow_id,
+                item.get("name") or "Reguła workflow",
                 item.get("event_type"),
                 item.get("condition_status"),
                 item.get("condition_role"),
@@ -1173,10 +1199,17 @@ data:
                 item.get("action_type") or "change_status",
                 item.get("action_status"),
                 bool(item.get("is_active", True)),
+                int(item.get("priority", 100) or 100),
             ))
     def workflow_comment_event_type(user):
         return "staff_comment_added" if is_staff(user) else "user_comment_added"
-    def workflow_automation_matches(item, current_status, user, visibility):
+    def workflow_actor_role(user):
+        if is_admin(user):
+            return "admin"
+        if is_operator(user):
+            return "operator"
+        return "user"
+    def workflow_automation_matches(item, current_status, user, visibility=None):
         if not item.get("is_active"):
             return False
         condition_status = item.get("condition_status")
@@ -1196,34 +1229,41 @@ data:
         if condition_visibility and condition_visibility not in ("*", "") and condition_visibility != visibility:
             return False
         return True
-    def workflow_automation_for_comment(cur, workflow_key, current_status, user, visibility):
+    def workflow_automations_for_event(cur, workflow_key, event_type, current_status, user, visibility=None):
         workflow_id = workflow_id_by_key(cur, workflow_key)
         if not workflow_id:
-            return None
-        event_type = workflow_comment_event_type(user)
+            return []
+        event_types = [event_type]
+        if event_type == "comment_added":
+            event_types.append(workflow_comment_event_type(user))
         cur.execute("""
-            SELECT event_type, condition_status, condition_role,
-                   condition_comment_visibility, action_type, action_status, is_active
+            SELECT name, event_type, condition_status, condition_role,
+                   condition_comment_visibility, action_type, action_status, is_active, COALESCE(priority, 100)
             FROM workflow_automations
             WHERE workflow_id = %s
-              AND event_type = %s
+              AND event_type = ANY(%s)
               AND is_active = TRUE
-            ORDER BY id ASC
-        """, (workflow_id, event_type))
-        rows = cur.fetchall()
-        for r in rows:
+            ORDER BY COALESCE(priority, 100) ASC, id ASC
+        """, (workflow_id, event_types))
+        result = []
+        for r in cur.fetchall():
             item = {
-                "event_type": r[0],
-                "condition_status": r[1],
-                "condition_role": r[2],
-                "condition_comment_visibility": r[3],
-                "action_type": r[4],
-                "action_status": r[5],
-                "is_active": bool(r[6]),
+                "name": r[0] or "Reguła workflow",
+                "event_type": r[1],
+                "condition_status": r[2],
+                "condition_role": r[3],
+                "condition_comment_visibility": r[4],
+                "action_type": r[5],
+                "action_status": r[6],
+                "is_active": bool(r[7]),
+                "priority": int(r[8] or 100),
             }
             if workflow_automation_matches(item, current_status, user, visibility):
-                return item
-        return None
+                result.append(item)
+        return result
+    def workflow_automation_for_comment(cur, workflow_key, current_status, user, visibility):
+        rules = workflow_automations_for_event(cur, workflow_key, "comment_added", current_status, user, visibility)
+        return rules[0] if rules else None
     def workflow_initial_status(cur, workflow_key):
         statuses = workflow_statuses(workflow_key)
         workflow_id = workflow_id_by_key(cur, workflow_key)
@@ -1235,7 +1275,7 @@ data:
                   AND event_type = 'ticket_created'
                   AND action_type = 'change_status'
                   AND is_active = TRUE
-                ORDER BY id ASC
+                ORDER BY COALESCE(priority, 100) ASC, id ASC
                 LIMIT 1
             """, (workflow_id,))
             row = cur.fetchone()
@@ -2696,6 +2736,175 @@ data:
             <option value="${{esc(v)}}" ${{v === selected ? "selected" : ""}}>${{v ? esc(v) : "— brak —"}}</option>
           `).join("");
         }}
+        let workflowAutomationEditor = [];
+        let workflowAutomationEditorWorkflow = null;
+        function automationSelectOptions(options, selected) {{
+          return options.map(o => {{
+            const value = typeof o === "string" ? o : o.value;
+            const label = typeof o === "string" ? o : o.label;
+            return `<option value="${{esc(value)}}" ${{value === selected ? "selected" : ""}}>${{esc(label)}}</option>`;
+          }}).join("");
+        }}
+        function workflowDefaultAutomationRules(workflow) {{
+          const existing = Array.isArray(workflow.automations) ? workflow.automations : [];
+          if (existing.length) return existing.map((r, idx) => ({{
+            name: r.name || `Reguła ${{idx + 1}}`,
+            event_type: r.event_type || "comment_added",
+            condition_status: r.condition_status || "",
+            condition_role: r.condition_role || "*",
+            condition_comment_visibility: r.condition_comment_visibility || "*",
+            action_type: r.action_type || "change_status",
+            action_status: r.action_status || "",
+            is_active: r.is_active !== false,
+            priority: Number(r.priority || ((idx + 1) * 10)),
+          }}));
+          return [
+            {{
+              name: "Status początkowy",
+              event_type: "ticket_created",
+              condition_status: "",
+              condition_role: "*",
+              condition_comment_visibility: "*",
+              action_type: "change_status",
+              action_status: "Nowe",
+              is_active: true,
+              priority: 10,
+            }},
+            {{
+              name: "Użytkownik odpowiedział",
+              event_type: "comment_added",
+              condition_status: "Oczekuje na użytkownika",
+              condition_role: "user",
+              condition_comment_visibility: "public",
+              action_type: "change_status",
+              action_status: "Otwarte",
+              is_active: true,
+              priority: 20,
+            }},
+            {{
+              name: "Operator rozpoczął obsługę",
+              event_type: "comment_added",
+              condition_status: "Nowe",
+              condition_role: "staff",
+              condition_comment_visibility: "*",
+              action_type: "change_status",
+              action_status: "W trakcie",
+              is_active: true,
+              priority: 30,
+            }},
+          ];
+        }}
+        function workflowAutomationRuleRow(rule, idx) {{
+          const workflow = workflowAutomationEditorWorkflow || {{}};
+          const statusOptions = workflowStatusOptions(workflow, rule.condition_status || "", true);
+          const targetOptions = workflowStatusOptions(workflow, rule.action_status || "", true);
+          const eventOptions = automationSelectOptions([
+            {{ value: "ticket_created", label: "Utworzono zgłoszenie" }},
+            {{ value: "comment_added", label: "Dodano komentarz/notatkę" }},
+            {{ value: "attachment_added", label: "Dodano załącznik" }},
+            {{ value: "status_changed", label: "Zmieniono status" }},
+          ], rule.event_type || "comment_added");
+          const roleOptions = automationSelectOptions([
+            {{ value: "*", label: "dowolna" }},
+            {{ value: "user", label: "user" }},
+            {{ value: "staff", label: "operator lub admin" }},
+            {{ value: "operator", label: "operator" }},
+            {{ value: "admin", label: "admin" }},
+          ], rule.condition_role || "*");
+          const visibilityOptions = automationSelectOptions([
+            {{ value: "*", label: "dowolny" }},
+            {{ value: "public", label: "publiczny" }},
+            {{ value: "internal", label: "wewnętrzny" }},
+          ], rule.condition_comment_visibility || "*");
+          const actionOptions = automationSelectOptions([
+            {{ value: "change_status", label: "Zmień status" }},
+            {{ value: "notify", label: "Wyślij powiadomienie" }},
+            {{ value: "add_history", label: "Dodaj wpis do historii" }},
+          ], rule.action_type || "change_status");
+          return `
+            <div class="card workflow-rule-card" style="padding:10px;margin:10px 0">
+              <div class="grid">
+                <div>
+                  <label>Nazwa reguły</label>
+                  <input data-rule-index="${{idx}}" data-rule-field="name" value="${{esc(rule.name || "")}}">
+                </div>
+                <div>
+                  <label>Priorytet</label>
+                  <input type="number" min="1" max="9999" data-rule-index="${{idx}}" data-rule-field="priority" value="${{Number(rule.priority || 100)}}">
+                </div>
+                <div>
+                  <label>Zdarzenie</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="event_type">${{eventOptions}}</select>
+                </div>
+                <div>
+                  <label>Jeżeli status</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="condition_status">${{statusOptions}}</select>
+                </div>
+                <div>
+                  <label>Rola wykonawcy</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="condition_role">${{roleOptions}}</select>
+                </div>
+                <div>
+                  <label>Typ komentarza</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="condition_comment_visibility">${{visibilityOptions}}</select>
+                </div>
+                <div>
+                  <label>Akcja</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="action_type">${{actionOptions}}</select>
+                </div>
+                <div>
+                  <label>Status docelowy</label>
+                  <select data-rule-index="${{idx}}" data-rule-field="action_status">${{targetOptions}}</select>
+                </div>
+              </div>
+              <label class="checkbox-row" style="margin-top:8px">
+                <input type="checkbox" data-rule-index="${{idx}}" data-rule-field="is_active" ${{rule.is_active !== false ? "checked" : ""}}>
+                Aktywna
+              </label>
+              <button type="button" class="btn-danger btn-small" onclick="removeWorkflowAutomationRule(${{idx}})">Usuń regułę</button>
+            </div>
+          `;
+        }}
+        function renderWorkflowAutomationRules() {{
+          const box = document.getElementById("workflowAutomationRules");
+          if (!box) return;
+          box.innerHTML = workflowAutomationEditor.map((rule, idx) => workflowAutomationRuleRow(rule, idx)).join("") || `<p class="muted">Brak reguł automatyzacji.</p>`;
+          box.querySelectorAll("[data-rule-index]").forEach(el => {{
+            el.addEventListener("change", updateWorkflowAutomationRuleFromInput);
+            el.addEventListener("input", updateWorkflowAutomationRuleFromInput);
+          }});
+        }}
+        function updateWorkflowAutomationRuleFromInput(e) {{
+          const el = e.target;
+          const idx = Number(el.dataset.ruleIndex);
+          const field = el.dataset.ruleField;
+          if (!workflowAutomationEditor[idx] || !field) return;
+          if (field === "is_active") {{
+            workflowAutomationEditor[idx][field] = el.checked;
+          }} else if (field === "priority") {{
+            workflowAutomationEditor[idx][field] = Number(el.value || 100);
+          }} else {{
+            workflowAutomationEditor[idx][field] = el.value;
+          }}
+        }}
+        function addWorkflowAutomationRule() {{
+          workflowAutomationEditor.push({{
+            name: "Nowa reguła",
+            event_type: "comment_added",
+            condition_status: "",
+            condition_role: "*",
+            condition_comment_visibility: "*",
+            action_type: "change_status",
+            action_status: "",
+            is_active: true,
+            priority: ((workflowAutomationEditor.length + 1) * 10),
+          }});
+          renderWorkflowAutomationRules();
+        }}
+        function removeWorkflowAutomationRule(idx) {{
+          workflowAutomationEditor.splice(idx, 1);
+          renderWorkflowAutomationRules();
+        }}
         async function renderAdminWorkflows() {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) {{
@@ -2856,40 +3065,15 @@ data:
                 <label>Kroki / statusy workflow</label>
                 <textarea name="steps" rows="10" required>${{esc(workflowStepsText(workflow))}}</textarea>
                 <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
-                ${{(() => {{
-                  const initialAuto = workflowAutomation(workflow, "ticket_created");
-                  const userAuto = workflowAutomation(workflow, "user_comment_added");
-                  const staffAuto = workflowAutomation(workflow, "staff_comment_added");
-                  return `
-                    <section class="card" style="padding:12px;margin:12px 0">
-                      <h3>Automatyzacje workflow</h3>
-                      <p class="muted">Te reguły decydują, jak zgłoszenie automatycznie zmienia krok/status po wybranych akcjach.</p>
-                      <div class="grid">
-                        <div>
-                          <label>Status początkowy po utworzeniu zgłoszenia</label>
-                          <select id="wfAutoInitialTarget">${{workflowStatusOptions(workflow, initialAuto.action_status || "Nowe")}}</select>
-                        </div>
-                        <div>
-                          <label>Użytkownik komentuje w statusie</label>
-                          <select id="wfAutoUserSource">${{workflowStatusOptions(workflow, userAuto.condition_status || "Oczekuje na użytkownika", true)}}</select>
-                        </div>
-                        <div>
-                          <label>Wtedy zmień status na</label>
-                          <select id="wfAutoUserTarget">${{workflowStatusOptions(workflow, userAuto.action_status || "Otwarte", true)}}</select>
-                        </div>
-                        <div>
-                          <label>Operator/admin komentuje w statusie</label>
-                          <select id="wfAutoStaffSource">${{workflowStatusOptions(workflow, staffAuto.condition_status || "Nowe", true)}}</select>
-                        </div>
-                        <div>
-                          <label>Wtedy zmień status na</label>
-                          <select id="wfAutoStaffTarget">${{workflowStatusOptions(workflow, staffAuto.action_status || "W trakcie", true)}}</select>
-                        </div>
-                      </div>
-                      <div class="attachment-upload-hint">Wybierz „— brak —” jako status źródłowy lub docelowy, aby wyłączyć daną regułę komentarza.</div>
-                    </section>
-                  `;
-                }})()}}
+                <section class="card" style="padding:12px;margin:12px 0">
+                  <h3>Reguły automatyzacji workflow</h3>
+                  <p class="muted">Każda reguła działa według schematu: zdarzenie → warunki → akcja. Na tym etapie obsługujemy zmianę statusu, powiadomienie i wpis do historii.</p>
+                  <div id="workflowAutomationRules"></div>
+                  <button type="button" class="btn-secondary btn-small" onclick="addWorkflowAutomationRule()">Dodaj regułę</button>
+                  <div class="attachment-upload-hint">
+                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”.
+                  </div>
+                </section>
                 ${{editing && workflow.ticket_count > 0 ? `
                   <div class="readonly-box">
                     Ten workflow jest używany przez <strong>${{workflow.ticket_count}}</strong> zgłoszeń.
@@ -2902,6 +3086,9 @@ data:
             </section>
           `;
           updateWorkflowSubcategoryOptions(meta, workflow.category, workflow.subcategory);
+          workflowAutomationEditorWorkflow = workflow;
+          workflowAutomationEditor = workflowDefaultAutomationRules(workflow);
+          renderWorkflowAutomationRules();
           document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
             updateWorkflowSubcategoryOptions(meta, e.target.value, "*");
           }});
@@ -2913,42 +3100,22 @@ data:
             payload.is_default = formData.get("is_default") === "on";
             payload.steps = payload.steps || "";
             payload.operator_emails = Array.from(document.querySelectorAll('input[name="operator_emails"]:checked')).map(cb => cb.value);
-            const automationInitialTarget = document.getElementById("wfAutoInitialTarget")?.value || "Nowe";
-            const automationUserSource = document.getElementById("wfAutoUserSource")?.value || "";
-            const automationUserTarget = document.getElementById("wfAutoUserTarget")?.value || "";
-            const automationStaffSource = document.getElementById("wfAutoStaffSource")?.value || "";
-            const automationStaffTarget = document.getElementById("wfAutoStaffTarget")?.value || "";
-            payload.automations = [];
-            if (automationInitialTarget) {{
-              payload.automations.push({{
-                event_type: "ticket_created",
-                action_type: "change_status",
-                action_status: automationInitialTarget,
-                is_active: true
+            payload.automations = workflowAutomationEditor
+              .map(rule => ({{
+                name: rule.name || "Reguła workflow",
+                event_type: rule.event_type || "comment_added",
+                condition_status: rule.condition_status || "",
+                condition_role: rule.condition_role || "*",
+                condition_comment_visibility: rule.condition_comment_visibility || "*",
+                action_type: rule.action_type || "change_status",
+                action_status: rule.action_status || "",
+                is_active: rule.is_active !== false,
+                priority: Number(rule.priority || 100),
+              }}))
+              .filter(rule => {{
+                if (rule.action_type === "change_status") return !!rule.action_status;
+                return !!rule.event_type;
               }});
-            }}
-            if (automationUserSource && automationUserTarget) {{
-              payload.automations.push({{
-                event_type: "user_comment_added",
-                condition_status: automationUserSource,
-                condition_role: "user",
-                condition_comment_visibility: "public",
-                action_type: "change_status",
-                action_status: automationUserTarget,
-                is_active: true
-              }});
-            }}
-            if (automationStaffSource && automationStaffTarget) {{
-              payload.automations.push({{
-                event_type: "staff_comment_added",
-                condition_status: automationStaffSource,
-                condition_role: "staff",
-                condition_comment_visibility: "*",
-                action_type: "change_status",
-                action_status: automationStaffTarget,
-                is_active: true
-              }});
-            }}
             const endpoint = editing ? `/api/admin/workflows/${{workflow.id}}` : "/api/admin/workflows";
             const method = editing ? "PUT" : "POST";
             const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
@@ -5267,12 +5434,82 @@ data:
             if candidate not in skipped:
                 return candidate
         return None
+    def apply_workflow_event_rules(cur, ticket_id, user, event_type, current_status, visibility=None):
+        """
+        Elastyczne reguły workflow: zdarzenie + warunki + akcja.
+        Na tym etapie obsługiwane akcje to: change_status, notify, add_history.
+        """
+        if current_status == "Zamknięte":
+            return []
+        cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
+        row = cur.fetchone()
+        workflow_key = row[0] if row else "default"
+        statuses = workflow_statuses(workflow_key)
+        rules = workflow_automations_for_event(cur, workflow_key, event_type, current_status, user, visibility)
+        executed = []
+        for rule in rules:
+            action_type = rule.get("action_type") or "change_status"
+            rule_name = rule.get("name") or "Reguła workflow"
+            if action_type == "change_status":
+                target_status = rule.get("action_status")
+                if not target_status or target_status not in statuses or target_status == current_status:
+                    continue
+                cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (target_status, ticket_id))
+                message = f"Reguła workflow „{rule_name}” zmieniła status z {current_status} na {target_status}."
+                add_ticket_event(cur, ticket_id, user, "workflow_rule_status_changed", message)
+                log_audit(cur, user, "workflow_rule_status_changed", "ticket", ticket_id, {
+                    "rule": rule_name,
+                    "event_type": event_type,
+                    "old_status": current_status,
+                    "new_status": target_status,
+                    "workflow_key": workflow_key,
+                })
+                create_ticket_notifications(
+                    cur,
+                    ticket_id,
+                    "workflow_rule_status_changed",
+                    f"Status zgłoszenia #{ticket_id} został automatycznie zmieniony z {current_status} na {target_status}.",
+                    actor_email=user["email"],
+                )
+                executed.append({
+                    "rule": rule_name,
+                    "action_type": action_type,
+                    "old_status": current_status,
+                    "new_status": target_status,
+                })
+                current_status = target_status
+            elif action_type == "notify":
+                create_ticket_notifications(
+                    cur,
+                    ticket_id,
+                    "workflow_rule_notification",
+                    f"Reguła workflow „{rule_name}” została uruchomiona dla zgłoszenia #{ticket_id}.",
+                    actor_email=user["email"],
+                )
+                executed.append({
+                    "rule": rule_name,
+                    "action_type": action_type,
+                })
+            elif action_type == "add_history":
+                add_ticket_event(cur, ticket_id, user, "workflow_rule_history", f"Uruchomiono regułę workflow „{rule_name}”.")
+                executed.append({
+                    "rule": rule_name,
+                    "action_type": action_type,
+                })
+        return executed
     def apply_auto_status_after_comment(cur, ticket_id, user, current_status, visibility):
         """
-        Automatyczne przejścia statusu po dodaniu komentarza/notatki.
-        Reguły są pobierane z konfiguracji workflow. Jeżeli workflow nie ma własnych reguł,
-        działa zachowanie zgodne z pierwszym MVP automatyzacji.
+        Zgodność wsteczna: komentarz/notatka uruchamia elastyczne reguły workflow.
+        Jeżeli workflow nie ma reguł, działa fallback zgodny z wcześniejszym MVP.
         """
+        executed = apply_workflow_event_rules(cur, ticket_id, user, "comment_added", current_status, visibility)
+        for item in executed:
+            if item.get("action_type") == "change_status":
+                return {
+                    "old_status": item.get("old_status"),
+                    "new_status": item.get("new_status"),
+                    "reason": item.get("rule"),
+                }
         if current_status == "Zamknięte":
             return None
         cur.execute("SELECT COALESCE(workflow_key, 'default') FROM tickets WHERE id = %s", (ticket_id,))
@@ -5281,27 +5518,20 @@ data:
         statuses = workflow_statuses(workflow_key)
         target_status = None
         reason = None
-        automation = workflow_automation_for_comment(cur, workflow_key, current_status, user, visibility)
-        if automation and automation.get("action_type") == "change_status":
-            action_status = automation.get("action_status")
-            if action_status in statuses and action_status != current_status:
-                target_status = action_status
-                reason = f"reguła workflow: {automation.get('event_type')}"
-        if not target_status:
-            if (not is_staff(user)) and visibility == "public" and current_status == "Oczekuje na użytkownika":
-                for candidate in ("Otwarte", "W trakcie", "Diagnostyka", "W realizacji", "Nowe"):
-                    if candidate in statuses and candidate != current_status:
-                        target_status = candidate
-                        break
-                reason = "fallback: użytkownik dodał komentarz publiczny"
-            elif is_staff(user) and current_status == "Nowe":
-                for candidate in ("W trakcie", "Diagnostyka", "Weryfikacja wniosku", "Analiza", "W realizacji", "Otwarte"):
-                    if candidate in statuses and candidate != current_status:
-                        target_status = candidate
-                        break
-                if not target_status:
-                    target_status = workflow_first_active_status_after_new(statuses)
-                reason = "fallback: operator/admin dodał komentarz lub notatkę"
+        if (not is_staff(user)) and visibility == "public" and current_status == "Oczekuje na użytkownika":
+            for candidate in ("Otwarte", "W trakcie", "Diagnostyka", "W realizacji", "Nowe"):
+                if candidate in statuses and candidate != current_status:
+                    target_status = candidate
+                    break
+            reason = "fallback: użytkownik dodał komentarz publiczny"
+        elif is_staff(user) and current_status == "Nowe":
+            for candidate in ("W trakcie", "Diagnostyka", "Weryfikacja wniosku", "Analiza", "W realizacji", "Otwarte"):
+                if candidate in statuses and candidate != current_status:
+                    target_status = candidate
+                    break
+            if not target_status:
+                target_status = workflow_first_active_status_after_new(statuses)
+            reason = "fallback: operator/admin dodał komentarz lub notatkę"
         if not target_status or target_status == current_status:
             return None
         cur.execute("UPDATE tickets SET status = %s, updated_at = NOW() WHERE id = %s", (target_status, ticket_id))
@@ -5801,6 +6031,7 @@ data:
             f"Status zgłoszenia #{ticket_id} zmieniono z {old_status} na {status}.",
             actor_email=user["email"],
         )
+        apply_workflow_event_rules(cur, ticket_id, user, "status_changed", status, None)
         conn.commit()
         cur.close()
         conn.close()
@@ -6296,6 +6527,7 @@ data:
             f"Dodano załącznik do zgłoszenia #{ticket_id}: {original_filename}.",
             actor_email=user["email"],
         )
+        apply_workflow_event_rules(cur, ticket_id, user, "attachment_added", ticket_status, None)
         conn.commit()
         cur.close()
         conn.close()
