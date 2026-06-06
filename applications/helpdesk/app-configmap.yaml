@@ -1000,8 +1000,8 @@ data:
             event_type,
             message,
         ))
-
-
+    
+    
     def add_ticket_status_history(
         cur,
         ticket_id,
@@ -1048,7 +1048,7 @@ data:
             bool(attachment_validated),
             source or "manual",
         ))
-
+    
     def log_audit(cur, user, action, target_type, target_id=None, details=None):
         if isinstance(details, (dict, list)):
             details = json.dumps(details, ensure_ascii=False)
@@ -2005,7 +2005,7 @@ data:
       .watcher-list { display: grid; gap: 10px; margin: 12px 0 16px; }
       .watcher-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px solid var(--border); border-radius: 14px; padding: 11px 12px; background: rgba(31,41,55,.58); }
       .watcher-meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
-
+    
       .ticket-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
       .ticket-main-column, .ticket-side-column { display: grid; gap: 18px; }
       .ticket-side-column { position: sticky; top: 18px; }
@@ -2038,7 +2038,7 @@ data:
       .section-focus { animation: sectionFocus 1.6s ease; }
       @keyframes sectionFocus { 0% { box-shadow: 0 0 0 0 rgba(56,189,248,.0); border-color: var(--border); } 30% { box-shadow: 0 0 0 4px rgba(56,189,248,.18); border-color: rgba(56,189,248,.72); } 100% { box-shadow: 0 20px 40px rgba(0,0,0,.25); border-color: var(--border); } }
       @media (max-width: 980px) { .ticket-layout { grid-template-columns: 1fr; } .ticket-side-column { position: static; } }
-
+    
       .login-box { width: min(520px, 100%); margin: 0 auto; }
       .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
       .error { color: #fecaca; }
@@ -2053,16 +2053,23 @@ data:
       .notification-btn { margin-top: 0; background: rgba(31,41,55,.9); border: 1px solid var(--border); color: var(--text); padding: 10px 14px; border-radius: 999px; }
       .notification-btn.has-unread { border-color: rgba(250,204,21,.65); box-shadow: 0 0 0 3px rgba(250,204,21,.12); }
       .notification-count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; margin-left: 6px; padding: 0 6px; border-radius: 999px; background: #ef4444; color: white; font-size: 12px; font-weight: 900; }
-      .notification-panel { position: absolute; top: 48px; right: 0; width: min(440px, 92vw); z-index: 60; border: 1px solid var(--border); border-radius: 18px; background: #111827; box-shadow: 0 24px 48px rgba(0,0,0,.38); padding: 14px; }
-      .notification-panel-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+      .notification-panel { position: absolute; top: 48px; right: 0; width: min(540px, 94vw); z-index: 60; border: 1px solid var(--border); border-radius: 18px; background: #111827; box-shadow: 0 24px 48px rgba(0,0,0,.38); padding: 14px; }
+      .notification-panel-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 10px; }
       .notification-panel-header h3 { margin: 0; }
-      .notification-list { display: grid; gap: 8px; max-height: 360px; overflow: auto; }
-      .notification-item { display: block; text-align: left; width: 100%; margin: 0; padding: 11px 12px; border-radius: 14px; border: 1px solid var(--border); background: rgba(31,41,55,.62); color: var(--text); }
-      .notification-item.unread { border-color: rgba(56,189,248,.55); background: rgba(56,189,248,.10); }
-      .notification-item:hover { border-color: rgba(56,189,248,.65); }
+      .notification-panel-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+      .notification-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 12px; }
+      .notification-tab { margin: 0; padding: 7px 10px; border-radius: 999px; border: 1px solid var(--border); background: rgba(31,41,55,.72); color: var(--muted); font-weight: 800; }
+      .notification-tab.active { color: var(--text); border-color: rgba(56,189,248,.65); background: rgba(56,189,248,.13); }
+      .notification-list { display: grid; gap: 8px; max-height: 420px; overflow: auto; }
+      .notification-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 10px; align-items: start; width: 100%; margin: 0; padding: 11px 12px; border-radius: 14px; border: 1px solid var(--border); background: rgba(31,41,55,.62); color: var(--text); }
+      .notification-card.unread { border-color: rgba(56,189,248,.55); background: rgba(56,189,248,.10); }
+      .notification-card:hover { border-color: rgba(56,189,248,.65); }
+      .notification-open { text-align: left; width: 100%; margin: 0; padding: 0; border: 0; background: transparent; color: var(--text); }
       .notification-ticket { margin-bottom: 5px; color: #bae6fd; font-size: 13px; font-weight: 900; line-height: 1.35; }
       .notification-message { font-weight: 800; line-height: 1.35; }
       .notification-meta { margin-top: 4px; color: var(--muted); font-size: 12px; }
+      .notification-item-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+      .notification-item-actions button { margin-top: 0; padding: 6px 8px; font-size: 12px; }
       .toast { position: fixed; right: 24px; bottom: 24px; z-index: 9999; min-width: 280px; max-width: 440px; padding: 16px 18px; border-radius: 16px; background: linear-gradient(135deg, rgba(2,132,199,.96), rgba(34,197,94,.96)); color: #fff; box-shadow: 0 18px 40px rgba(0,0,0,.35); font-weight: 700; opacity: 0; transform: translateY(16px); pointer-events: none; transition: opacity .2s ease, transform .2s ease; }
       .toast.show { opacity: 1; transform: translateY(0); }
       .toast small { display: block; margin-top: 4px; opacity: .85; font-weight: 500; }
@@ -2127,8 +2134,19 @@ data:
               </button>
               <div id="notificationPanel" class="notification-panel hidden">
                 <div class="notification-panel-header">
-                  <h3>Powiadomienia</h3>
-                  <button class="btn-secondary btn-small" onclick="markAllNotificationsRead(); return false;">Oznacz wszystkie</button>
+                  <div>
+                    <h3>Powiadomienia</h3>
+                    <p class="muted" style="margin:4px 0 0">Centrum ostatnich zdarzeń przypisanych do Twojego konta.</p>
+                  </div>
+                  <div class="notification-panel-actions">
+                    <button class="btn-secondary btn-small" onclick="loadNotifications(); return false;">Odśwież</button>
+                    <button class="btn-secondary btn-small" onclick="markAllNotificationsRead(); return false;">Oznacz wszystkie</button>
+                    <button class="btn-secondary btn-small" onclick="deleteReadNotifications(); return false;">Usuń przeczytane</button>
+                  </div>
+                </div>
+                <div class="notification-tabs">
+                  <button id="notificationTabAll" class="notification-tab active" onclick="setNotificationFilter('all'); return false;">Wszystkie</button>
+                  <button id="notificationTabUnread" class="notification-tab" onclick="setNotificationFilter('unread'); return false;">Nieprzeczytane</button>
                 </div>
                 <div id="notificationList" class="notification-list">
                   <p class="muted">Brak powiadomień.</p>
@@ -2334,9 +2352,19 @@ data:
           }};
           return map[type] || "Powiadomienie";
         }}
+        let notificationFilter = "all";
+        function setNotificationFilter(filter) {{
+          notificationFilter = filter === "unread" ? "unread" : "all";
+          const allTab = document.getElementById("notificationTabAll");
+          const unreadTab = document.getElementById("notificationTabUnread");
+          if (allTab) allTab.classList.toggle("active", notificationFilter === "all");
+          if (unreadTab) unreadTab.classList.toggle("active", notificationFilter === "unread");
+          loadNotifications();
+        }}
         async function loadNotifications() {{
           if (!getSid()) return;
-          const res = await api("/api/notifications");
+          const unreadOnly = notificationFilter === "unread" ? "?unread=1" : "";
+          const res = await api("/api/notifications" + unreadOnly);
           if (!res || !res.ok) return;
           const data = await res.json();
           const unread = Number(data.unread_count || 0);
@@ -2345,15 +2373,24 @@ data:
           notificationButton.classList.toggle("has-unread", unread > 0);
           const items = data.notifications || [];
           if (!items.length) {{
-            notificationList.innerHTML = `<p class="muted">Brak powiadomień.</p>`;
+            const label = notificationFilter === "unread" ? "Brak nieprzeczytanych powiadomień." : "Brak powiadomień.";
+            notificationList.innerHTML = `<p class="muted">${{label}}</p>`;
             return;
           }}
           notificationList.innerHTML = items.map(n => `
-            <button class="notification-item ${{n.is_read ? "" : "unread"}}" onclick="openNotification(${{n.id}}, ${{n.ticket_id || "null"}}); return false;">
-              ${{n.ticket_id ? `<div class="notification-ticket">#${{n.ticket_id}} · ${{esc(n.ticket_title || "Bez tytułu")}}</div>` : ""}}
-              <div class="notification-message">${{esc(n.message)}}</div>
-              <div class="notification-meta">${{esc(notificationTypeLabel(n.type))}} · ${{esc(n.created_at)}}${{n.is_read ? "" : " · nieprzeczytane"}}</div>
-            </button>
+            <div class="notification-card ${{n.is_read ? "" : "unread"}}">
+              <button class="notification-open" onclick="openNotification(${{n.id}}, ${{n.ticket_id || "null"}}); return false;">
+                ${{n.ticket_id ? `<div class="notification-ticket">#${{n.ticket_id}} · ${{esc(n.ticket_title || "Bez tytułu")}}</div>` : ""}}
+                <div class="notification-message">${{esc(n.message)}}</div>
+                <div class="notification-meta">${{esc(notificationTypeLabel(n.type))}} · ${{esc(n.created_at)}}${{n.is_read ? "" : " · nieprzeczytane"}}</div>
+              </button>
+              <div class="notification-item-actions">
+                ${{n.is_read
+                  ? `<button class="btn-secondary btn-small" title="Oznacz jako nieprzeczytane" onclick="markNotificationUnread(${{n.id}}); return false;">Nieprzecz.</button>`
+                  : `<button class="btn-secondary btn-small" title="Oznacz jako przeczytane" onclick="markNotificationRead(${{n.id}}); return false;">Przecz.</button>`}}
+                <button class="btn-danger btn-small" title="Usuń powiadomienie" onclick="deleteNotification(${{n.id}}); return false;">Usuń</button>
+              </div>
+            </div>
           `).join("");
         }}
         function toggleNotifications() {{
@@ -2368,8 +2405,26 @@ data:
             await renderTicket(ticketId);
           }}
         }}
+        async function markNotificationRead(id) {{
+          await api(`/api/notifications/${{id}}/read`, {{ method: "POST" }});
+          await loadNotifications();
+        }}
+        async function markNotificationUnread(id) {{
+          await api(`/api/notifications/${{id}}/unread`, {{ method: "POST" }});
+          await loadNotifications();
+        }}
+        async function deleteNotification(id) {{
+          if (!confirm("Usunąć to powiadomienie?")) return;
+          await api(`/api/notifications/${{id}}`, {{ method: "DELETE" }});
+          await loadNotifications();
+        }}
         async function markAllNotificationsRead() {{
           await api("/api/notifications/read-all", {{ method: "POST" }});
+          await loadNotifications();
+        }}
+        async function deleteReadNotifications() {{
+          if (!confirm("Usunąć wszystkie przeczytane powiadomienia?")) return;
+          await api("/api/notifications/delete-read", {{ method: "POST" }});
           await loadNotifications();
         }}
         function priorityClass(priority) {{ return "priority-" + String(priority || "").replaceAll(" ", "-"); }}
@@ -5519,6 +5574,12 @@ data:
     @app.get("/api/notifications")
     @api_login_required
     def api_notifications(user):
+        unread_only = request.args.get("unread") in ("1", "true", "yes")
+        try:
+            limit = int(request.args.get("limit", "50") or 50)
+        except Exception:
+            limit = 50
+        limit = max(1, min(limit, 100))
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -5527,19 +5588,21 @@ data:
             WHERE user_email = %s AND is_read = FALSE
         """, (user["email"],))
         unread_count = cur.fetchone()[0]
-        cur.execute("""
+        where_extra = "AND n.is_read = FALSE" if unread_only else ""
+        cur.execute(f"""
             SELECT n.id, n.ticket_id, n.type, n.message, n.is_read, n.created_at, t.title
             FROM notifications n
             LEFT JOIN tickets t ON t.id = n.ticket_id
-            WHERE n.user_email = %s
+            WHERE n.user_email = %s {where_extra}
             ORDER BY n.created_at DESC, n.id DESC
-            LIMIT 50
-        """, (user["email"],))
+            LIMIT %s
+        """, (user["email"], limit))
         rows = cur.fetchall()
         cur.close()
         conn.close()
         return jsonify({
             "unread_count": unread_count,
+            "filter": "unread" if unread_only else "all",
             "notifications": [
                 {
                     "id": r[0],
@@ -5567,6 +5630,33 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok"})
+    @app.post("/api/notifications/<int:notification_id>/unread")
+    @api_login_required
+    def api_notification_unread(user, notification_id):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE notifications
+            SET is_read = FALSE
+            WHERE id = %s AND user_email = %s
+        """, (notification_id, user["email"]))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
+    @app.delete("/api/notifications/<int:notification_id>")
+    @api_login_required
+    def api_notification_delete(user, notification_id):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM notifications
+            WHERE id = %s AND user_email = %s
+        """, (notification_id, user["email"]))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
     @app.post("/api/notifications/read-all")
     @api_login_required
     def api_notifications_read_all(user):
@@ -5576,6 +5666,19 @@ data:
             UPDATE notifications
             SET is_read = TRUE
             WHERE user_email = %s AND is_read = FALSE
+        """, (user["email"],))
+        conn.commit()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok"})
+    @app.post("/api/notifications/delete-read")
+    @api_login_required
+    def api_notifications_delete_read(user):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM notifications
+            WHERE user_email = %s AND is_read = TRUE
         """, (user["email"],))
         conn.commit()
         cur.close()
@@ -7462,8 +7565,8 @@ data:
     # Ten kod celowo nie polega wyłącznie na funkcji wykonującej automatyzacje,
     # ponieważ akcje require_comment / require_attachment są walidacjami blokującymi,
     # a nie akcjami wykonywanymi po zmianie statusu.
-
-
+    
+    
     def workflow_requirement_normalize(value):
         """Zamienia dowolny zapis akcji/warunku na prosty tekst do porównywania."""
         text = clean(value).lower()
@@ -7488,12 +7591,12 @@ data:
         while "__" in text:
             text = text.replace("__", "_")
         return text.strip("_")
-
-
+    
+    
     def workflow_requirement_type_from_value(value):
         """
         Rozpoznaje wymóg workflow niezależnie od tego, gdzie i jak został zapisany.
-
+    
         Obsługiwane są między innymi:
         - require_comment / require_attachment,
         - Wymagaj komentarza / Wymagaj załącznika,
@@ -7503,7 +7606,7 @@ data:
         text = workflow_requirement_normalize(value)
         if not text:
             return None
-
+    
         comment_tokens = {
             "require_comment",
             "required_comment",
@@ -7529,40 +7632,40 @@ data:
             "wymaga_pliku",
             "plik_wymagany",
         }
-
+    
         if text in comment_tokens:
             return "comment"
         if text in attachment_tokens:
             return "attachment"
-
+    
         requires = any(token in text for token in ("require", "required", "wymagaj", "wymaga", "wymagany"))
         mentions_comment = any(token in text for token in ("comment", "comments", "komentarz", "komentarza"))
         mentions_attachment = any(token in text for token in ("attachment", "attachments", "zalacznik", "zalacznika", "plik", "pliku"))
-
+    
         if requires and mentions_comment:
             return "comment"
         if requires and mentions_attachment:
             return "attachment"
-
+    
         return None
-
-
+    
+    
     def workflow_condition_is_any(value):
         """Czy warunek workflow oznacza dowolną wartość."""
         return workflow_requirement_normalize(value) in ("", "*", "any", "dowolny", "dowolna")
-
-
+    
+    
     def workflow_status_requirement_rule_matches(rule, old_status, new_status, user, assigned_to_email=None):
         """Sprawdza, czy reguła status_changed dotyczy tej konkretnej zmiany statusu."""
         if not rule.get("is_active", True):
             return False
-
+    
         condition_status = clean(rule.get("condition_status"))
         condition_to_status = clean(rule.get("condition_to_status"))
-
+    
         has_from = not workflow_condition_is_any(condition_status)
         has_to = not workflow_condition_is_any(condition_to_status)
-
+    
         # Normalny zapis: status źródłowy + status docelowy.
         if has_from and has_to:
             if condition_status != old_status or condition_to_status != new_status:
@@ -7576,7 +7679,7 @@ data:
             # jako status źródłowy albo docelowy, więc celowo akceptujemy oba warianty.
             if condition_status not in (old_status, new_status):
                 return False
-
+    
         condition_role = workflow_requirement_normalize(rule.get("condition_role"))
         if condition_role not in ("", "*", "any", "dowolna", "dowolny"):
             if condition_role == "staff" and not is_staff(user):
@@ -7587,26 +7690,26 @@ data:
                 return False
             if condition_role == "admin" and not is_admin(user):
                 return False
-
+    
         assigned_state = workflow_requirement_normalize(rule.get("assigned_state")) or "*"
         has_assignee = bool(assigned_to_email)
         if assigned_state == "assigned" and not has_assignee:
             return False
         if assigned_state == "unassigned" and has_assignee:
             return False
-
+    
         return True
-
+    
     def workflow_status_requirement_rules(cur, workflow_key, old_status, new_status, user, assigned_to_email=None):
         """
         Zwraca aktywne reguły status_changed, które wymagają komentarza i/lub załącznika.
-
+    
         Funkcja jest celowo bardziej defensywna niż zwykły silnik automatyzacji:
         wymagania komentarza/załącznika są walidacją bezpieczeństwa przed zmianą statusu,
         więc nie mogą zostać pominięte przez drobną różnicę zapisu po migracji.
         """
         workflow_id = workflow_id_by_key(cur, workflow_key)
-
+    
         if workflow_id:
             cur.execute("""
                 SELECT
@@ -7660,7 +7763,7 @@ data:
                          COALESCE(waa.action_order, 1) ASC,
                          waa.id ASC
             """)
-
+    
         rules_by_id = {}
         for row in cur.fetchall():
             rule_id = row[0]
@@ -7675,14 +7778,14 @@ data:
                 "requirement_types": set(),
                 "debug_actions": [],
             })
-
+    
             # Stary zapis w workflow_automations.
             for value in (row[7], row[8]):
                 requirement_type = workflow_requirement_type_from_value(value)
                 if requirement_type:
                     rule["requirement_types"].add(requirement_type)
                     rule["debug_actions"].append(clean(value))
-
+    
             # Nowy zapis w workflow_automation_actions.
             if bool(row[11]):
                 for value in (row[9], row[10]):
@@ -7690,7 +7793,7 @@ data:
                     if requirement_type:
                         rule["requirement_types"].add(requirement_type)
                         rule["debug_actions"].append(clean(value))
-
+    
         matched_rules = []
         for rule in rules_by_id.values():
             if not rule["requirement_types"]:
@@ -7699,7 +7802,7 @@ data:
                 continue
             rule["requirement_types"] = sorted(rule["requirement_types"])
             matched_rules.append(rule)
-
+    
         # Bezpiecznik: jeżeli mamy aktywne reguły wymagające komentarza/załącznika,
         # ale nie dopasowały się przez starszy/niejednoznaczny zapis warunku statusu,
         # dopasuj reguły, które wskazują status docelowy albo mają warunek "dowolny".
@@ -7728,13 +7831,13 @@ data:
                 rule["requirement_types"] = sorted(rule["requirement_types"])
                 rule["fallback_matched"] = True
                 matched_rules.append(rule)
-
+    
         return matched_rules
-
+    
     def ticket_current_status_started_at(cur, ticket_id):
         """
         Zwraca moment wejścia zgłoszenia w obecny status.
-
+    
         Najpierw korzystamy z uporządkowanej tabeli ticket_status_history,
         potem awaryjnie z ticket_events, a na końcu z tickets.created_at.
         Dzięki temu stare komentarze/załączniki nie spełniają wymagań dla
@@ -7747,7 +7850,7 @@ data:
         """, (ticket_id,))
         status_row = cur.fetchone()
         current_status = status_row[0] if status_row else None
-
+    
         cur.execute("""
             SELECT COALESCE(
                 (
@@ -7776,11 +7879,11 @@ data:
         """, (ticket_id, current_status, current_status, ticket_id, ticket_id))
         row = cur.fetchone()
         return row[0] if row else None
-
+    
     def operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at):
         """
         Sprawdza, czy aktualny operator dodał komentarz/notatkę dla bieżącego statusu.
-
+    
         Dla nowych komentarzy używamy author_email.
         Dla starszych danych zostawiamy awaryjne dopasowanie po nazwie autora.
         """
@@ -7806,8 +7909,8 @@ data:
             user.get("name") or "",
         ))
         return bool(cur.fetchone()[0])
-
-
+    
+    
     def operator_added_attachment_for_current_status(cur, ticket_id, user, status_started_at):
         """Sprawdza, czy aktualny operator dodał załącznik dla bieżącego statusu."""
         cur.execute("""
@@ -7831,13 +7934,13 @@ data:
             user.get("name") or "",
         ))
         return bool(cur.fetchone()[0])
-
-
+    
+    
     def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status):
         """
         Blokuje zmianę statusu, jeżeli reguła workflow wymaga komentarza/załącznika,
         a operator nie dodał wymaganego elementu dla tej konkretnej próby przejścia.
-
+    
         Obowiązujące zachowanie:
         - stare komentarze nie spełniają wymogu komentarza,
         - stare załączniki nie spełniają wymogu załącznika,
@@ -7854,7 +7957,7 @@ data:
                 "attachment_validated": False,
                 "status_started_at": None,
             }
-
+    
         cur.execute("""
             SELECT COALESCE(workflow_key, 'default'), assigned_to_email
             FROM tickets
@@ -7863,7 +7966,7 @@ data:
         row = cur.fetchone()
         workflow_key = row[0] if row else "default"
         assigned_to_email = row[1] if row else None
-
+    
         requirement_rules = workflow_status_requirement_rules(
             cur,
             workflow_key,
@@ -7872,7 +7975,7 @@ data:
             user,
             assigned_to_email,
         )
-
+    
         required = set()
         rule_names = []
         fallback_rules = []
@@ -7882,7 +7985,7 @@ data:
             rule_names.append(rule_name)
             if rule.get("fallback_matched"):
                 fallback_rules.append(rule_name)
-
+    
         status_started_at = ticket_current_status_started_at(cur, ticket_id)
         operator_has_comment = (
             operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at)
@@ -7894,13 +7997,13 @@ data:
             if "attachment" in required
             else False
         )
-
+    
         missing_requirements = []
         if "comment" in required and not operator_has_comment:
             missing_requirements.append("comment")
         if "attachment" in required and not operator_has_attachment:
             missing_requirements.append("attachment")
-
+    
         validation_details = {
             "required": sorted(required),
             "missing": list(missing_requirements),
@@ -7910,7 +8013,7 @@ data:
             "attachment_validated": bool(operator_has_attachment),
             "status_started_at": str(status_started_at),
         }
-
+    
         print(
             "workflow status validation:",
             {
@@ -7930,29 +8033,29 @@ data:
             },
             flush=True,
         )
-
+    
         if not missing_requirements:
             return True, None, [], validation_details
-
+    
         labels = []
         if "comment" in missing_requirements:
             labels.append("nowego komentarza")
         if "attachment" in missing_requirements:
             labels.append("nowego załącznika")
-
+    
         unique_rule_names = []
         for name in rule_names:
             if name and name not in unique_rule_names:
                 unique_rule_names.append(name)
-
+    
         message = status_requirement_guidance(missing_requirements, old_status, new_status)
         if unique_rule_names:
             message += " Reguła: " + ", ".join(unique_rule_names)
-
+    
         validation_details["missing"] = list(missing_requirements)
         validation_details["guidance"] = status_requirement_guidance(missing_requirements, old_status, new_status)
         return False, message, missing_requirements, validation_details
-
+    
     def status_requirement_guidance(missing_requirements, old_status=None, new_status=None):
         parts = []
         if old_status and new_status:
@@ -7965,8 +8068,8 @@ data:
             parts.append("Dodaj nowy załącznik w sekcji Załączniki.")
         parts.append("Liczy się element dodany przez aktualnego operatora po wejściu zgłoszenia w obecny status.")
         return " ".join(parts)
-
-
+    
+    
     @app.get("/api/tickets/<int:ticket_id>/status-requirements")
     @api_login_required
     def api_ticket_status_requirements(user, ticket_id):
@@ -8008,8 +8111,8 @@ data:
             "comment_validated": validation_details.get("comment_validated", False),
             "attachment_validated": validation_details.get("attachment_validated", False),
         })
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
     def api_update_status(user, ticket_id):
