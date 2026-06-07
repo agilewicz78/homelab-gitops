@@ -563,55 +563,66 @@ data:
     \         UNIQUE(ticket_id, linked_ticket_id, relation_type),\n              \
     \      CHECK (ticket_id <> linked_ticket_id)\n                );\n           \
     \ \"\"\")\n            cur.execute(\"\"\"\n                CREATE TABLE IF NOT\
-    \ EXISTS audit_log (\n                    id SERIAL PRIMARY KEY,\n           \
-    \         actor_email TEXT,\n                    actor_name TEXT,\n          \
-    \          action TEXT NOT NULL,\n                    target_type TEXT NOT NULL,\n\
-    \                    target_id TEXT,\n                    details TEXT,\n    \
-    \                created_at TIMESTAMP DEFAULT NOW()\n                );\n    \
-    \        \"\"\")\n            password_hash = generate_password_hash(INITIAL_PASSWORD)\n\
-    \            for first_name, last_name, email, department, role in SEED_USERS:\n\
-    \                cur.execute(\"\"\"\n                    INSERT INTO users (first_name,\
-    \ last_name, email, department, role, password_hash)\n                    VALUES\
-    \ (%s, %s, %s, %s, %s, %s)\n                    ON CONFLICT (email) DO NOTHING\n\
-    \                \"\"\", (first_name, last_name, email, department, role, password_hash))\n\
-    \                cur.execute(\"\"\"\n                    UPDATE users\n      \
-    \              SET roles = CASE\n                        WHEN %s = 'admin' THEN\
-    \ ARRAY['user','admin','operator']\n                        WHEN %s = 'operator'\
-    \ THEN ARRAY['user','operator']\n                        ELSE ARRAY['user']\n\
-    \                    END,\n                    role = CASE\n                 \
-    \       WHEN %s = 'admin' THEN 'admin'\n                        WHEN %s = 'operator'\
-    \ THEN 'operator'\n                        ELSE 'user'\n                    END\n\
-    \                    WHERE email = %s AND (roles IS NULL OR array_length(roles,\
-    \ 1) IS NULL)\n                \"\"\", (role, role, role, role, email))\n    \
-    \        cur.execute(\"SELECT COUNT(*) FROM tickets\")\n            count = cur.fetchone()[0]\n\
-    \            if count == 0:\n                for ticket in SEED_TICKETS:\n   \
-    \                 priority = ticket[6]\n                    now_for_sla = datetime.now()\n\
-    \                    sla_due_at = now_for_sla + timedelta(hours=SLA_HOURS.get(priority,\
-    \ 48))\n                    first_response_hours = {\n                       \
-    \ \"Krytyczny\": 1,\n                        \"Wysoki\": 2,\n                \
-    \        \"Normalny\": 8,\n                        \"Niski\": 24,\n          \
-    \          }.get(priority, 8)\n                    first_response_due_at = now_for_sla\
-    \ + timedelta(hours=first_response_hours)\n                    workflow_key, workflow_name\
-    \ = choose_workflow(ticket[5], \"Inne\")\n                    cur.execute(\"\"\
-    \"\n                        INSERT INTO tickets (\n                          \
-    \  title, description, requester_name, requester_email,\n                    \
-    \        department, category, subcategory, priority, status,\n              \
-    \              first_response_due_at, sla_due_at,\n                          \
-    \  workflow_key, workflow_name\n                        )\n                  \
-    \      VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s, %s, %s, %s)\n     \
-    \               \"\"\", ticket + (first_response_due_at, sla_due_at, workflow_key,\
-    \ workflow_name))\n            conn.commit()\n            cur.close()\n      \
-    \      conn.close()\n            return\n        except Exception as e:\n    \
-    \        print(f\"Waiting for database: {e}\", flush=True)\n            time.sleep(1)\n\
-    \    raise RuntimeError(\"Database unavailable\")\ninit_db()\ndef esc(value):\n\
-    \    return html.escape(str(value or \"\"))\ndef clean(value):\n    return str(value\
-    \ or \"\").strip()\ndef allowed_attachment(filename):\n    if not filename or\
-    \ \".\" not in filename:\n        return False\n    ext = filename.rsplit(\".\"\
-    , 1)[1].lower()\n    return ext in ALLOWED_ATTACHMENT_EXTENSIONS\ndef attachment_path(stored_filename):\n\
-    \    base = os.path.abspath(ATTACHMENTS_DIR)\n    target = os.path.abspath(os.path.join(base,\
-    \ stored_filename))\n    if not target.startswith(base + os.sep):\n        raise\
-    \ ValueError(\"Invalid attachment path\")\n    return target\ndef sla_policy_for_priority(cur,\
-    \ priority):\n    cur.execute(\"\"\"\n        SELECT first_response_hours, resolution_hours,\
+    \ EXISTS ticket_tags (\n                    id SERIAL PRIMARY KEY,\n         \
+    \           ticket_id INTEGER REFERENCES tickets(id) ON DELETE CASCADE,\n    \
+    \                tag TEXT NOT NULL,\n                    added_by_email TEXT REFERENCES\
+    \ users(email) ON DELETE SET NULL,\n                    added_by_name TEXT,\n\
+    \                    created_at TIMESTAMP DEFAULT NOW()\n                );\n\
+    \            \"\"\")\n            cur.execute(\"\"\"\n                CREATE UNIQUE\
+    \ INDEX IF NOT EXISTS ticket_tags_unique_lower_idx\n                ON ticket_tags\
+    \ (ticket_id, lower(tag))\n            \"\"\")\n            cur.execute(\"\"\"\
+    \n                CREATE INDEX IF NOT EXISTS ticket_tags_ticket_id_idx\n     \
+    \           ON ticket_tags (ticket_id)\n            \"\"\")\n            cur.execute(\"\
+    \"\"\n                CREATE TABLE IF NOT EXISTS audit_log (\n               \
+    \     id SERIAL PRIMARY KEY,\n                    actor_email TEXT,\n        \
+    \            actor_name TEXT,\n                    action TEXT NOT NULL,\n   \
+    \                 target_type TEXT NOT NULL,\n                    target_id TEXT,\n\
+    \                    details TEXT,\n                    created_at TIMESTAMP DEFAULT\
+    \ NOW()\n                );\n            \"\"\")\n            password_hash =\
+    \ generate_password_hash(INITIAL_PASSWORD)\n            for first_name, last_name,\
+    \ email, department, role in SEED_USERS:\n                cur.execute(\"\"\"\n\
+    \                    INSERT INTO users (first_name, last_name, email, department,\
+    \ role, password_hash)\n                    VALUES (%s, %s, %s, %s, %s, %s)\n\
+    \                    ON CONFLICT (email) DO NOTHING\n                \"\"\", (first_name,\
+    \ last_name, email, department, role, password_hash))\n                cur.execute(\"\
+    \"\"\n                    UPDATE users\n                    SET roles = CASE\n\
+    \                        WHEN %s = 'admin' THEN ARRAY['user','admin','operator']\n\
+    \                        WHEN %s = 'operator' THEN ARRAY['user','operator']\n\
+    \                        ELSE ARRAY['user']\n                    END,\n      \
+    \              role = CASE\n                        WHEN %s = 'admin' THEN 'admin'\n\
+    \                        WHEN %s = 'operator' THEN 'operator'\n              \
+    \          ELSE 'user'\n                    END\n                    WHERE email\
+    \ = %s AND (roles IS NULL OR array_length(roles, 1) IS NULL)\n               \
+    \ \"\"\", (role, role, role, role, email))\n            cur.execute(\"SELECT COUNT(*)\
+    \ FROM tickets\")\n            count = cur.fetchone()[0]\n            if count\
+    \ == 0:\n                for ticket in SEED_TICKETS:\n                    priority\
+    \ = ticket[6]\n                    now_for_sla = datetime.now()\n            \
+    \        sla_due_at = now_for_sla + timedelta(hours=SLA_HOURS.get(priority, 48))\n\
+    \                    first_response_hours = {\n                        \"Krytyczny\"\
+    : 1,\n                        \"Wysoki\": 2,\n                        \"Normalny\"\
+    : 8,\n                        \"Niski\": 24,\n                    }.get(priority,\
+    \ 8)\n                    first_response_due_at = now_for_sla + timedelta(hours=first_response_hours)\n\
+    \                    workflow_key, workflow_name = choose_workflow(ticket[5],\
+    \ \"Inne\")\n                    cur.execute(\"\"\"\n                        INSERT\
+    \ INTO tickets (\n                            title, description, requester_name,\
+    \ requester_email,\n                            department, category, subcategory,\
+    \ priority, status,\n                            first_response_due_at, sla_due_at,\n\
+    \                            workflow_key, workflow_name\n                   \
+    \     )\n                        VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s,\
+    \ %s, %s, %s, %s)\n                    \"\"\", ticket + (first_response_due_at,\
+    \ sla_due_at, workflow_key, workflow_name))\n            conn.commit()\n     \
+    \       cur.close()\n            conn.close()\n            return\n        except\
+    \ Exception as e:\n            print(f\"Waiting for database: {e}\", flush=True)\n\
+    \            time.sleep(1)\n    raise RuntimeError(\"Database unavailable\")\n\
+    init_db()\ndef esc(value):\n    return html.escape(str(value or \"\"))\ndef clean(value):\n\
+    \    return str(value or \"\").strip()\ndef allowed_attachment(filename):\n  \
+    \  if not filename or \".\" not in filename:\n        return False\n    ext =\
+    \ filename.rsplit(\".\", 1)[1].lower()\n    return ext in ALLOWED_ATTACHMENT_EXTENSIONS\n\
+    def attachment_path(stored_filename):\n    base = os.path.abspath(ATTACHMENTS_DIR)\n\
+    \    target = os.path.abspath(os.path.join(base, stored_filename))\n    if not\
+    \ target.startswith(base + os.sep):\n        raise ValueError(\"Invalid attachment\
+    \ path\")\n    return target\ndef sla_policy_for_priority(cur, priority):\n  \
+    \  cur.execute(\"\"\"\n        SELECT first_response_hours, resolution_hours,\
     \ warning_hours, COALESCE(is_active, TRUE)\n        FROM sla_policies\n      \
     \  WHERE priority = %s\n    \"\"\", (priority,))\n    row = cur.fetchone()\n \
     \   if row and row[3]:\n        return {\n            \"first_response_hours\"\
@@ -805,10 +816,10 @@ data:
     , (workflow_key,))\n    row = cur.fetchone()\n    return row[0] if row else None\n\
     def normalize_workflow_automation_actions(item, steps):\n    valid_actions = {\"\
     change_status\", \"change_priority\", \"add_workflow_watchers\", \"add_system_comment\"\
-    , \"notify\", \"add_history\", \"require_comment\", \"require_attachment\"}\n\
-    \    raw_actions = item.get(\"actions\")\n    if isinstance(raw_actions, str):\n\
-    \        try:\n            raw_actions = json.loads(raw_actions)\n        except\
-    \ Exception:\n            raw_actions = []\n    if not isinstance(raw_actions,\
+    , \"notify\", \"add_history\", \"add_tag\", \"remove_tag\", \"require_comment\"\
+    , \"require_attachment\"}\n    raw_actions = item.get(\"actions\")\n    if isinstance(raw_actions,\
+    \ str):\n        try:\n            raw_actions = json.loads(raw_actions)\n   \
+    \     except Exception:\n            raw_actions = []\n    if not isinstance(raw_actions,\
     \ list) or not raw_actions:\n        raw_actions = [{\n            \"action_type\"\
     : item.get(\"action_type\") or \"change_status\",\n            \"action_value\"\
     : item.get(\"action_status\") or item.get(\"action_value\"),\n            \"is_active\"\
@@ -823,17 +834,19 @@ data:
     \ == \"change_priority\":\n            if not action_value or action_value not\
     \ in PRIORITIES:\n                continue\n        elif action_type == \"add_system_comment\"\
     :\n            action_value = action_value or \"Reguła workflow została wykonana.\"\
-    \n        else:\n            action_value = action_value or None\n        try:\n\
-    \            action_order = int(action.get(\"action_order\", idx + 1))\n     \
-    \   except Exception:\n            action_order = idx + 1\n        actions.append({\n\
-    \            \"action_type\": action_type,\n            \"action_value\": action_value,\n\
-    \            \"is_active\": bool(action.get(\"is_active\", True)),\n         \
-    \   \"action_order\": max(1, min(action_order, 9999)),\n        })\n    return\
-    \ actions\ndef normalize_workflow_automations(payload, steps):\n    raw = payload.get(\"\
-    automations\") or []\n    if isinstance(raw, str):\n        try:\n           \
-    \ raw = json.loads(raw)\n        except Exception:\n            raw = []\n   \
-    \ normalized = []\n    valid_events = {\n        \"ticket_created\",\n       \
-    \ \"comment_added\",\n        \"user_comment_added\",\n        \"staff_comment_added\"\
+    \n        elif action_type in (\"add_tag\", \"remove_tag\"):\n            action_value\
+    \ = normalize_ticket_tag(action_value)\n            if not action_value:\n   \
+    \             continue\n        else:\n            action_value = action_value\
+    \ or None\n        try:\n            action_order = int(action.get(\"action_order\"\
+    , idx + 1))\n        except Exception:\n            action_order = idx + 1\n \
+    \       actions.append({\n            \"action_type\": action_type,\n        \
+    \    \"action_value\": action_value,\n            \"is_active\": bool(action.get(\"\
+    is_active\", True)),\n            \"action_order\": max(1, min(action_order, 9999)),\n\
+    \        })\n    return actions\ndef normalize_workflow_automations(payload, steps):\n\
+    \    raw = payload.get(\"automations\") or []\n    if isinstance(raw, str):\n\
+    \        try:\n            raw = json.loads(raw)\n        except Exception:\n\
+    \            raw = []\n    normalized = []\n    valid_events = {\n        \"ticket_created\"\
+    ,\n        \"comment_added\",\n        \"user_comment_added\",\n        \"staff_comment_added\"\
     ,\n        \"attachment_added\",\n        \"status_changed\",\n    }\n    valid_roles\
     \ = {\"user\", \"staff\", \"operator\", \"admin\", \"*\", \"any\", \"\"}\n   \
     \ valid_visibility = {\"public\", \"internal\", \"*\", \"any\", \"\"}\n    valid_assigned_states\
@@ -1225,13 +1238,40 @@ data:
     \     added,\n            ticket_id,\n            \"workflow_watcher_added\",\n\
     \            f'Dodano Cię jako obserwatora zgłoszenia #{ticket_id}: {ticket_title}\
     \ (workflow: {workflow_name})',\n            actor_email=None,\n        )\n  \
-    \  return added\ndef ticket_notification_recipients(cur, ticket_id, event_type):\n\
-    \    \"\"\"Return notification recipients according to the helpdesk workflow.\n\
-    \    Workflow:\n    - new ticket -> all operators and admins,\n    - internal\
-    \ note -> all operators/admins plus staff watchers,\n    - assigned ticket ->\
-    \ requester, assigned operator and watchers,\n    - unassigned ticket -> requester,\
-    \ watchers plus all operators/admins.\n    \"\"\"\n    recipients = set()\n  \
-    \  requester_email, assigned_to_email = ticket_notification_participants(cur,\
+    \  return added\ndef normalize_ticket_tag(tag):\n    tag = clean(tag)\n    if\
+    \ not tag:\n        return \"\"\n    tag = re.sub(r\"[\\\"'<>`]\", \"\", tag)\n\
+    \    tag = re.sub(r\"\\s+\", \" \", tag).strip()\n    tag = tag[:40]\n    return\
+    \ tag\ndef ticket_tags_for_ticket(cur, ticket_id):\n    cur.execute(\"\"\"\n \
+    \       SELECT tag, added_by_name, added_by_email, created_at\n        FROM ticket_tags\n\
+    \        WHERE ticket_id = %s\n        ORDER BY lower(tag)\n    \"\"\", (ticket_id,))\n\
+    \    return [\n        {\n            \"tag\": r[0],\n            \"added_by_name\"\
+    : r[1] or \"\",\n            \"added_by_email\": r[2] or \"\",\n            \"\
+    created_at\": str(r[3]),\n        }\n        for r in cur.fetchall()\n    ]\n\
+    def add_ticket_tag(cur, ticket_id, tag, user=None, source=\"manual\"):\n    tag\
+    \ = normalize_ticket_tag(tag)\n    if not tag:\n        return None\n    actor_email\
+    \ = user.get(\"email\") if user else None\n    actor_name = user.get(\"name\"\
+    ) if user else \"System workflow\"\n    cur.execute(\"\"\"\n        INSERT INTO\
+    \ ticket_tags (ticket_id, tag, added_by_email, added_by_name)\n        VALUES\
+    \ (%s, %s, %s, %s)\n        ON CONFLICT (ticket_id, lower(tag)) DO NOTHING\n \
+    \       RETURNING tag\n    \"\"\", (ticket_id, tag, actor_email, actor_name))\n\
+    \    inserted = cur.fetchone()\n    if inserted:\n        add_ticket_event(cur,\
+    \ ticket_id, user, \"ticket_tag_added\", f\"Dodano tag: {tag}\")\n        log_audit(cur,\
+    \ user, \"ticket_tag_added\", \"ticket\", ticket_id, {\"tag\": tag, \"source\"\
+    : source})\n        return tag\n    return None\ndef remove_ticket_tag(cur, ticket_id,\
+    \ tag, user=None, source=\"manual\"):\n    tag = normalize_ticket_tag(tag)\n \
+    \   if not tag:\n        return None\n    cur.execute(\"\"\"\n        DELETE FROM\
+    \ ticket_tags\n        WHERE ticket_id = %s AND lower(tag) = lower(%s)\n     \
+    \   RETURNING tag\n    \"\"\", (ticket_id, tag))\n    row = cur.fetchone()\n \
+    \   if row:\n        removed = row[0]\n        add_ticket_event(cur, ticket_id,\
+    \ user, \"ticket_tag_removed\", f\"Usunięto tag: {removed}\")\n        log_audit(cur,\
+    \ user, \"ticket_tag_removed\", \"ticket\", ticket_id, {\"tag\": removed, \"source\"\
+    : source})\n        return removed\n    return None\ndef ticket_notification_recipients(cur,\
+    \ ticket_id, event_type):\n    \"\"\"Return notification recipients according\
+    \ to the helpdesk workflow.\n    Workflow:\n    - new ticket -> all operators\
+    \ and admins,\n    - internal note -> all operators/admins plus staff watchers,\n\
+    \    - assigned ticket -> requester, assigned operator and watchers,\n    - unassigned\
+    \ ticket -> requester, watchers plus all operators/admins.\n    \"\"\"\n    recipients\
+    \ = set()\n    requester_email, assigned_to_email = ticket_notification_participants(cur,\
     \ ticket_id)\n    if event_type == \"ticket_created\":\n        recipients.update(staff_notification_recipients(cur))\n\
     \        return recipients\n    if event_type == \"internal_note_added\":\n  \
     \      recipients.update(staff_notification_recipients(cur))\n        recipients.update(ticket_watcher_emails(cur,\
@@ -1418,14 +1458,21 @@ data:
     \  .watcher-item { display: flex; justify-content: space-between; gap: 12px; align-items:\
     \ center; border: 1px solid var(--border); border-radius: 14px; padding: 11px\
     \ 12px; background: rgba(31,41,55,.58); }\n  .watcher-meta { color: var(--muted);\
-    \ font-size: 13px; margin-top: 3px; }\n\n  .ticket-layout { display: grid; grid-template-columns:\
-    \ minmax(0, 1fr) 360px; gap: 18px; align-items: start; }\n  .ticket-main-column,\
-    \ .ticket-side-column { display: grid; gap: 18px; }\n  .ticket-side-column { position:\
-    \ sticky; top: 18px; }\n  .ticket-summary-card { padding-bottom: 18px; }\n  .ticket-top-actions\
-    \ { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start;\
-    \ margin-bottom: 14px; }\n  .ticket-summary-grid { display: grid; grid-template-columns:\
-    \ repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin: 16px 0; }\n  .ticket-summary-item\
-    \ { border: 1px solid var(--border); border-radius: 16px; padding: 12px; background:\
+    \ font-size: 13px; margin-top: 3px; }\n  .tag-list { display:flex; flex-wrap:wrap;\
+    \ gap:8px; margin:10px 0 14px; }\n  .ticket-tag { display:inline-flex; align-items:center;\
+    \ gap:6px; padding:6px 9px; border:1px solid var(--border); border-radius:999px;\
+    \ background:rgba(14,165,233,.12); color:#dbeafe; font-size:13px; }\n  .tag-remove\
+    \ { border:0; background:rgba(248,113,113,.18); color:#fecaca; border-radius:999px;\
+    \ cursor:pointer; width:20px; height:20px; line-height:18px; padding:0; font-weight:800;\
+    \ }\n  .tag-remove:hover { background:rgba(248,113,113,.32); }\n\n  .ticket-layout\
+    \ { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items:\
+    \ start; }\n  .ticket-main-column, .ticket-side-column { display: grid; gap: 18px;\
+    \ }\n  .ticket-side-column { position: sticky; top: 18px; }\n  .ticket-summary-card\
+    \ { padding-bottom: 18px; }\n  .ticket-top-actions { display: flex; justify-content:\
+    \ space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }\n\
+    \  .ticket-summary-grid { display: grid; grid-template-columns: repeat(auto-fit,\
+    \ minmax(210px, 1fr)); gap: 10px; margin: 16px 0; }\n  .ticket-summary-item {\
+    \ border: 1px solid var(--border); border-radius: 16px; padding: 12px; background:\
     \ rgba(31,41,55,.46); }\n  .ticket-summary-item .label { display: block; color:\
     \ var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .07em;\
     \ margin-bottom: 6px; }\n  .ticket-summary-item .value { color: var(--text); font-weight:\
@@ -2528,6 +2575,9 @@ data:
     \ \"dodaj operatorów workflow jako obserwatorów\";\n      if (action.action_type\
     \ === \"add_system_comment\") return `dodaj komentarz systemowy${{action.action_value\
     \ ? `: „${{action.action_value}}”` : \"\"}}`;\n      if (action.action_type ===\
+    \ \"add_tag\") return `dodaj tag${{action.action_value ? ` „${{action.action_value}}”`\
+    \ : \"\"}}`;\n      if (action.action_type === \"remove_tag\") return `usuń tag${{action.action_value\
+    \ ? ` „${{action.action_value}}”` : \"\"}}`;\n      if (action.action_type ===\
     \ \"notify\") return \"wyślij powiadomienie\";\n      if (action.action_type ===\
     \ \"add_history\") return \"dodaj wpis do historii\";\n      if (action.action_type\
     \ === \"require_comment\") return \"wymagaj komentarza przy przejściu\";\n   \
@@ -2538,26 +2588,27 @@ data:
     \ value: \"change_priority\", label: \"Zmień priorytet\" }},\n        {{ value:\
     \ \"add_workflow_watchers\", label: \"Dodaj operatorów workflow jako obserwatorów\"\
     \ }},\n        {{ value: \"add_system_comment\", label: \"Dodaj komentarz systemowy\"\
-    \ }},\n        {{ value: \"notify\", label: \"Wyślij powiadomienie\" }},\n   \
-    \     {{ value: \"add_history\", label: \"Dodaj wpis do historii\" }},\n     \
-    \   {{ value: \"require_comment\", label: \"Wymagaj komentarza\" }},\n       \
-    \ {{ value: \"require_attachment\", label: \"Wymagaj załącznika\" }},\n      ],\
-    \ selected || \"change_status\");\n    }}\n    function workflowAutomationRuleEventLabel(eventType)\
-    \ {{\n      const eventLabels = {{\n        ticket_created: \"utworzono zgłoszenie\"\
-    ,\n        comment_added: \"dodano komentarz/notatkę\",\n        user_comment_added:\
-    \ \"użytkownik dodał komentarz\",\n        staff_comment_added: \"operator/admin\
-    \ dodał komentarz\",\n        attachment_added: \"dodano załącznik\",\n      \
-    \  status_changed: \"zmieniono status\",\n      }};\n      return eventLabels[eventType]\
-    \ || eventType || \"zdarzenie\";\n    }}\n    function workflowAutomationRoleLabel(role)\
-    \ {{\n      const labels = {{ \"*\": \"dowolna rola\", any: \"dowolna rola\",\
-    \ user: \"użytkownik\", staff: \"operator/admin\", operator: \"operator\", admin:\
-    \ \"admin\" }};\n      return labels[role || \"*\"] || role || \"dowolna rola\"\
-    ;\n    }}\n    function workflowAutomationVisibilityLabel(visibility) {{\n   \
-    \   const labels = {{ \"*\": \"dowolny typ komentarza\", any: \"dowolny typ komentarza\"\
-    , public: \"komentarz publiczny\", internal: \"notatka wewnętrzna\" }};\n    \
-    \  return labels[visibility || \"*\"] || visibility || \"dowolny typ komentarza\"\
-    ;\n    }}\n    function workflowAutomationAssignedLabel(assignedState) {{\n  \
-    \    const labels = {{ \"*\": \"dowolne przypisanie\", any: \"dowolne przypisanie\"\
+    \ }},\n        {{ value: \"add_tag\", label: \"Dodaj tag\" }},\n        {{ value:\
+    \ \"remove_tag\", label: \"Usuń tag\" }},\n        {{ value: \"notify\", label:\
+    \ \"Wyślij powiadomienie\" }},\n        {{ value: \"add_history\", label: \"Dodaj\
+    \ wpis do historii\" }},\n        {{ value: \"require_comment\", label: \"Wymagaj\
+    \ komentarza\" }},\n        {{ value: \"require_attachment\", label: \"Wymagaj\
+    \ załącznika\" }},\n      ], selected || \"change_status\");\n    }}\n    function\
+    \ workflowAutomationRuleEventLabel(eventType) {{\n      const eventLabels = {{\n\
+    \        ticket_created: \"utworzono zgłoszenie\",\n        comment_added: \"\
+    dodano komentarz/notatkę\",\n        user_comment_added: \"użytkownik dodał komentarz\"\
+    ,\n        staff_comment_added: \"operator/admin dodał komentarz\",\n        attachment_added:\
+    \ \"dodano załącznik\",\n        status_changed: \"zmieniono status\",\n     \
+    \ }};\n      return eventLabels[eventType] || eventType || \"zdarzenie\";\n  \
+    \  }}\n    function workflowAutomationRoleLabel(role) {{\n      const labels =\
+    \ {{ \"*\": \"dowolna rola\", any: \"dowolna rola\", user: \"użytkownik\", staff:\
+    \ \"operator/admin\", operator: \"operator\", admin: \"admin\" }};\n      return\
+    \ labels[role || \"*\"] || role || \"dowolna rola\";\n    }}\n    function workflowAutomationVisibilityLabel(visibility)\
+    \ {{\n      const labels = {{ \"*\": \"dowolny typ komentarza\", any: \"dowolny\
+    \ typ komentarza\", public: \"komentarz publiczny\", internal: \"notatka wewnętrzna\"\
+    \ }};\n      return labels[visibility || \"*\"] || visibility || \"dowolny typ\
+    \ komentarza\";\n    }}\n    function workflowAutomationAssignedLabel(assignedState)\
+    \ {{\n      const labels = {{ \"*\": \"dowolne przypisanie\", any: \"dowolne przypisanie\"\
     , assigned: \"zgłoszenie przypisane\", unassigned: \"zgłoszenie nieprzypisane\"\
     \ }};\n      return labels[assignedState || \"*\"] || assignedState || \"dowolne\
     \ przypisanie\";\n    }}\n    function workflowAutomationSlaConditionLabel(state)\
@@ -2880,6 +2931,11 @@ data:
     ) {{\n        return `\n          <label>Treść komentarza systemowego</label>\n\
     \          <input name=\"rule_action_value\" data-action-index=\"${{idx}}\" value=\"\
     ${{esc(action.action_value || \"Reguła workflow została wykonana.\")}}\" onchange=\"\
+    workflowAutomationFormActions[${{idx}}].action_value=this.value;\">\n        `;\n\
+    \      }}\n      if (type === \"add_tag\" || type === \"remove_tag\") {{\n   \
+    \     return `\n          <label>Nazwa tagu</label>\n          <input name=\"\
+    rule_action_value\" data-action-index=\"${{idx}}\" maxlength=\"40\" value=\"${{esc(action.action_value\
+    \ || \"\")}}\" placeholder=\"Np. VPN, eskalacja, bezpieczeństwo\" onchange=\"\
     workflowAutomationFormActions[${{idx}}].action_value=this.value;\">\n        `;\n\
     \      }}\n      return `\n        <label>Wartość akcji</label>\n        <input\
     \ name=\"rule_action_value\" data-action-index=\"${{idx}}\" value=\"\" disabled\
@@ -3537,16 +3593,17 @@ data:
     \ workflow\",\n        \"workflow_updated\": \"Zmieniono workflow\",\n       \
     \ \"workflow_deactivated\": \"Dezaktywowano workflow\",\n        \"workflow_deleted\"\
     : \"Usunięto workflow\",\n        \"workflow_watchers_added\": \"Dodano operatorów\
-    \ workflow jako obserwatorów\",\n        \"ticket_status_auto_changed\": \"Automatyczna\
-    \ zmiana statusu\",\n        \"sla_policies_updated\": \"Zmieniono polityki SLA\"\
-    ,\n        \"sla_check_run\": \"Sprawdzono SLA\",\n        \"sla_first_response\"\
-    : \"Pierwsza reakcja SLA\"\n      }};\n      return map[action] || action;\n \
-    \   }}\n    function formatAuditDetails(details) {{\n      if (!details) return\
-    \ \"\";\n      try {{\n        const parsed = JSON.parse(details);\n        return\
-    \ Object.entries(parsed)\n          .map(([key, value]) => `<div><span class=\"\
-    muted\">${{esc(key)}}:</span> ${{esc(Array.isArray(value) ? value.join(\", \"\
-    ) : String(value ?? \"\"))}}</div>`)\n          .join(\"\");\n      }} catch (e)\
-    \ {{\n        return esc(details);\n      }}\n    }}\n    function auditPaginationControls(pagination)\
+    \ workflow jako obserwatorów\",\n        \"ticket_tag_added\": \"Dodano tag\"\
+    ,\n        \"ticket_tag_removed\": \"Usunięto tag\",\n        \"ticket_status_auto_changed\"\
+    : \"Automatyczna zmiana statusu\",\n        \"sla_policies_updated\": \"Zmieniono\
+    \ polityki SLA\",\n        \"sla_check_run\": \"Sprawdzono SLA\",\n        \"\
+    sla_first_response\": \"Pierwsza reakcja SLA\"\n      }};\n      return map[action]\
+    \ || action;\n    }}\n    function formatAuditDetails(details) {{\n      if (!details)\
+    \ return \"\";\n      try {{\n        const parsed = JSON.parse(details);\n  \
+    \      return Object.entries(parsed)\n          .map(([key, value]) => `<div><span\
+    \ class=\"muted\">${{esc(key)}}:</span> ${{esc(Array.isArray(value) ? value.join(\"\
+    , \") : String(value ?? \"\"))}}</div>`)\n          .join(\"\");\n      }} catch\
+    \ (e) {{\n        return esc(details);\n      }}\n    }}\n    function auditPaginationControls(pagination)\
     \ {{\n      const page = Number(pagination.page || 1);\n      const totalPages\
     \ = Number(pagination.total_pages || 1);\n      const disabledPrev = page <= 1\
     \ ? \"disabled\" : \"\";\n      const disabledNext = page >= totalPages ? \"disabled\"\
@@ -3971,23 +4028,39 @@ data:
     \ : \"\"}}\n                </div>\n              </div>\n              ${{canWorkTickets(me)\
     \ && !isClosed ? `<button class=\"btn-secondary btn-small\" onclick=\"removeTicketLink(${{t.id}},\
     \ ${{l.id}})\">Usuń</button>` : \"\"}}\n            </div>`).join(\"\")}}</div>`\n\
-    \        : `<p class=\"muted\">Brak powiązanych zgłoszeń.</p>`;\n      const linkedTicketsPanel\
-    \ = `\n        <section class=\"card\">\n          <h3>Powiązane zgłoszenia</h3>\n\
-    \          <p class=\"muted\">Powiązania pomagają łączyć zgłoszenia dotyczące\
-    \ tego samego problemu, duplikatów albo wspólnego incydentu.</p>\n          ${{linkedTickets}}\n\
-    \          ${{canWorkTickets(me) && !isClosed ? `\n            <form id=\"ticketLinkForm\"\
-    >\n              <label>Dodaj powiązanie po ID zgłoszenia</label>\n          \
-    \    <input name=\"linked_ticket_id\" type=\"number\" min=\"1\" placeholder=\"\
-    Np. 12\" required>\n              <button type=\"submit\">Dodaj powiązanie</button>\n\
+    \        : `<p class=\"muted\">Brak powiązanych zgłoszeń.</p>`;\n      const tagList\
+    \ = (data.tags || []).length\n        ? `<div class=\"tag-list\">${{data.tags.map(tag\
+    \ => `\n            <span class=\"ticket-tag\" title=\"Dodany: ${{esc(tag.created_at\
+    \ || \"\")}}${{tag.added_by_name ? \" przez \" + esc(tag.added_by_name) : \"\"\
+    }}\">\n              #${{esc(tag.tag)}}\n              ${{canWorkTickets(me) &&\
+    \ !isClosed ? `<button type=\"button\" class=\"tag-remove\" onclick=\"removeTicketTag(${{t.id}},\
+    \ '${{esc(tag.tag)}}')\" title=\"Usuń tag\">×</button>` : \"\"}}\n           \
+    \ </span>`).join(\"\")}}</div>`\n        : `<p class=\"muted\">Brak tagów.</p>`;\n\
+    \      const tagPanel = `\n        <section class=\"card\">\n          <h3>Tagi</h3>\n\
+    \          <p class=\"muted\">Tagi pomagają oznaczać zgłoszenia, np. VPN, eskalacja,\
+    \ bezpieczeństwo albo problem masowy. Mogą być dodawane ręcznie lub przez reguły\
+    \ workflow.</p>\n          ${{tagList}}\n          ${{canWorkTickets(me) && !isClosed\
+    \ ? `\n            <form id=\"ticketTagForm\">\n              <label>Dodaj tag</label>\n\
+    \              <input name=\"tag\" maxlength=\"40\" placeholder=\"Np. VPN, eskalacja,\
+    \ bezpieczeństwo\" required>\n              <button type=\"submit\">Dodaj tag</button>\n\
     \            </form>\n          ` : \"\"}}\n        </section>`;\n      const\
-    \ watcherPanel = `\n        <section class=\"card\">\n          <h3>Obserwatorzy</h3>\n\
-    \          <p class=\"muted\">Obserwatorzy mogą widzieć zgłoszenie i dodawać komentarze.\
-    \ Operator/admin widzi także notatki wewnętrzne. Przypisany operator jest dodawany\
-    \ automatycznie.</p>\n          ${{watcherList}}\n          ${{canWorkTickets(me)\
-    \ && !isClosed ? `\n            <form id=\"watcherForm\">\n              <label>Dodaj\
-    \ obserwatora</label>\n              <select name=\"user_email\">\n          \
-    \      <option value=\"\">Wybierz użytkownika...</option>\n                ${{watcherOptions}}\n\
-    \              </select>\n              <button type=\"submit\">Dodaj obserwatora</button>\n\
+    \ linkedTicketsPanel = `\n        <section class=\"card\">\n          <h3>Powiązane\
+    \ zgłoszenia</h3>\n          <p class=\"muted\">Powiązania pomagają łączyć zgłoszenia\
+    \ dotyczące tego samego problemu, duplikatów albo wspólnego incydentu.</p>\n \
+    \         ${{linkedTickets}}\n          ${{canWorkTickets(me) && !isClosed ? `\n\
+    \            <form id=\"ticketLinkForm\">\n              <label>Dodaj powiązanie\
+    \ po ID zgłoszenia</label>\n              <input name=\"linked_ticket_id\" type=\"\
+    number\" min=\"1\" placeholder=\"Np. 12\" required>\n              <button type=\"\
+    submit\">Dodaj powiązanie</button>\n            </form>\n          ` : \"\"}}\n\
+    \        </section>`;\n      const watcherPanel = `\n        <section class=\"\
+    card\">\n          <h3>Obserwatorzy</h3>\n          <p class=\"muted\">Obserwatorzy\
+    \ mogą widzieć zgłoszenie i dodawać komentarze. Operator/admin widzi także notatki\
+    \ wewnętrzne. Przypisany operator jest dodawany automatycznie.</p>\n         \
+    \ ${{watcherList}}\n          ${{canWorkTickets(me) && !isClosed ? `\n       \
+    \     <form id=\"watcherForm\">\n              <label>Dodaj obserwatora</label>\n\
+    \              <select name=\"user_email\">\n                <option value=\"\"\
+    >Wybierz użytkownika...</option>\n                ${{watcherOptions}}\n      \
+    \        </select>\n              <button type=\"submit\">Dodaj obserwatora</button>\n\
     \            </form>\n          ` : \"\"}}\n        </section>`;\n      const\
     \ statusHistory = (data.status_history || []).length\n        ? `<div class=\"\
     timeline\">${{data.status_history.map(h => `\n            <div class=\"event-item\
@@ -4106,16 +4179,17 @@ data:
     counter\">${{(data.events || []).length}} zdarzeń</span>\n              </div>\n\
     \              ${{eventHistory}}\n            </section>\n          </main>\n\
     \          <aside class=\"ticket-side-column\">\n            ${{statusPanel}}\n\
-    \            ${{assignmentPanel}}\n            ${{reopenPanel}}\n            ${{linkedTicketsPanel}}\n\
-    \            ${{watcherPanel}}\n          </aside>\n        </div>`;\n      const\
-    \ attachmentForm = document.getElementById(\"attachmentForm\");\n      if (attachmentForm)\
-    \ {{\n        attachmentForm.addEventListener(\"submit\", async (e) => {{\n  \
-    \        e.preventDefault();\n        const formData = new FormData(attachmentForm);\n\
-    \        suppressNextLiveRefresh = true;\n        const res = await fetch(`/api/tickets/${{id}}/attachments`,\
-    \ {{\n          method: \"POST\",\n          headers: {{ \"X-Helpdesk-Session\"\
-    : getSid() }},\n          body: formData\n        }});\n        if (res.status\
-    \ === 401) {{\n          clearSid();\n          window.location.href = \"/login\"\
-    ;\n          return;\n        }}\n        if (!res.ok) {{\n          suppressNextLiveRefresh\
+    \            ${{assignmentPanel}}\n            ${{reopenPanel}}\n            ${{tagPanel}}\n\
+    \            ${{linkedTicketsPanel}}\n            ${{watcherPanel}}\n        \
+    \  </aside>\n        </div>`;\n      const attachmentForm = document.getElementById(\"\
+    attachmentForm\");\n      if (attachmentForm) {{\n        attachmentForm.addEventListener(\"\
+    submit\", async (e) => {{\n          e.preventDefault();\n        const formData\
+    \ = new FormData(attachmentForm);\n        suppressNextLiveRefresh = true;\n \
+    \       const res = await fetch(`/api/tickets/${{id}}/attachments`, {{\n     \
+    \     method: \"POST\",\n          headers: {{ \"X-Helpdesk-Session\": getSid()\
+    \ }},\n          body: formData\n        }});\n        if (res.status === 401)\
+    \ {{\n          clearSid();\n          window.location.href = \"/login\";\n  \
+    \        return;\n        }}\n        if (!res.ok) {{\n          suppressNextLiveRefresh\
     \ = false;\n          const err = await res.json().catch(() => ({{ error: \"Nie\
     \ udało się dodać załącznika.\" }}));\n          alert(err.error || \"Nie udało\
     \ się dodać załącznika.\");\n          return;\n        }}\n          showToast(\"\
@@ -4177,25 +4251,37 @@ data:
     \ }})) : {{ error: \"Nie udało się dodać powiązania.\" }};\n            alert(err.error\
     \ || \"Nie udało się dodać powiązania.\");\n            return;\n          }}\n\
     \          showToast(\"Dodano powiązanie do zgłoszenia #\" + id);\n          await\
-    \ renderTicket(id);\n        }});\n      }}\n      const watcherForm = document.getElementById(\"\
-    watcherForm\");\n      if (watcherForm) {{\n        watcherForm.addEventListener(\"\
+    \ renderTicket(id);\n        }});\n      }}\n      const ticketTagForm = document.getElementById(\"\
+    ticketTagForm\");\n      if (ticketTagForm) {{\n        ticketTagForm.addEventListener(\"\
     submit\", async (e) => {{\n          e.preventDefault();\n          const payload\
-    \ = Object.fromEntries(new FormData(watcherForm).entries());\n          if (!payload.user_email)\
-    \ {{\n            alert(\"Wybierz obserwatora.\");\n            return;\n    \
-    \      }}\n          suppressNextLiveRefresh = true;\n          const res = await\
-    \ api(`/api/tickets/${{id}}/watchers`, {{ method: \"POST\", body: JSON.stringify(payload)\
+    \ = Object.fromEntries(new FormData(ticketTagForm).entries());\n          if (!payload.tag)\
+    \ {{\n            alert(\"Podaj nazwę tagu.\");\n            return;\n       \
+    \   }}\n          suppressNextLiveRefresh = true;\n          const res = await\
+    \ api(`/api/tickets/${{id}}/tags`, {{ method: \"POST\", body: JSON.stringify(payload)\
     \ }});\n          if (!res || !res.ok) {{\n            suppressNextLiveRefresh\
     \ = false;\n            const err = res ? await res.json().catch(() => ({{ error:\
-    \ \"Nie udało się dodać obserwatora.\" }})) : {{ error: \"Nie udało się dodać\
-    \ obserwatora.\" }};\n            alert(err.error || \"Nie udało się dodać obserwatora.\"\
-    );\n            return;\n          }}\n          showToast(\"Dodano obserwatora\
-    \ do zgłoszenia #\" + id);\n          await renderTicket(id);\n        }});\n\
-    \      }}\n    }}\n    function focusRequirementSection(kind) {{\n      const\
-    \ targetId = kind === \"comment\" ? \"commentsSection\" : (kind === \"attachment\"\
-    \ ? \"attachmentsSection\" : null);\n      if (!targetId) return;\n      const\
-    \ target = document.getElementById(targetId);\n      if (!target) return;\n  \
-    \    target.scrollIntoView({{ behavior: \"smooth\", block: \"center\" }});\n \
-    \     target.classList.remove(\"section-focus\");\n      void target.offsetWidth;\n\
+    \ \"Nie udało się dodać tagu.\" }})) : {{ error: \"Nie udało się dodać tagu.\"\
+    \ }};\n            alert(err.error || \"Nie udało się dodać tagu.\");\n      \
+    \      return;\n          }}\n          showToast(\"Dodano tag do zgłoszenia #\"\
+    \ + id);\n          await renderTicket(id);\n        }});\n      }}\n      const\
+    \ watcherForm = document.getElementById(\"watcherForm\");\n      if (watcherForm)\
+    \ {{\n        watcherForm.addEventListener(\"submit\", async (e) => {{\n     \
+    \     e.preventDefault();\n          const payload = Object.fromEntries(new FormData(watcherForm).entries());\n\
+    \          if (!payload.user_email) {{\n            alert(\"Wybierz obserwatora.\"\
+    );\n            return;\n          }}\n          suppressNextLiveRefresh = true;\n\
+    \          const res = await api(`/api/tickets/${{id}}/watchers`, {{ method: \"\
+    POST\", body: JSON.stringify(payload) }});\n          if (!res || !res.ok) {{\n\
+    \            suppressNextLiveRefresh = false;\n            const err = res ? await\
+    \ res.json().catch(() => ({{ error: \"Nie udało się dodać obserwatora.\" }}))\
+    \ : {{ error: \"Nie udało się dodać obserwatora.\" }};\n            alert(err.error\
+    \ || \"Nie udało się dodać obserwatora.\");\n            return;\n          }}\n\
+    \          showToast(\"Dodano obserwatora do zgłoszenia #\" + id);\n         \
+    \ await renderTicket(id);\n        }});\n      }}\n    }}\n    function focusRequirementSection(kind)\
+    \ {{\n      const targetId = kind === \"comment\" ? \"commentsSection\" : (kind\
+    \ === \"attachment\" ? \"attachmentsSection\" : null);\n      if (!targetId) return;\n\
+    \      const target = document.getElementById(targetId);\n      if (!target) return;\n\
+    \      target.scrollIntoView({{ behavior: \"smooth\", block: \"center\" }});\n\
+    \      target.classList.remove(\"section-focus\");\n      void target.offsetWidth;\n\
     \      target.classList.add(\"section-focus\");\n    }}\n    function renderStatusRequirementsBox(info)\
     \ {{\n      const panel = document.getElementById(\"statusRequirementsPanel\"\
     );\n      if (!panel) return;\n      const required = info.required || [];\n \
@@ -4236,9 +4322,17 @@ data:
     \ blocked\"><strong>Nie udało się sprawdzić wymagań.</strong><br><span class=\"\
     muted\">Spróbuj odświeżyć zgłoszenie.</span></div>`;\n        return;\n      }}\n\
     \      const info = await res.json();\n      renderStatusRequirementsBox(info);\n\
-    \    }}\n    async function removeTicketLink(ticketId, linkedTicketId) {{\n  \
-    \    if (!confirm(\"Usunąć powiązanie z tym zgłoszeniem?\")) return;\n      suppressNextLiveRefresh\
-    \ = true;\n      const res = await api(`/api/tickets/${{ticketId}}/links/${{linkedTicketId}}`,\
+    \    }}\n    async function removeTicketTag(ticketId, tag) {{\n      if (!confirm(`Usunąć\
+    \ tag „${{tag}}” z tego zgłoszenia?`)) return;\n      suppressNextLiveRefresh\
+    \ = true;\n      const res = await api(`/api/tickets/${{ticketId}}/tags/${{encodeURIComponent(tag)}}`,\
+    \ {{ method: \"DELETE\" }});\n      if (!res || !res.ok) {{\n        suppressNextLiveRefresh\
+    \ = false;\n        const err = res ? await res.json().catch(() => ({{ error:\
+    \ \"Nie udało się usunąć tagu.\" }})) : {{ error: \"Nie udało się usunąć tagu.\"\
+    \ }};\n        alert(err.error || \"Nie udało się usunąć tagu.\");\n        return;\n\
+    \      }}\n      showToast(\"Usunięto tag ze zgłoszenia #\" + ticketId);\n   \
+    \   await renderTicket(ticketId);\n    }}\n    async function removeTicketLink(ticketId,\
+    \ linkedTicketId) {{\n      if (!confirm(\"Usunąć powiązanie z tym zgłoszeniem?\"\
+    )) return;\n      suppressNextLiveRefresh = true;\n      const res = await api(`/api/tickets/${{ticketId}}/links/${{linkedTicketId}}`,\
     \ {{ method: \"DELETE\" }});\n      if (!res || !res.ok) {{\n        suppressNextLiveRefresh\
     \ = false;\n        const err = res ? await res.json().catch(() => ({{ error:\
     \ \"Nie udało się usunąć powiązania.\" }})) : {{ error: \"Nie udało się usunąć\
@@ -4868,22 +4962,29 @@ data:
     \ do workflow jako obserwatorów zgłoszenia\"\n        elif action_type == \"add_system_comment\"\
     \ and matched:\n            preview[\"result\"] = f\"dodałaby komentarz systemowy:\
     \ „{value or 'Reguła workflow została wykonana.'}”\"\n        elif action_type\
-    \ == \"notify\" and matched:\n            preview[\"result\"] = \"wysłałaby powiadomienie\
-    \ do uczestników zgłoszenia\"\n        elif action_type == \"add_history\" and\
-    \ matched:\n            preview[\"result\"] = \"dodałaby wpis do historii zgłoszenia\"\
-    \n        actions_preview.append(preview)\n\n    return jsonify({\n        \"\
-    matched\": matched,\n        \"reasons\": reasons,\n        \"actions_preview\"\
-    : actions_preview,\n        \"sample\": {\n            \"event_type\": event_type,\n\
-    \            \"current_status\": current_status,\n            \"event_new_status\"\
-    : event_new_status,\n            \"actor_role\": actor_role,\n            \"comment_visibility\"\
-    : visibility,\n            \"assigned_state\": assigned_state,\n            \"\
-    priority\": sample_priority,\n            \"category\": sample_category,\n   \
-    \         \"subcategory\": sample_subcategory,\n            \"sla_state\": sample_sla_state,\n\
-    \            \"operator_added_comment\": operator_added_comment,\n           \
-    \ \"operator_added_attachment\": operator_added_attachment,\n        },\n    \
-    \    \"missing_requirements\": missing_requirements,\n        \"blocked_by_validation\"\
-    : blocked_by_validation,\n        \"final_status\": effective_status,\n      \
-    \  \"rule\": item,\n    })\n\n@app.delete(\"/api/workflows/<int:workflow_id>/automations/<int:automation_id>\"\
+    \ == \"add_tag\" and matched:\n            if value:\n                preview[\"\
+    result\"] = f\"dodałaby tag „{value}” do zgłoszenia\"\n            else:\n   \
+    \             preview[\"would_execute\"] = False\n                preview[\"result\"\
+    ] = \"pominięta — brak nazwy tagu\"\n        elif action_type == \"remove_tag\"\
+    \ and matched:\n            if value:\n                preview[\"result\"] = f\"\
+    usunęłaby tag „{value}” ze zgłoszenia\"\n            else:\n                preview[\"\
+    would_execute\"] = False\n                preview[\"result\"] = \"pominięta —\
+    \ brak nazwy tagu\"\n        elif action_type == \"notify\" and matched:\n   \
+    \         preview[\"result\"] = \"wysłałaby powiadomienie do uczestników zgłoszenia\"\
+    \n        elif action_type == \"add_history\" and matched:\n            preview[\"\
+    result\"] = \"dodałaby wpis do historii zgłoszenia\"\n        actions_preview.append(preview)\n\
+    \n    return jsonify({\n        \"matched\": matched,\n        \"reasons\": reasons,\n\
+    \        \"actions_preview\": actions_preview,\n        \"sample\": {\n      \
+    \      \"event_type\": event_type,\n            \"current_status\": current_status,\n\
+    \            \"event_new_status\": event_new_status,\n            \"actor_role\"\
+    : actor_role,\n            \"comment_visibility\": visibility,\n            \"\
+    assigned_state\": assigned_state,\n            \"priority\": sample_priority,\n\
+    \            \"category\": sample_category,\n            \"subcategory\": sample_subcategory,\n\
+    \            \"sla_state\": sample_sla_state,\n            \"operator_added_comment\"\
+    : operator_added_comment,\n            \"operator_added_attachment\": operator_added_attachment,\n\
+    \        },\n        \"missing_requirements\": missing_requirements,\n       \
+    \ \"blocked_by_validation\": blocked_by_validation,\n        \"final_status\"\
+    : effective_status,\n        \"rule\": item,\n    })\n\n@app.delete(\"/api/workflows/<int:workflow_id>/automations/<int:automation_id>\"\
     )\n@app.delete(\"/api/admin/workflows/<int:workflow_id>/automations/<int:automation_id>\"\
     )\n@api_login_required\ndef api_admin_delete_workflow_automation(user, workflow_id,\
     \ automation_id):\n    if not is_admin(user):\n        return jsonify({\"error\"\
@@ -5701,12 +5802,32 @@ data:
     rule\": rule_name, \"action_type\": action_type, \"comment\": comment_text})\n\
     \                action_results.append({\"action_type\": action_type, \"result\"\
     : \"executed\", \"comment\": comment_text})\n                action_executed =\
-    \ True\n            elif action_type == \"notify\":\n                create_ticket_notifications(\n\
-    \                    cur,\n                    ticket_id,\n                  \
-    \  \"workflow_rule_notification\",\n                    f\"Reguła workflow „{rule_name}”\
-    \ została uruchomiona dla zgłoszenia #{ticket_id}.\",\n                    actor_email=user[\"\
-    email\"],\n                )\n                executed.append({\"rule\": rule_name,\
-    \ \"action_type\": action_type})\n                action_results.append({\"action_type\"\
+    \ True\n            elif action_type == \"add_tag\":\n                tag = normalize_ticket_tag(action.get(\"\
+    action_value\"))\n                if not tag:\n                    action_results.append({\"\
+    action_type\": action_type, \"result\": \"skipped\", \"reason\": \"brak nazwy\
+    \ tagu\"})\n                    continue\n                added_tag = add_ticket_tag(cur,\
+    \ ticket_id, tag, user, source=\"workflow_rule\")\n                result = \"\
+    executed\" if added_tag else \"skipped\"\n                reason = None if added_tag\
+    \ else \"tag już istnieje\"\n                executed.append({\"rule\": rule_name,\
+    \ \"action_type\": action_type, \"tag\": tag})\n                action_results.append({\"\
+    action_type\": action_type, \"result\": result, \"tag\": tag, \"reason\": reason})\n\
+    \                action_executed = True\n            elif action_type == \"remove_tag\"\
+    :\n                tag = normalize_ticket_tag(action.get(\"action_value\"))\n\
+    \                if not tag:\n                    action_results.append({\"action_type\"\
+    : action_type, \"result\": \"skipped\", \"reason\": \"brak nazwy tagu\"})\n  \
+    \                  continue\n                removed_tag = remove_ticket_tag(cur,\
+    \ ticket_id, tag, user, source=\"workflow_rule\")\n                result = \"\
+    executed\" if removed_tag else \"skipped\"\n                reason = None if removed_tag\
+    \ else \"tag nie istnieje\"\n                executed.append({\"rule\": rule_name,\
+    \ \"action_type\": action_type, \"tag\": tag})\n                action_results.append({\"\
+    action_type\": action_type, \"result\": result, \"tag\": tag, \"reason\": reason})\n\
+    \                action_executed = True\n            elif action_type == \"notify\"\
+    :\n                create_ticket_notifications(\n                    cur,\n  \
+    \                  ticket_id,\n                    \"workflow_rule_notification\"\
+    ,\n                    f\"Reguła workflow „{rule_name}” została uruchomiona dla\
+    \ zgłoszenia #{ticket_id}.\",\n                    actor_email=user[\"email\"\
+    ],\n                )\n                executed.append({\"rule\": rule_name, \"\
+    action_type\": action_type})\n                action_results.append({\"action_type\"\
     : action_type, \"result\": \"executed\"})\n                action_executed = True\n\
     \            elif action_type == \"add_history\":\n                add_ticket_event(cur,\
     \ ticket_id, user, \"workflow_rule_history\", f\"Uruchomiono regułę workflow „{rule_name}”.\"\
@@ -5827,43 +5948,44 @@ data:
     \ = %s OR linked_ticket_id = %s\n        ) l\n        JOIN tickets t ON t.id =\
     \ l.linked_id\n        LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)\n\
     \        ORDER BY l.created_at DESC\n    \"\"\", (ticket_id, ticket_id, ticket_id))\n\
-    \    link_rows = cur.fetchall()\n    cur.close()\n    conn.close()\n    ticket\
-    \ = {\n        \"id\": row[0],\n        \"title\": row[1],\n        \"description\"\
-    : row[2],\n        \"requester_name\": row[3],\n        \"requester_email\": row[4],\n\
-    \        \"department\": row[5],\n        \"category\": row[6],\n        \"subcategory\"\
-    : row[7],\n        \"priority\": row[8],\n        \"status\": row[9],\n      \
-    \  \"created_at\": str(row[10]),\n        \"updated_at\": str(row[11]),\n    \
-    \    \"assigned_to_email\": row[12],\n        \"assigned_to_name\": row[13],\n\
-    \        \"sla_due_at\": str(row[14]) if row[14] else \"\",\n        \"resolution_minutes\"\
-    : row[15],\n        \"closed_at\": str(row[16]) if row[16] else \"\",\n      \
-    \  \"closed_by_email\": row[17] or \"\",\n        \"closed_by_name\": row[18]\
-    \ or \"\",\n        \"resolution_summary\": row[19] or \"\",\n        \"workflow_key\"\
-    : row[20] or \"default\",\n        \"workflow_name\": row[21] or WORKFLOWS[\"\
-    default\"][\"name\"],\n        \"first_response_due_at\": str(row[22]) if row[22]\
-    \ else \"\",\n        \"first_response_at\": str(row[23]) if row[23] else \"\"\
-    ,\n        \"first_response_state\": first_response_state(row[22], row[23], row[9]),\n\
-    \        \"sla_state\": sla_state(row[14], row[9]),\n    }\n    comments = [\n\
-    \        {\"author\": c[0], \"content\": c[1], \"created_at\": str(c[2]), \"visibility\"\
-    : c[3] or \"public\"}\n        for c in comment_rows\n    ]\n    events = [\n\
-    \        {\"actor_name\": e[0], \"event_type\": e[1], \"message\": e[2], \"created_at\"\
-    : str(e[3])}\n        for e in event_rows\n    ]\n    status_history = [\n   \
-    \     {\n            \"old_status\": h[0],\n            \"new_status\": h[1],\n\
-    \            \"changed_by_name\": h[2] or \"System\",\n            \"changed_by_email\"\
-    : h[3] or \"\",\n            \"workflow_rule_names\": h[4] or \"\",\n        \
-    \    \"required_comment\": bool(h[5]),\n            \"required_attachment\": bool(h[6]),\n\
-    \            \"comment_validated\": bool(h[7]),\n            \"attachment_validated\"\
-    : bool(h[8]),\n            \"source\": h[9] or \"manual\",\n            \"created_at\"\
-    : str(h[10]),\n        }\n        for h in status_history_rows\n    ]\n    attachments\
-    \ = [\n        {\n            \"id\": a[0],\n            \"original_filename\"\
-    : a[1],\n            \"content_type\": a[2] or \"\",\n            \"size_bytes\"\
-    : a[3],\n            \"uploaded_by_name\": a[4] or \"\",\n            \"created_at\"\
-    : str(a[5]),\n        }\n        for a in attachment_rows\n    ]\n    watchers\
-    \ = [\n        {\n            \"name\": f\"{w[0]} {w[1]}\".strip(),\n        \
-    \    \"email\": w[2],\n            \"department\": w[3],\n            \"role\"\
-    : role_label(list(w[5] or [\"user\"])),\n            \"roles\": list(w[5] or [\"\
-    user\"]),\n            \"created_at\": str(w[6]),\n        }\n        for w in\
-    \ watcher_rows\n    ]\n    watcher_candidates = [\n        {\n            \"name\"\
-    : f\"{w[0]} {w[1]}\".strip(),\n            \"email\": w[2],\n            \"department\"\
+    \    link_rows = cur.fetchall()\n    tag_rows = ticket_tags_for_ticket(cur, ticket_id)\n\
+    \    cur.close()\n    conn.close()\n    ticket = {\n        \"id\": row[0],\n\
+    \        \"title\": row[1],\n        \"description\": row[2],\n        \"requester_name\"\
+    : row[3],\n        \"requester_email\": row[4],\n        \"department\": row[5],\n\
+    \        \"category\": row[6],\n        \"subcategory\": row[7],\n        \"priority\"\
+    : row[8],\n        \"status\": row[9],\n        \"created_at\": str(row[10]),\n\
+    \        \"updated_at\": str(row[11]),\n        \"assigned_to_email\": row[12],\n\
+    \        \"assigned_to_name\": row[13],\n        \"sla_due_at\": str(row[14])\
+    \ if row[14] else \"\",\n        \"resolution_minutes\": row[15],\n        \"\
+    closed_at\": str(row[16]) if row[16] else \"\",\n        \"closed_by_email\":\
+    \ row[17] or \"\",\n        \"closed_by_name\": row[18] or \"\",\n        \"resolution_summary\"\
+    : row[19] or \"\",\n        \"workflow_key\": row[20] or \"default\",\n      \
+    \  \"workflow_name\": row[21] or WORKFLOWS[\"default\"][\"name\"],\n        \"\
+    first_response_due_at\": str(row[22]) if row[22] else \"\",\n        \"first_response_at\"\
+    : str(row[23]) if row[23] else \"\",\n        \"first_response_state\": first_response_state(row[22],\
+    \ row[23], row[9]),\n        \"sla_state\": sla_state(row[14], row[9]),\n    }\n\
+    \    comments = [\n        {\"author\": c[0], \"content\": c[1], \"created_at\"\
+    : str(c[2]), \"visibility\": c[3] or \"public\"}\n        for c in comment_rows\n\
+    \    ]\n    events = [\n        {\"actor_name\": e[0], \"event_type\": e[1], \"\
+    message\": e[2], \"created_at\": str(e[3])}\n        for e in event_rows\n   \
+    \ ]\n    status_history = [\n        {\n            \"old_status\": h[0],\n  \
+    \          \"new_status\": h[1],\n            \"changed_by_name\": h[2] or \"\
+    System\",\n            \"changed_by_email\": h[3] or \"\",\n            \"workflow_rule_names\"\
+    : h[4] or \"\",\n            \"required_comment\": bool(h[5]),\n            \"\
+    required_attachment\": bool(h[6]),\n            \"comment_validated\": bool(h[7]),\n\
+    \            \"attachment_validated\": bool(h[8]),\n            \"source\": h[9]\
+    \ or \"manual\",\n            \"created_at\": str(h[10]),\n        }\n       \
+    \ for h in status_history_rows\n    ]\n    attachments = [\n        {\n      \
+    \      \"id\": a[0],\n            \"original_filename\": a[1],\n            \"\
+    content_type\": a[2] or \"\",\n            \"size_bytes\": a[3],\n           \
+    \ \"uploaded_by_name\": a[4] or \"\",\n            \"created_at\": str(a[5]),\n\
+    \        }\n        for a in attachment_rows\n    ]\n    watchers = [\n      \
+    \  {\n            \"name\": f\"{w[0]} {w[1]}\".strip(),\n            \"email\"\
+    : w[2],\n            \"department\": w[3],\n            \"role\": role_label(list(w[5]\
+    \ or [\"user\"])),\n            \"roles\": list(w[5] or [\"user\"]),\n       \
+    \     \"created_at\": str(w[6]),\n        }\n        for w in watcher_rows\n \
+    \   ]\n    watcher_candidates = [\n        {\n            \"name\": f\"{w[0]}\
+    \ {w[1]}\".strip(),\n            \"email\": w[2],\n            \"department\"\
     : w[3],\n            \"role\": role_label(list(w[5] or [\"user\"])),\n       \
     \     \"roles\": list(w[5] or [\"user\"]),\n        }\n        for w in watcher_candidate_rows\n\
     \    ]\n    linked_tickets = []\n    for l in link_rows:\n        linked_id =\
@@ -5882,14 +6004,15 @@ data:
     \    return jsonify({\n        \"ticket\": ticket,\n        \"comments\": comments,\n\
     \        \"events\": events,\n        \"status_history\": status_history,\n  \
     \      \"attachments\": attachments,\n        \"watchers\": watchers,\n      \
-    \  \"linked_tickets\": linked_tickets,\n        \"meta\": {\"statuses\": workflow_statuses(ticket.get(\"\
-    workflow_key\")), \"operators\": operators, \"watcher_candidates\": watcher_candidates},\n\
-    \    })\n@app.post(\"/api/tickets/<int:ticket_id>/close\")\n@api_login_required\n\
-    def api_close_ticket(user, ticket_id):\n    if not is_staff(user):\n        return\
-    \ jsonify({\"error\": \"forbidden\"}), 403\n    def parse_int(value, default=0):\n\
-    \        try:\n            return int(value)\n        except Exception:\n    \
-    \        return default\n    hours = max(0, parse_int(request.form.get(\"resolution_hours\"\
-    ), 0))\n    minutes = max(0, min(59, parse_int(request.form.get(\"resolution_minutes\"\
+    \  \"linked_tickets\": linked_tickets,\n        \"tags\": tag_rows,\n        \"\
+    meta\": {\"statuses\": workflow_statuses(ticket.get(\"workflow_key\")), \"operators\"\
+    : operators, \"watcher_candidates\": watcher_candidates},\n    })\n@app.post(\"\
+    /api/tickets/<int:ticket_id>/close\")\n@api_login_required\ndef api_close_ticket(user,\
+    \ ticket_id):\n    if not is_staff(user):\n        return jsonify({\"error\":\
+    \ \"forbidden\"}), 403\n    def parse_int(value, default=0):\n        try:\n \
+    \           return int(value)\n        except Exception:\n            return default\n\
+    \    hours = max(0, parse_int(request.form.get(\"resolution_hours\"), 0))\n  \
+    \  minutes = max(0, min(59, parse_int(request.form.get(\"resolution_minutes\"\
     ), 0)))\n    total_minutes = hours * 60 + minutes\n    resolution_summary = clean(request.form.get(\"\
     resolution_summary\"))\n    visibility = clean(request.form.get(\"visibility\"\
     )) or \"public\"\n    if visibility not in (\"public\", \"internal\"):\n     \
@@ -6373,7 +6496,33 @@ data:
     \  actor_email=user[\"email\"],\n    )\n    conn.commit()\n    cur.close()\n \
     \   conn.close()\n    publish_event(f\"{user['name']} przypisał zgłoszenie #{ticket_id}\
     \ do: {assigned_to_name}\", \"assignment_changed\", ticket_id)\n    return jsonify({\"\
-    status\": \"ok\"})\n@app.post(\"/api/tickets/<int:ticket_id>/watchers\")\n@api_login_required\n\
+    status\": \"ok\"})\n@app.post(\"/api/tickets/<int:ticket_id>/tags\")\n@api_login_required\n\
+    def api_add_ticket_tag(user, ticket_id):\n    if not is_staff(user):\n       \
+    \ return jsonify({\"error\": \"forbidden\"}), 403\n    if not can_view_ticket(user,\
+    \ ticket_id):\n        return jsonify({\"error\": \"forbidden\"}), 403\n    conn\
+    \ = get_conn()\n    cur = conn.cursor()\n    ok, status_or_response, code = ensure_ticket_mutable(cur,\
+    \ ticket_id)\n    if not ok:\n        cur.close()\n        conn.close()\n    \
+    \    return status_or_response, code\n    payload = request.get_json(silent=True)\
+    \ or {}\n    tag = normalize_ticket_tag(payload.get(\"tag\"))\n    if not tag:\n\
+    \        cur.close()\n        conn.close()\n        return jsonify({\"error\"\
+    : \"Podaj nazwę tagu.\"}), 400\n    added = add_ticket_tag(cur, ticket_id, tag,\
+    \ user, source=\"manual\")\n    conn.commit()\n    cur.close()\n    conn.close()\n\
+    \    publish_event(f\"{user['name']} dodał tag do zgłoszenia #{ticket_id}: {tag}\"\
+    , \"ticket_tag_changed\", ticket_id)\n    return jsonify({\"status\": \"ok\",\
+    \ \"tag\": tag, \"added\": bool(added)})\n@app.delete(\"/api/tickets/<int:ticket_id>/tags/<path:tag>\"\
+    )\n@api_login_required\ndef api_remove_ticket_tag(user, ticket_id, tag):\n   \
+    \ if not is_staff(user):\n        return jsonify({\"error\": \"forbidden\"}),\
+    \ 403\n    if not can_view_ticket(user, ticket_id):\n        return jsonify({\"\
+    error\": \"forbidden\"}), 403\n    conn = get_conn()\n    cur = conn.cursor()\n\
+    \    ok, status_or_response, code = ensure_ticket_mutable(cur, ticket_id)\n  \
+    \  if not ok:\n        cur.close()\n        conn.close()\n        return status_or_response,\
+    \ code\n    tag = normalize_ticket_tag(tag)\n    if not tag:\n        cur.close()\n\
+    \        conn.close()\n        return jsonify({\"error\": \"Podaj nazwę tagu.\"\
+    }), 400\n    removed = remove_ticket_tag(cur, ticket_id, tag, user, source=\"\
+    manual\")\n    conn.commit()\n    cur.close()\n    conn.close()\n    publish_event(f\"\
+    {user['name']} usunął tag ze zgłoszenia #{ticket_id}: {tag}\", \"ticket_tag_changed\"\
+    , ticket_id)\n    return jsonify({\"status\": \"ok\", \"tag\": tag, \"removed\"\
+    : bool(removed)})\n@app.post(\"/api/tickets/<int:ticket_id>/watchers\")\n@api_login_required\n\
     def api_add_watcher(user, ticket_id):\n    if not is_staff(user):\n        return\
     \ jsonify({\"error\": \"forbidden\"}), 403\n    payload = request.get_json(silent=True)\
     \ or {}\n    watcher_email = clean(payload.get(\"user_email\") or payload.get(\"\
