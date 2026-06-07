@@ -3261,7 +3261,7 @@ data:
     wreEventType\">\n              ${{[\"all\", \"ticket_created\", \"comment_added\"\
     , \"attachment_added\", \"status_changed\", \"ticket_assigned\"].map(v => `<option\
     \ value=\"${{v}}\" ${{(returnedFilters.event_type || \"all\") === v ? \"selected\"\
-    \ : \"\"}}>${{esc(v === \"all\" ? \"Wszystkie\" : workflowEventLabel(v))}}</option>`).join(\"\
+    \ : \"\"}}>${{esc(v === \"all\" ? \"Wszystkie\" : workflowAutomationRuleEventLabel(v))}}</option>`).join(\"\
     \")}}\n            </select></div>\n            <div><label>Wynik</label><select\
     \ id=\"wreMatched\">\n              <option value=\"all\" ${{(returnedFilters.matched\
     \ || \"all\") === \"all\" ? \"selected\" : \"\"}}>Wszystkie</option>\n       \
