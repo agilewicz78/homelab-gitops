@@ -19,7 +19,7 @@ data:
     from flask_sock import Sock
     from werkzeug.security import generate_password_hash, check_password_hash
     from werkzeug.utils import secure_filename
-
+    
     # ============================================================
     # Konfiguracja aplikacji Flask, WebSocketów i zmiennych środowiskowych.
     # ============================================================
@@ -39,7 +39,7 @@ data:
         "png", "jpg", "jpeg", "gif", "pdf", "txt", "log", "csv", "xlsx", "docx"
     }
     INITIAL_PASSWORD = "Incoprp123!"
-
+    
     # ============================================================
     # Słowniki biznesowe używane w formularzach i filtrach.
     # ============================================================
@@ -244,7 +244,7 @@ data:
             ],
         },
     }
-
+    
     # Pomocniczy wybór domyślnego statusu docelowego dla reguł workflow.
     def default_automation_target(statuses, preferred):
         for candidate in preferred:
@@ -254,7 +254,7 @@ data:
             if candidate not in ("Nowe", "Zamknięte", "Rozwiązane", "Zrealizowane"):
                 return candidate
         return statuses[0] if statuses else "Nowe"
-
+    
     # Tworzy domyślne automatyzacje workflow dla nowego workflow.
     def seed_workflow_automations(cur, workflow_id, statuses):
         cur.execute("SELECT COUNT(*) FROM workflow_automations WHERE workflow_id = %s", (workflow_id,))
@@ -290,7 +290,7 @@ data:
                     )
                     VALUES (%s, 1, %s, %s, TRUE)
                 """, (automation_id, action_type, action_status))
-
+    
     # Zakłada domyślne workflow i statusy po uruchomieniu aplikacji.
     def seed_workflows(cur):
         for key, workflow in WORKFLOWS.items():
@@ -321,7 +321,7 @@ data:
                         ON CONFLICT (workflow_id, step_name) DO NOTHING
                     """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
             seed_workflow_automations(cur, workflow_id, statuses)
-
+    
     # Pobiera statusy workflow bezpośrednio z bazy danych.
     def db_workflow_statuses(workflow_key):
         workflow_key = clean(workflow_key) or "default"
@@ -346,7 +346,7 @@ data:
         except Exception:
             pass
         return None
-
+    
     # Zwraca statusy dla workflow z fallbackiem do konfiguracji domyślnej.
     def workflow_statuses(workflow_key):
         db_statuses = db_workflow_statuses(workflow_key)
@@ -383,7 +383,7 @@ data:
         if "Zamknięte" not in values:
             values.append("Zamknięte")
         return values
-
+    
     # Dobiera workflow do kategorii i podkategorii zgłoszenia.
     def choose_workflow(category, subcategory):
         category = str(category or "").strip()
@@ -474,7 +474,7 @@ data:
         "Niski": 120,
     }
     VALID_ROLES = ["user", "operator", "admin"]
-
+    
     # Macierz uprawnień używana w UI i endpointach diagnostycznych.
     # Nie zastępuje dekoratorów bezpieczeństwa API, tylko opisuje aktualny model dostępu.
     ROLE_PERMISSION_MATRIX = {
@@ -519,6 +519,80 @@ data:
             ],
         },
     }
+    
+    # Techniczne kody uprawnień używane przez backend oraz UI.
+    # Opisy w ROLE_PERMISSION_MATRIX są czytelne dla administratora, a poniższe kody
+    # są stabilnym kontraktem dla API i kontroli dostępu.
+    ROLE_PERMISSION_CODES = {
+        "user": {
+            "profile.manage",
+            "tickets.create",
+            "tickets.view_own",
+            "tickets.comment_own",
+            "tickets.attach_own",
+            "notifications.view_own",
+        },
+        "operator": {
+            "tickets.view_all",
+            "tickets.work",
+            "tickets.assign",
+            "tickets.change_status",
+            "tickets.internal_notes",
+            "tickets.attach_all",
+            "sla.view",
+            "sla.check",
+            "reports.view",
+            "reports.export_csv",
+            "dashboard.operator",
+        },
+        "admin": {
+            "users.manage",
+            "permissions.view",
+            "workflow.manage",
+            "workflow.test_rules",
+            "workflow.view_logs",
+            "workflow.export_logs_csv",
+            "audit.view",
+            "audit.export_csv",
+            "sla.manage",
+            "system.admin",
+        },
+    }
+    ROLE_INHERITANCE = {
+        "user": ["user"],
+        "operator": ["user", "operator"],
+        "admin": ["user", "operator", "admin"],
+    }
+    PERMISSION_LABELS = {
+        "profile.manage": "Profil użytkownika",
+        "tickets.create": "Tworzenie zgłoszeń",
+        "tickets.view_own": "Podgląd własnych zgłoszeń",
+        "tickets.comment_own": "Komentarze do własnych zgłoszeń",
+        "tickets.attach_own": "Załączniki do własnych zgłoszeń",
+        "notifications.view_own": "Powiadomienia użytkownika",
+        "tickets.view_all": "Podgląd wszystkich zgłoszeń",
+        "tickets.work": "Obsługa zgłoszeń",
+        "tickets.assign": "Przypisywanie zgłoszeń",
+        "tickets.change_status": "Zmiana statusu zgłoszeń",
+        "tickets.internal_notes": "Notatki wewnętrzne",
+        "tickets.attach_all": "Załączniki do wszystkich zgłoszeń",
+        "sla.view": "Kalendarz SLA",
+        "sla.check": "Ręczne sprawdzanie SLA",
+        "reports.view": "Raporty",
+        "reports.export_csv": "Eksport raportów CSV",
+        "dashboard.operator": "Dashboard operacyjny",
+        "users.manage": "Zarządzanie użytkownikami",
+        "permissions.view": "Podgląd uprawnień",
+        "workflow.manage": "Zarządzanie workflow",
+        "workflow.test_rules": "Testowanie reguł workflow",
+        "workflow.view_logs": "Log automatyzacji workflow",
+        "workflow.export_logs_csv": "Eksport logu workflow CSV",
+        "audit.view": "Audyt",
+        "audit.export_csv": "Eksport audytu CSV",
+        "sla.manage": "Polityki SLA",
+        "system.admin": "Administracja systemem",
+    }
+    
     SEED_USERS = [
         ("Anna", "Kowalska", "anna.kowalska@incoprp.local", "HR", "user"),
         ("Piotr", "Nowak", "piotr.nowak@incoprp.local", "Finanse", "user"),
@@ -591,7 +665,7 @@ data:
             "Nowe",
         ),
     ]
-
+    
     # Centralna funkcja tworzenia połączenia z PostgreSQL.
     def get_conn():
         return psycopg2.connect(
@@ -601,7 +675,7 @@ data:
             user=DB_USER,
             password=DB_PASSWORD,
         )
-
+    
     # Migracje startowe i inicjalizacja schematu bazy danych.
     def init_db():
         for _ in range(40):
@@ -1133,14 +1207,14 @@ data:
         return html.escape(str(value or ""))
     def clean(value):
         return str(value or "").strip()
-
+    
     # Waliduje rozszerzenie przesyłanego załącznika.
     def allowed_attachment(filename):
         if not filename or "." not in filename:
             return False
         ext = filename.rsplit(".", 1)[1].lower()
         return ext in ALLOWED_ATTACHMENT_EXTENSIONS
-
+    
     # Wyznacza bezpieczną ścieżkę zapisu załącznika.
     def attachment_path(stored_filename):
         base = os.path.abspath(ATTACHMENTS_DIR)
@@ -1148,7 +1222,7 @@ data:
         if not target.startswith(base + os.sep):
             raise ValueError("Invalid attachment path")
         return target
-
+    
     # Pobiera politykę SLA dla priorytetu zgłoszenia.
     def sla_policy_for_priority(cur, priority):
         cur.execute("""
@@ -1172,13 +1246,13 @@ data:
         return defaults.get(priority, {"first_response_hours": 8, "resolution_hours": 48, "warning_hours": 4})
     def sla_due_for_priority(priority):
         return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
-
+    
     # Wylicza terminy SLA reakcji i rozwiązania.
     def sla_times_for_priority(cur, priority):
         policy = sla_policy_for_priority(cur, priority)
         now = datetime.now()
         return now + timedelta(hours=policy["first_response_hours"]), now + timedelta(hours=policy["resolution_hours"])
-
+    
     # Określa stan SLA rozwiązania: OK, ostrzeżenie albo przekroczenie.
     def sla_state(sla_due_at, status, warning_hours=4):
         if not sla_due_at:
@@ -1191,13 +1265,13 @@ data:
         if sla_due_at - now <= timedelta(hours=warning_hours or 4):
             return "warning"
         return "ok"
-
+    
     # Określa stan SLA pierwszej reakcji operatora.
     def first_response_state(first_response_due_at, first_response_at, status, warning_hours=4):
         if first_response_at:
             return "done"
         return sla_state(first_response_due_at, status, warning_hours=warning_hours)
-
+    
     # Oznacza pierwszą reakcję operatora po dodaniu komentarza.
     def mark_first_response_if_needed(cur, ticket_id, user):
         if not is_staff(user):
@@ -1218,7 +1292,7 @@ data:
         return False
     def event_message(actor_name, text):
         return f"{actor_name}: {text}"
-
+    
     # Zapisuje zdarzenia w historii aktywności zgłoszenia.
     def add_ticket_event(cur, ticket_id, user, event_type, message):
         cur.execute("""
@@ -1231,8 +1305,8 @@ data:
             event_type,
             message,
         ))
-
-
+    
+    
     # Zapisuje uporządkowaną historię zmian statusu zgłoszenia.
     def add_ticket_status_history(
         cur,
@@ -1280,7 +1354,7 @@ data:
             bool(attachment_validated),
             source or "manual",
         ))
-
+    
     # Zapisuje zdarzenia audytowe administratorów i operatorów.
     def log_audit(cur, user, action, target_type, target_id=None, details=None):
         if isinstance(details, (dict, list)):
@@ -1307,7 +1381,7 @@ data:
             str(target_id) if target_id is not None else None,
             details,
         ))
-
+    
     # Zapisuje log dopasowania albo pominięcia reguły workflow.
     def log_workflow_rule_execution(
         cur,
@@ -1373,12 +1447,13 @@ data:
             "department": row[3],
             "role": row[4],
             "roles": list(row[5] or ["user"]),
+            "permissions": user_permission_codes({"roles": list(row[5] or ["user"])}),
         }
-
+    
     # Odczytuje aktualnego użytkownika na podstawie sesji.
     def current_user():
         return get_user_by_sid(get_sid_from_request())
-
+    
     # Dekorator wymagający zalogowania do endpointu API.
     def api_login_required(fn):
         @wraps(fn)
@@ -1420,7 +1495,65 @@ data:
         return has_role(user, "operator")
     def is_staff(user):
         return bool(user and (is_operator(user) or is_admin(user)))
-
+    
+    def user_permission_codes(user):
+        """Zwraca techniczne kody uprawnień wynikające z ról użytkownika.
+        Rola admin dziedziczy uprawnienia operatora i użytkownika, a operator dziedziczy
+        uprawnienia użytkownika.
+        """
+        if not user:
+            return []
+        roles = user.get("roles") or [user.get("role") or "user"]
+        if isinstance(roles, str):
+            roles = [roles]
+        permissions = set()
+        for role in roles:
+            for inherited_role in ROLE_INHERITANCE.get(role, [role]):
+                permissions.update(ROLE_PERMISSION_CODES.get(inherited_role, set()))
+        return sorted(permissions)
+    
+    def has_permission(user, permission_code):
+        """Centralna kontrola pojedynczego uprawnienia po stronie backendu."""
+        return permission_code in user_permission_codes(user)
+    
+    def api_forbidden(message="Brak uprawnień do wykonania tej operacji.", permission=None):
+        payload = {"error": "forbidden", "message": message}
+        if permission:
+            payload["permission"] = permission
+        return jsonify(payload), 403
+    
+    def api_permission_required(permission_code, message=None):
+        """Dekorator do endpointów, które mają być kontrolowane kodem uprawnienia."""
+        def decorator(fn):
+            @wraps(fn)
+            def wrapper(user, *args, **kwargs):
+                if not has_permission(user, permission_code):
+                    return api_forbidden(message or "Brak wymaganego uprawnienia.", permission_code)
+                return fn(user, *args, **kwargs)
+            return wrapper
+        return decorator
+    
+    def can_view_reports_backend(user):
+        return has_permission(user, "reports.view")
+    
+    def can_view_sla_backend(user):
+        return has_permission(user, "sla.view")
+    
+    def can_manage_sla_backend(user):
+        return has_permission(user, "sla.manage")
+    
+    def can_manage_workflow_backend(user):
+        return has_permission(user, "workflow.manage")
+    
+    def can_view_workflow_logs_backend(user):
+        return has_permission(user, "workflow.view_logs")
+    
+    def can_view_audit_backend(user):
+        return has_permission(user, "audit.view")
+    
+    def can_manage_users_backend(user):
+        return has_permission(user, "users.manage")
+    
     # Publikuje zdarzenia live przez WebSocket do aktywnych klientów.
     def publish_event(message, event_type="info", ticket_id=None, staff_only=False):
         global last_live_event
@@ -1500,7 +1633,7 @@ data:
             ORDER BY lower(wo.user_email)
         """, (workflow_key,))
         return [r[0] for r in cur.fetchall() if r and r[0]]
-
+    
     # Pobiera akcje przypisane do reguł automatyzacji workflow.
     def workflow_automation_action_entries(cur, automation_id):
         cur.execute("""
@@ -1518,7 +1651,7 @@ data:
                 "action_order": int(r[3] or 1),
             })
         return actions
-
+    
     # Pobiera reguły automatyzacji workflow wraz z akcjami.
     def workflow_automation_entries(cur, workflow_id):
         cur.execute("""
@@ -1580,7 +1713,7 @@ data:
         cur.execute("SELECT id FROM workflow_definitions WHERE workflow_key = %s", (workflow_key,))
         row = cur.fetchone()
         return row[0] if row else None
-
+    
     # Normalizuje listę akcji reguły workflow zapisaną z formularza.
     def normalize_workflow_automation_actions(item, steps):
         valid_actions = {"change_status", "change_priority", "add_workflow_watchers", "add_system_comment", "notify", "add_history", "require_comment", "require_attachment"}
@@ -1748,7 +1881,7 @@ data:
                 "priority": priority,
             })
         return normalized
-
+    
     # Zastępuje zestaw automatyzacji przypisanych do workflow.
     def replace_workflow_automations(cur, workflow_id, automations):
         cur.execute("DELETE FROM workflow_automations WHERE workflow_id = %s", (workflow_id,))
@@ -1982,7 +2115,7 @@ data:
         return value if value in WORKFLOW_CONDITION_OPERATORS else "eq"
     def workflow_condition_operator_label(operator):
         return WORKFLOW_CONDITION_OPERATOR_LABELS.get(normalize_workflow_condition_operator(operator), "równa się")
-
+    
     # Porównuje wartość warunku workflow z użyciem operatora warunku.
     def workflow_condition_matches_value(condition_value, actual_value, operator="eq", wildcard_values=("*", "any")):
         operator = normalize_workflow_condition_operator(operator)
@@ -2003,7 +2136,7 @@ data:
         if operator == "not_contains":
             return condition_value.lower() not in actual_value.lower()
         return condition_value == actual_value
-
+    
     # Sprawdza, czy reguła workflow pasuje do danego zdarzenia i kontekstu.
     def workflow_automation_match_result(item, current_status, user, visibility=None, assigned_to_email=None, event_new_status=None, ticket_context=None):
         condition_status = item.get("condition_status")
@@ -2011,13 +2144,13 @@ data:
         if condition_status or normalize_workflow_condition_operator(condition_status_operator) in ("empty", "not_empty"):
             if not workflow_condition_matches_value(condition_status, current_status, condition_status_operator):
                 return False, f"status źródłowy nie pasuje: warunek '{workflow_condition_operator_label(condition_status_operator)} {condition_status or ''}', otrzymano '{current_status or ''}'"
-
+    
         condition_to_status = item.get("condition_to_status")
         condition_to_status_operator = item.get("condition_to_status_operator") or "eq"
         if condition_to_status or normalize_workflow_condition_operator(condition_to_status_operator) in ("empty", "not_empty"):
             if not workflow_condition_matches_value(condition_to_status, event_new_status or "", condition_to_status_operator):
                 return False, f"status docelowy nie pasuje: warunek '{workflow_condition_operator_label(condition_to_status_operator)} {condition_to_status or ''}', otrzymano '{event_new_status or ''}'"
-
+    
         condition_role = item.get("condition_role")
         actor_role = workflow_actor_role(user)
         condition_role_operator = item.get("condition_role_operator") or "eq"
@@ -2039,13 +2172,13 @@ data:
                     pass
                 else:
                     return False, f"rola wykonawcy nie pasuje: warunek '{workflow_condition_operator_label(condition_role_operator)} {condition_role}', otrzymano {actor_role}"
-
+    
         condition_visibility = item.get("condition_comment_visibility")
         condition_visibility_operator = item.get("condition_comment_visibility_operator") or "eq"
         if condition_visibility and condition_visibility not in ("*", ""):
             if not workflow_condition_matches_value(condition_visibility, visibility or "", condition_visibility_operator):
                 return False, f"typ komentarza nie pasuje: warunek '{workflow_condition_operator_label(condition_visibility_operator)} {condition_visibility}', otrzymano '{visibility or ''}'"
-
+    
         assigned_state = item.get("assigned_state") or "*"
         assigned_state_operator = item.get("assigned_state_operator") or "eq"
         has_assignee = bool(assigned_to_email)
@@ -2053,7 +2186,7 @@ data:
         if assigned_state and assigned_state not in ("*", "any", ""):
             if not workflow_condition_matches_value(assigned_state, actual_assigned_state, assigned_state_operator):
                 return False, f"przypisanie zgłoszenia nie pasuje: warunek '{workflow_condition_operator_label(assigned_state_operator)} {assigned_state}', otrzymano '{actual_assigned_state}'"
-
+    
         ticket_context = ticket_context or {}
         condition_priority = item.get("condition_priority") or "*"
         condition_priority_operator = item.get("condition_priority_operator") or "eq"
@@ -2061,21 +2194,21 @@ data:
             ticket_priority = ticket_context.get("priority") or ""
             if not workflow_condition_matches_value(condition_priority, ticket_priority, condition_priority_operator):
                 return False, f"priorytet zgłoszenia nie pasuje: warunek '{workflow_condition_operator_label(condition_priority_operator)} {condition_priority}', otrzymano '{ticket_priority or ''}'"
-
+    
         condition_category = item.get("condition_category") or "*"
         condition_category_operator = item.get("condition_category_operator") or "eq"
         if condition_category and condition_category not in ("*", "any", ""):
             ticket_category = ticket_context.get("category") or ""
             if not workflow_condition_matches_value(condition_category, ticket_category, condition_category_operator):
                 return False, f"kategoria zgłoszenia nie pasuje: warunek '{workflow_condition_operator_label(condition_category_operator)} {condition_category}', otrzymano '{ticket_category or ''}'"
-
+    
         condition_subcategory = item.get("condition_subcategory") or "*"
         condition_subcategory_operator = item.get("condition_subcategory_operator") or "eq"
         if condition_subcategory and condition_subcategory not in ("*", "any", ""):
             ticket_subcategory = ticket_context.get("subcategory") or ""
             if not workflow_condition_matches_value(condition_subcategory, ticket_subcategory, condition_subcategory_operator):
                 return False, f"podkategoria zgłoszenia nie pasuje: warunek '{workflow_condition_operator_label(condition_subcategory_operator)} {condition_subcategory}', otrzymano '{ticket_subcategory or ''}'"
-
+    
         condition_sla_state = item.get("condition_sla_state") or "*"
         condition_sla_state_operator = item.get("condition_sla_state_operator") or "eq"
         if condition_sla_state and condition_sla_state not in ("*", "any", ""):
@@ -2152,7 +2285,7 @@ data:
                 "condition_sla_state_operator": r[25] or "eq",
             })
         return result
-
+    
     # Zwraca reguły workflow pasujące do konkretnego zdarzenia.
     def workflow_automations_for_event(cur, workflow_key, event_type, current_status, user, visibility=None, assigned_to_email=None, event_new_status=None, ticket_context=None):
         result = []
@@ -2220,7 +2353,7 @@ data:
                 VALUES (%s, %s)
                 ON CONFLICT (workflow_id, user_email) DO NOTHING
             """, (workflow_id, email))
-
+    
     # Dodaje operatorów workflow jako obserwatorów zgłoszenia.
     def add_workflow_watchers_to_ticket(cur, ticket_id, workflow_key):
         operator_emails = workflow_operator_emails_by_key(cur, workflow_key)
@@ -2280,7 +2413,7 @@ data:
             recipients.add(requester_email)
         recipients.update(staff_notification_recipients(cur))
         return recipients
-
+    
     # Tworzy powiadomienia aplikacyjne dla wskazanych odbiorców.
     def create_notifications(cur, recipients, ticket_id, event_type, message, actor_email=None):
         for email in sorted({email for email in recipients if email}):
@@ -2290,27 +2423,27 @@ data:
                 INSERT INTO notifications (user_email, ticket_id, type, message)
                 VALUES (%s, %s, %s, %s)
             """, (email, ticket_id, event_type, message))
-
+    
     # Tworzy powiadomienia powiązane ze zgłoszeniem.
     def create_ticket_notifications(cur, ticket_id, event_type, message, actor_email=None, staff_only=False):
         recipients = ticket_notification_recipients(cur, ticket_id, event_type)
         create_notifications(cur, recipients, ticket_id, event_type, message, actor_email=actor_email)
-
+    
     # Dekorator ograniczający endpoint do administratorów.
     def api_admin_required(fn):
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
-            if not is_admin(user):
-                return jsonify({"error": "admin required"}), 403
+            if not has_permission(user, "system.admin"):
+                return api_forbidden("Wymagane uprawnienia administratora.", "system.admin")
             return fn(user, *args, **kwargs)
         return wrapper
-
+    
     # Dekorator ograniczający endpoint do operatorów i administratorów.
     def api_staff_required(fn):
         @wraps(fn)
         def wrapper(user, *args, **kwargs):
-            if not is_staff(user):
-                return jsonify({"error": "operator or admin required"}), 403
+            if not has_permission(user, "tickets.work"):
+                return api_forbidden("Wymagane uprawnienia operatora albo administratora.", "tickets.work")
             return fn(user, *args, **kwargs)
         return wrapper
     def public_html(body):
@@ -2536,7 +2669,7 @@ data:
       .watcher-list { display: grid; gap: 10px; margin: 12px 0 16px; }
       .watcher-item { display: flex; justify-content: space-between; gap: 12px; align-items: center; border: 1px solid var(--border); border-radius: 14px; padding: 11px 12px; background: rgba(31,41,55,.58); }
       .watcher-meta { color: var(--muted); font-size: 13px; margin-top: 3px; }
-
+    
       .ticket-layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start; }
       .ticket-main-column, .ticket-side-column { display: grid; gap: 18px; }
       .ticket-side-column { position: sticky; top: 18px; }
@@ -2571,7 +2704,7 @@ data:
       .section-focus { animation: sectionFocus 1.6s ease; }
       @keyframes sectionFocus { 0% { box-shadow: 0 0 0 0 rgba(56,189,248,.0); border-color: var(--border); } 30% { box-shadow: 0 0 0 4px rgba(56,189,248,.18); border-color: rgba(56,189,248,.72); } 100% { box-shadow: 0 20px 40px rgba(0,0,0,.25); border-color: var(--border); } }
       @media (max-width: 980px) { .ticket-layout { grid-template-columns: 1fr; } .ticket-side-column { position: static; } }
-
+    
       .login-box { width: min(520px, 100%); margin: 0 auto; }
       .topbar { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 18px; }
       .error { color: #fecaca; }
@@ -2969,12 +3102,18 @@ data:
         function canWorkTickets(user) {{
           return !!(user && (isOperator(user) || isAdmin(user)));
         }}
-        function canViewReports(user) {{ return canWorkTickets(user); }}
-        function canViewSlaCalendar(user) {{ return canWorkTickets(user); }}
-        function canManageUsers(user) {{ return isAdmin(user); }}
-        function canManageWorkflow(user) {{ return isAdmin(user); }}
-        function canViewAudit(user) {{ return isAdmin(user); }}
-        function canViewPermissions(user) {{ return isAdmin(user); }}
+        function userHasPermission(user, permissionCode) {{
+          if (Array.isArray(user?.permissions)) return user.permissions.includes(permissionCode);
+          if (permissionCode.startsWith("workflow.") || permissionCode.startsWith("audit.") || permissionCode.startsWith("users.") || permissionCode === "permissions.view") return isAdmin(user);
+          if (permissionCode.startsWith("reports.") || permissionCode.startsWith("sla.") || permissionCode.startsWith("tickets.")) return canWorkTickets(user) || permissionCode.includes("own") || permissionCode === "tickets.create";
+          return false;
+        }}
+        function canViewReports(user) {{ return userHasPermission(user, "reports.view"); }}
+        function canViewSlaCalendar(user) {{ return userHasPermission(user, "sla.view"); }}
+        function canManageUsers(user) {{ return userHasPermission(user, "users.manage"); }}
+        function canManageWorkflow(user) {{ return userHasPermission(user, "workflow.manage"); }}
+        function canViewAudit(user) {{ return userHasPermission(user, "audit.view"); }}
+        function canViewPermissions(user) {{ return userHasPermission(user, "permissions.view"); }}
         function roleBadges(roles) {{
           const list = Array.isArray(roles) && roles.length ? roles : ["user"];
           return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
@@ -3494,7 +3633,7 @@ data:
             </div>
           `;
         }}
-
+    
         function reportDateValue(value) {{
           return value || new Date().toISOString().slice(0, 10);
         }}
@@ -3607,7 +3746,7 @@ data:
           if (toValue) params.set("to", toValue);
           window.location.href = `/api/reports.csv?${{params.toString()}}`;
         }}
-
+    
         function slaCalendarItem(t) {{
           const assigned = t.assigned_to_name || "Nieprzypisane";
           const due = t.sla_due_at || "-";
@@ -3869,7 +4008,7 @@ data:
             </section>
           `;
         }}
-
+    
         async function renderAdminUsers() {{
           const me = await loadMe();
           if (!me) return;
@@ -6793,7 +6932,7 @@ data:
     </html>
     """
     @sock.route("/ws")
-
+    
     # Endpoint WebSocket utrzymujący live status aplikacji.
     def websocket(ws):
         client_id = id(ws)
@@ -6838,7 +6977,7 @@ data:
     def spa_page():
         return Response(SPA_HTML, mimetype="text/html")
     @app.post("/api/login")
-
+    
     # Logowanie użytkownika i utworzenie sesji.
     def api_login():
         payload = request.get_json(silent=True) or {}
@@ -6877,6 +7016,7 @@ data:
                 "department": department,
                 "role": role_label(roles),
                 "roles": roles,
+                "permissions": user_permission_codes({"roles": roles}),
             }
         })
     @app.post("/api/logout")
@@ -6893,7 +7033,19 @@ data:
     @app.get("/api/me")
     @api_login_required
     def api_me(user):
-        return jsonify(user)
+        refreshed = dict(user)
+        refreshed["permissions"] = user_permission_codes(user)
+        return jsonify(refreshed)
+    
+    @app.get("/api/permissions/me")
+    @api_login_required
+    def api_my_permissions(user):
+        permissions = user_permission_codes(user)
+        return jsonify({
+            "roles": user.get("roles") or ["user"],
+            "permissions": permissions,
+            "labels": {code: PERMISSION_LABELS.get(code, code) for code in permissions},
+        })
     @app.put("/api/profile")
     @api_login_required
     def api_update_profile(user):
@@ -6947,7 +7099,7 @@ data:
     @app.get("/api/admin/users")
     @api_login_required
     @api_admin_required
-
+    
     # Lista użytkowników w panelu administracyjnym.
     def api_admin_users(user):
         conn = get_conn()
@@ -6978,7 +7130,7 @@ data:
     @app.get("/api/admin/permissions")
     @api_login_required
     @api_admin_required
-
+    
     # Macierz uprawnień dostępna dla administratora w UI.
     def api_admin_permissions(user):
         return jsonify({
@@ -6988,6 +7140,11 @@ data:
                     "label": value.get("label"),
                     "description": value.get("description"),
                     "permissions": value.get("permissions") or [],
+                    "permission_codes": sorted({
+                        code
+                        for inherited_role in ROLE_INHERITANCE.get(key, [key])
+                        for code in ROLE_PERMISSION_CODES.get(inherited_role, set())
+                    }),
                 }
                 for key, value in ROLE_PERMISSION_MATRIX.items()
             ]
@@ -7172,7 +7329,7 @@ data:
         return jsonify({"status": "ok"})
     @app.get("/api/notifications")
     @api_login_required
-
+    
     # Lista powiadomień użytkownika.
     def api_notifications(user):
         unread_only = request.args.get("unread") in ("1", "true", "yes")
@@ -7288,7 +7445,7 @@ data:
     @app.get("/api/audit")
     @api_login_required
     @api_admin_required
-
+    
     # Widok audytu z filtrowaniem.
     def api_audit(user):
         q = clean(request.args.get("q") or "")
@@ -7387,7 +7544,7 @@ data:
     @app.get("/api/audit.csv")
     @api_login_required
     @api_admin_required
-
+    
     # Eksport audytu do pliku CSV.
     def api_audit_csv(user):
         q = clean(request.args.get("q") or "")
@@ -7425,7 +7582,7 @@ data:
         rows = cur.fetchall()
         cur.close()
         conn.close()
-
+    
         output = io.StringIO()
         writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
         writer.writerow(["ID", "Data", "Aktor", "Email", "Akcja", "Obiekt", "ID obiektu", "Szczegóły"])
@@ -7449,11 +7606,11 @@ data:
     @app.get("/api/workflows")
     @app.get("/api/admin/workflows")
     @api_login_required
-
+    
     # Lista workflow w panelu administratora.
     def api_admin_workflows(user):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -7498,11 +7655,11 @@ data:
     @app.get("/api/workflows/<int:workflow_id>")
     @app.get("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
-
+    
     # Szczegóły pojedynczego workflow, statusy, operatorzy i reguły.
     def api_admin_workflow_detail(user, workflow_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -7595,8 +7752,8 @@ data:
     @app.post("/api/admin/workflows")
     @api_login_required
     def api_admin_create_workflow(user):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         payload = request.get_json(silent=True) or {}
         data, error = normalize_workflow_payload(payload)
         if error:
@@ -7641,8 +7798,8 @@ data:
     @app.put("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
     def api_admin_update_workflow(user, workflow_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT workflow_key, is_default FROM workflow_definitions WHERE id = %s", (workflow_id,))
@@ -7704,8 +7861,8 @@ data:
     @app.get("/api/admin/workflows/<int:workflow_id>/automations")
     @api_login_required
     def api_admin_workflow_automations(user, workflow_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT id FROM workflow_definitions WHERE id = %s", (workflow_id,))
@@ -7721,8 +7878,8 @@ data:
     @app.post("/api/admin/workflows/<int:workflow_id>/automations")
     @api_login_required
     def api_admin_create_workflow_automation(user, workflow_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         payload = request.get_json(silent=True) or {}
         conn = get_conn()
         cur = conn.cursor()
@@ -7754,8 +7911,8 @@ data:
     @app.put("/api/admin/workflows/<int:workflow_id>/automations/<int:automation_id>")
     @api_login_required
     def api_admin_update_workflow_automation(user, workflow_id, automation_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         payload = request.get_json(silent=True) or {}
         conn = get_conn()
         cur = conn.cursor()
@@ -7786,10 +7943,10 @@ data:
         cur.close()
         conn.close()
         return jsonify({"status": "ok", "automations": automations})
-
+    
     @app.post("/api/admin/workflows/<int:workflow_id>/automations/test")
     @api_login_required
-
+    
     # Symuluje regułę workflow bez zapisu zmian w bazie.
     def api_admin_test_workflow_automation(user, workflow_id):
         """Testuje regułę workflow na przykładowych danych bez modyfikowania zgłoszenia."""
@@ -7812,7 +7969,7 @@ data:
         conn.close()
         if error:
             return jsonify({"error": error}), 400
-
+    
         actor_role = clean(sample.get("actor_role")) or item.get("condition_role") or "*"
         current_status = clean(sample.get("current_status")) or item.get("condition_status") or (steps[0] if steps else "Nowe")
         event_new_status = clean(sample.get("event_new_status")) or item.get("condition_to_status") or ""
@@ -7825,7 +7982,7 @@ data:
         sample_sla_state = clean(sample.get("sla_state")) or item.get("condition_sla_state") or "*"
         operator_added_comment = bool(sample.get("operator_added_comment"))
         operator_added_attachment = bool(sample.get("operator_added_attachment"))
-
+    
         def test_value_matches_condition(condition_value, sample_value, operator="eq"):
             condition_value = clean(condition_value)
             sample_value = clean(sample_value)
@@ -7834,12 +7991,12 @@ data:
             if sample_value == "staff" and normalize_workflow_condition_operator(operator) == "eq":
                 return condition_value in ("staff", "operator", "admin")
             return workflow_condition_matches_value(condition_value, sample_value, operator)
-
+    
         event_aliases = [event_type]
         if event_type == "comment_added":
             event_aliases.extend(["user_comment_added", "staff_comment_added"])
         event_matches = item.get("event_type") in event_aliases or test_value_matches_condition(item.get("event_type"), event_type)
-
+    
         matched = True
         reasons = []
         if not item.get("is_active"):
@@ -7875,12 +8032,12 @@ data:
         if not test_value_matches_condition(item.get("condition_sla_state"), sample_sla_state, item.get("condition_sla_state_operator")):
             matched = False
             reasons.append(f"SLA nie pasuje: wymagane „{item.get('condition_sla_state')}”, w teście „{sample_sla_state}”.")
-
+    
         if matched and not reasons:
             reasons.append("Reguła zostanie wykonana dla podanych danych testowych.")
         elif not reasons:
             reasons.append("Reguła nie zostanie wykonana dla podanych danych testowych.")
-
+    
         normalized_actions = sorted(item.get("actions") or [], key=lambda a: int(a.get("action_order") or 1))
         missing_requirements = []
         if matched:
@@ -7889,7 +8046,7 @@ data:
             if any(a.get("is_active") is not False and a.get("action_type") == "require_attachment" for a in normalized_actions) and not operator_added_attachment:
                 missing_requirements.append("attachment")
         blocked_by_validation = bool(missing_requirements)
-
+    
         actions_preview = []
         effective_status = event_new_status or current_status
         available_statuses = steps or []
@@ -7957,7 +8114,7 @@ data:
             elif action_type == "add_history" and matched:
                 preview["result"] = "dodałaby wpis do historii zgłoszenia"
             actions_preview.append(preview)
-
+    
         return jsonify({
             "matched": matched,
             "reasons": reasons,
@@ -7981,13 +8138,13 @@ data:
             "final_status": effective_status,
             "rule": item,
         })
-
+    
     @app.delete("/api/workflows/<int:workflow_id>/automations/<int:automation_id>")
     @app.delete("/api/admin/workflows/<int:workflow_id>/automations/<int:automation_id>")
     @api_login_required
     def api_admin_delete_workflow_automation(user, workflow_id, automation_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
@@ -8018,8 +8175,8 @@ data:
     @app.delete("/api/admin/workflows/<int:workflow_id>")
     @api_login_required
     def api_admin_delete_workflow(user, workflow_id):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("SELECT workflow_key, is_default FROM workflow_definitions WHERE id = %s", (workflow_id,))
@@ -8055,7 +8212,7 @@ data:
         return jsonify({"status": "ok", "action": action})
     @app.get("/api/meta")
     @api_login_required
-
+    
     # Metadane dla UI: statusy, kategorie, użytkownicy i workflow.
     def api_meta(user):
         conn = get_conn()
@@ -8084,11 +8241,11 @@ data:
     @app.get("/api/workflow-rule-executions")
     @app.get("/api/admin/workflow-rule-executions")
     @api_login_required
-
+    
     # Lista logów wykonania reguł workflow z filtrami.
     def api_admin_workflow_rule_executions(user):
-        if not is_admin(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_view_workflow_logs_backend(user):
+            return api_forbidden("Brak uprawnienia do logu automatyzacji workflow.", "workflow.view_logs")
         def parse_int(value, default=1):
             try:
                 return int(str(value or "").strip())
@@ -8298,16 +8455,16 @@ data:
                     conn.close()
             except Exception:
                 pass
-
+    
     @app.get("/api/workflow-rule-executions.csv")
     @app.get("/api/admin/workflow-rule-executions.csv")
     @api_login_required
-
+    
     # Eksport logu automatyzacji workflow do CSV.
     def api_admin_workflow_rule_executions_csv(user):
         if not is_admin(user):
             return jsonify({"error": "forbidden"}), 403
-
+    
         workflow_id = request.args.get("workflow_id", "").strip()
         ticket_id = request.args.get("ticket_id", "").strip().lstrip("#")
         automation_id = request.args.get("automation_id", "").strip()
@@ -8317,7 +8474,7 @@ data:
         actor_filter = request.args.get("actor", "").strip()
         date_from = request.args.get("date_from", "").strip()
         date_to = request.args.get("date_to", "").strip()
-
+    
         clauses = []
         params = []
         if workflow_id.isdigit():
@@ -8358,7 +8515,7 @@ data:
             ]) + ")")
             params.extend([like] * 6)
         where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
-
+    
         def action_text(actions_raw):
             try:
                 actions = json.loads(actions_raw or "[]") if isinstance(actions_raw, str) else actions_raw
@@ -8382,7 +8539,7 @@ data:
                     details.append(f"{key}={value}")
                 parts.append(f"{action_type}: {result}" + (" (" + ", ".join(details) + ")" if details else ""))
             return " | ".join(parts)
-
+    
         conn = None
         cur = None
         try:
@@ -8503,7 +8660,7 @@ data:
                 pass
     @app.get("/api/tickets")
     @api_login_required
-
+    
     # Lista zgłoszeń z wyszukiwaniem, filtrowaniem i paginacją.
     def api_tickets(user):
         raw_statuses = clean(request.args.get("statuses")) or clean(request.args.get("status"))
@@ -8793,7 +8950,7 @@ data:
         })
     @app.get("/api/dashboard")
     @api_login_required
-
+    
     # Dane dashboardu głównego.
     def api_dashboard(user):
         if not is_staff(user):
@@ -8906,7 +9063,7 @@ data:
             "by_department": by_department,
             "by_operator": by_operator,
         })
-
+    
     # Buduje dane raportowe dla zakresu dat.
     def build_reports_payload(date_from_arg=None, date_to_arg=None):
         def parse_report_date(value, fallback):
@@ -8916,20 +9073,20 @@ data:
                 return datetime.strptime(value[:10], "%Y-%m-%d")
             except Exception:
                 return fallback
-
+    
         today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         date_to = parse_report_date(date_to_arg, today)
         date_from = parse_report_date(date_from_arg, date_to - timedelta(days=29))
         if date_from > date_to:
             date_from, date_to = date_to, date_from
         date_to_exclusive = date_to + timedelta(days=1)
-
+    
         conn = get_conn()
         cur = conn.cursor()
-
+    
         cur.execute("SELECT COUNT(*) FROM tickets")
         total_now = cur.fetchone()[0]
-
+    
         cur.execute("""
             SELECT
               COUNT(*) FILTER (WHERE created_at >= %s AND created_at < %s) AS created_count,
@@ -8941,7 +9098,7 @@ data:
             FROM tickets
         """, (date_from, date_to_exclusive, date_from, date_to_exclusive))
         created_count, open_now, overdue_sla_now, avg_first_response_hours = cur.fetchone()
-
+    
         cur.execute("""
             WITH resolved AS (
               SELECT ticket_id, MIN(created_at) AS resolved_at
@@ -8958,7 +9115,7 @@ data:
             JOIN tickets t ON t.id = r.ticket_id
         """, (date_from, date_to_exclusive, date_from, date_to_exclusive))
         resolved_count, avg_resolution_hours = cur.fetchone()
-
+    
         cur.execute("""
             SELECT priority AS label, priority AS value, COUNT(*) AS count
             FROM tickets
@@ -8973,7 +9130,7 @@ data:
             END
         """, (date_from, date_to_exclusive))
         by_priority = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT COALESCE(NULLIF(category, ''), 'Brak kategorii') AS label,
                    COALESCE(NULLIF(category, ''), 'Brak kategorii') AS value,
@@ -8985,7 +9142,7 @@ data:
             LIMIT 15
         """, (date_from, date_to_exclusive))
         by_category = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT status AS label, status AS value, COUNT(*) AS count
             FROM tickets
@@ -8993,7 +9150,7 @@ data:
             ORDER BY array_position(ARRAY['Nowe','Otwarte','W trakcie','Oczekuje na użytkownika','Oczekuje na dostawcę','Rozwiązane','Zamknięte'], status)
         """)
         by_status = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             SELECT
               COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), NULLIF(t.assigned_to_email, ''), 'Nieprzypisane') AS label,
@@ -9005,7 +9162,7 @@ data:
             ORDER BY count DESC, label ASC
         """)
         by_operator = [{"label": r[0], "value": r[1], "count": r[2]} for r in cur.fetchall()]
-
+    
         cur.execute("""
             WITH days AS (
               SELECT generate_series(%s::date, %s::date, interval '1 day')::date AS day
@@ -9028,10 +9185,10 @@ data:
             ORDER BY days.day ASC
         """, (date_from.date(), date_to.date(), date_from, date_to_exclusive, date_from, date_to_exclusive))
         by_day = [{"day": r[0], "created": r[1], "resolved": r[2]} for r in cur.fetchall()]
-
+    
         cur.close()
         conn.close()
-
+    
         return {
             "date_from": date_from.strftime("%Y-%m-%d"),
             "date_to": date_to.strftime("%Y-%m-%d"),
@@ -9050,34 +9207,34 @@ data:
             "by_operator": by_operator,
             "by_day": by_day,
         }
-
+    
     @app.get("/api/reports")
     @api_login_required
-
+    
     # Raporty i statystyki zgłoszeń.
     def api_reports(user):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_view_reports_backend(user):
+            return api_forbidden("Brak uprawnienia do raportów.", "reports.view")
         return jsonify(build_reports_payload(request.args.get("from"), request.args.get("to")))
-
+    
     @app.get("/api/reports.csv")
     @api_login_required
-
+    
     # Eksport raportów do CSV.
     def api_reports_csv(user):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
-
+        if not has_permission(user, "reports.export_csv"):
+            return api_forbidden("Brak uprawnienia do eksportu raportów CSV.", "reports.export_csv")
+    
         report = build_reports_payload(request.args.get("from"), request.args.get("to"))
         output = io.StringIO()
         output.write("﻿")
         writer = csv.writer(output, delimiter=";", lineterminator=chr(10))
-
+    
         writer.writerow(["Raport helpdesk"])
         writer.writerow(["Zakres od", report.get("date_from")])
         writer.writerow(["Zakres do", report.get("date_to")])
         writer.writerow([])
-
+    
         writer.writerow(["Podsumowanie", "Wartość"])
         summary_labels = [
             ("Utworzone", "created"),
@@ -9092,7 +9249,7 @@ data:
             value = report.get("summary", {}).get(key)
             writer.writerow([label, "" if value is None else value])
         writer.writerow([])
-
+    
         def write_group(title, rows):
             writer.writerow([title])
             writer.writerow(["Etykieta", "Wartość filtra", "Liczba"])
@@ -9102,31 +9259,31 @@ data:
             else:
                 writer.writerow(["Brak danych", "", 0])
             writer.writerow([])
-
+    
         write_group("Utworzone według priorytetu", report.get("by_priority") or [])
         write_group("Utworzone według kategorii", report.get("by_category") or [])
         write_group("Aktualny stan według statusu", report.get("by_status") or [])
         write_group("Aktualny stan według operatora", report.get("by_operator") or [])
-
+    
         writer.writerow(["Trend dzienny"])
         writer.writerow(["Dzień", "Utworzone", "Rozwiązane / zamknięte"])
         for row in report.get("by_day") or []:
             writer.writerow([row.get("day", ""), row.get("created", 0), row.get("resolved", 0)])
-
+    
         filename = f"helpdesk-raport-{report.get('date_from')}-{report.get('date_to')}.csv"
         return Response(
             output.getvalue(),
             mimetype="text/csv; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
-
+    
     @app.get("/api/sla-calendar")
     @api_login_required
-
+    
     # Kalendarz SLA i zgłoszenia według terminów.
     def api_sla_calendar(user):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_view_sla_backend(user):
+            return api_forbidden("Brak uprawnienia do kalendarza SLA.", "sla.view")
         conn = get_conn()
         cur = conn.cursor()
         params = []
@@ -9231,8 +9388,8 @@ data:
     @app.get("/api/sla-policies")
     @api_login_required
     def api_sla_policies(user):
-        if not is_staff(user):
-            return jsonify({"error": "forbidden"}), 403
+        if not can_view_sla_backend(user):
+            return api_forbidden("Brak uprawnienia do polityk SLA.", "sla.view")
         conn = get_conn()
         cur = conn.cursor()
         cur.execute("""
@@ -9303,7 +9460,7 @@ data:
     @app.post("/api/sla/check")
     @api_login_required
     @api_staff_required
-
+    
     # Ręczne sprawdzenie SLA i utworzenie powiadomień.
     def api_sla_check(user):
         """Ręczne sprawdzenie SLA i wygenerowanie powiadomień dla operatorów.
@@ -9372,7 +9529,7 @@ data:
         return jsonify({"status": "ok", "notifications": counters})
     @app.post("/api/tickets")
     @api_login_required
-
+    
     # Tworzenie nowego zgłoszenia wraz z workflow i SLA.
     def api_create_ticket(user):
         payload = request.get_json(silent=True) or {}
@@ -9433,7 +9590,7 @@ data:
         conn.close()
         publish_event(f"{user['name']} utworzył zgłoszenie #{ticket_id}: {title}", "ticket_created", ticket_id)
         return jsonify({"id": ticket_id}), 201
-
+    
     # Sprawdza, czy użytkownik może zobaczyć dane zgłoszenie.
     def can_view_ticket(user, ticket_id):
         if not user:
@@ -9490,7 +9647,7 @@ data:
             if candidate not in skipped:
                 return candidate
         return None
-
+    
     # Główny silnik wykonywania reguł workflow dla zdarzeń.
     def apply_workflow_event_rules(cur, ticket_id, user, event_type, current_status, visibility=None, event_new_status=None):
         """
@@ -9715,7 +9872,7 @@ data:
             if action_executed and rule.get("stop_processing", True):
                 stopped_by_rule = rule_name
         return executed
-
+    
     # Automatyczne reguły po dodaniu komentarza.
     def apply_auto_status_after_comment(cur, ticket_id, user, current_status, visibility):
         """
@@ -9786,7 +9943,7 @@ data:
         }
     @app.get("/api/tickets/<int:ticket_id>")
     @api_login_required
-
+    
     # Szczegóły zgłoszenia: komentarze, załączniki, historia, statusy i SLA.
     def api_ticket_detail(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
@@ -10296,8 +10453,8 @@ data:
     # Ten kod celowo nie polega wyłącznie na funkcji wykonującej automatyzacje,
     # ponieważ akcje require_comment / require_attachment są walidacjami blokującymi,
     # a nie akcjami wykonywanymi po zmianie statusu.
-
-
+    
+    
     def workflow_requirement_normalize(value):
         """Zamienia dowolny zapis akcji/warunku na prosty tekst do porównywania."""
         text = clean(value).lower()
@@ -10322,12 +10479,12 @@ data:
         while "__" in text:
             text = text.replace("__", "_")
         return text.strip("_")
-
-
+    
+    
     def workflow_requirement_type_from_value(value):
         """
         Rozpoznaje wymóg workflow niezależnie od tego, gdzie i jak został zapisany.
-
+    
         Obsługiwane są między innymi:
         - require_comment / require_attachment,
         - Wymagaj komentarza / Wymagaj załącznika,
@@ -10337,7 +10494,7 @@ data:
         text = workflow_requirement_normalize(value)
         if not text:
             return None
-
+    
         comment_tokens = {
             "require_comment",
             "required_comment",
@@ -10363,40 +10520,40 @@ data:
             "wymaga_pliku",
             "plik_wymagany",
         }
-
+    
         if text in comment_tokens:
             return "comment"
         if text in attachment_tokens:
             return "attachment"
-
+    
         requires = any(token in text for token in ("require", "required", "wymagaj", "wymaga", "wymagany"))
         mentions_comment = any(token in text for token in ("comment", "comments", "komentarz", "komentarza"))
         mentions_attachment = any(token in text for token in ("attachment", "attachments", "zalacznik", "zalacznika", "plik", "pliku"))
-
+    
         if requires and mentions_comment:
             return "comment"
         if requires and mentions_attachment:
             return "attachment"
-
+    
         return None
-
-
+    
+    
     def workflow_condition_is_any(value):
         """Czy warunek workflow oznacza dowolną wartość."""
         return workflow_requirement_normalize(value) in ("", "*", "any", "dowolny", "dowolna")
-
-
+    
+    
     def workflow_status_requirement_rule_matches(rule, old_status, new_status, user, assigned_to_email=None):
         """Sprawdza, czy reguła status_changed dotyczy tej konkretnej zmiany statusu."""
         if not rule.get("is_active", True):
             return False
-
+    
         condition_status = clean(rule.get("condition_status"))
         condition_to_status = clean(rule.get("condition_to_status"))
-
+    
         has_from = not workflow_condition_is_any(condition_status)
         has_to = not workflow_condition_is_any(condition_to_status)
-
+    
         # Normalny zapis: status źródłowy + status docelowy.
         if has_from and has_to:
             if condition_status != old_status or condition_to_status != new_status:
@@ -10410,7 +10567,7 @@ data:
             # jako status źródłowy albo docelowy, więc celowo akceptujemy oba warianty.
             if condition_status not in (old_status, new_status):
                 return False
-
+    
         condition_role = workflow_requirement_normalize(rule.get("condition_role"))
         if condition_role not in ("", "*", "any", "dowolna", "dowolny"):
             if condition_role == "staff" and not is_staff(user):
@@ -10421,27 +10578,27 @@ data:
                 return False
             if condition_role == "admin" and not is_admin(user):
                 return False
-
+    
         assigned_state = workflow_requirement_normalize(rule.get("assigned_state")) or "*"
         has_assignee = bool(assigned_to_email)
         if assigned_state == "assigned" and not has_assignee:
             return False
         if assigned_state == "unassigned" and has_assignee:
             return False
-
+    
         return True
-
+    
     # Wyszukuje reguły wymagające komentarza lub załącznika dla przejścia statusu.
     def workflow_status_requirement_rules(cur, workflow_key, old_status, new_status, user, assigned_to_email=None, ticket_context=None):
         """
         Zwraca aktywne reguły status_changed, które wymagają komentarza i/lub załącznika.
-
+    
         Funkcja jest celowo bardziej defensywna niż zwykły silnik automatyzacji:
         wymagania komentarza/załącznika są walidacją bezpieczeństwa przed zmianą statusu,
         więc nie mogą zostać pominięte przez drobną różnicę zapisu po migracji.
         """
         workflow_id = workflow_id_by_key(cur, workflow_key)
-
+    
         if workflow_id:
             cur.execute("""
                 SELECT
@@ -10503,7 +10660,7 @@ data:
                          COALESCE(waa.action_order, 1) ASC,
                          waa.id ASC
             """)
-
+    
         rules_by_id = {}
         for row in cur.fetchall():
             rule_id = row[0]
@@ -10522,14 +10679,14 @@ data:
                 "requirement_types": set(),
                 "debug_actions": [],
             })
-
+    
             # Stary zapis w workflow_automations.
             for value in (row[11], row[12]):
                 requirement_type = workflow_requirement_type_from_value(value)
                 if requirement_type:
                     rule["requirement_types"].add(requirement_type)
                     rule["debug_actions"].append(clean(value))
-
+    
             # Nowy zapis w workflow_automation_actions.
             if bool(row[15]):
                 for value in (row[13], row[14]):
@@ -10537,7 +10694,7 @@ data:
                     if requirement_type:
                         rule["requirement_types"].add(requirement_type)
                         rule["debug_actions"].append(clean(value))
-
+    
         matched_rules = []
         for rule in rules_by_id.values():
             if not rule["requirement_types"]:
@@ -10558,7 +10715,7 @@ data:
                     continue
             rule["requirement_types"] = sorted(rule["requirement_types"])
             matched_rules.append(rule)
-
+    
         # Bezpiecznik: jeżeli mamy aktywne reguły wymagające komentarza/załącznika,
         # ale nie dopasowały się przez starszy/niejednoznaczny zapis warunku statusu,
         # dopasuj reguły, które wskazują status docelowy albo mają warunek "dowolny".
@@ -10599,14 +10756,14 @@ data:
                 rule["requirement_types"] = sorted(rule["requirement_types"])
                 rule["fallback_matched"] = True
                 matched_rules.append(rule)
-
+    
         return matched_rules
-
+    
     # Ustala moment wejścia zgłoszenia w aktualny status.
     def ticket_current_status_started_at(cur, ticket_id):
         """
         Zwraca moment wejścia zgłoszenia w obecny status.
-
+    
         Najpierw korzystamy z uporządkowanej tabeli ticket_status_history,
         potem awaryjnie z ticket_events, a na końcu z tickets.created_at.
         Dzięki temu stare komentarze/załączniki nie spełniają wymagań dla
@@ -10619,7 +10776,7 @@ data:
         """, (ticket_id,))
         status_row = cur.fetchone()
         current_status = status_row[0] if status_row else None
-
+    
         cur.execute("""
             SELECT COALESCE(
                 (
@@ -10648,12 +10805,12 @@ data:
         """, (ticket_id, current_status, current_status, ticket_id, ticket_id))
         row = cur.fetchone()
         return row[0] if row else None
-
+    
     # Sprawdza, czy aktualny operator dodał nowy komentarz w obecnym statusie.
     def operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at):
         """
         Sprawdza, czy aktualny operator dodał komentarz/notatkę dla bieżącego statusu.
-
+    
         Dla nowych komentarzy używamy author_email.
         Dla starszych danych zostawiamy awaryjne dopasowanie po nazwie autora.
         """
@@ -10679,8 +10836,8 @@ data:
             user.get("name") or "",
         ))
         return bool(cur.fetchone()[0])
-
-
+    
+    
     # Sprawdza, czy aktualny operator dodał nowy załącznik w obecnym statusie.
     def operator_added_attachment_for_current_status(cur, ticket_id, user, status_started_at):
         """Sprawdza, czy aktualny operator dodał załącznik dla bieżącego statusu."""
@@ -10705,14 +10862,14 @@ data:
             user.get("name") or "",
         ))
         return bool(cur.fetchone()[0])
-
-
+    
+    
     # Blokuje zmianę statusu, jeśli brakuje wymaganego komentarza lub załącznika.
     def validate_workflow_status_transition_requirements(cur, ticket_id, user, old_status, new_status):
         """
         Blokuje zmianę statusu, jeżeli reguła workflow wymaga komentarza/załącznika,
         a operator nie dodał wymaganego elementu dla tej konkretnej próby przejścia.
-
+    
         Obowiązujące zachowanie:
         - stare komentarze nie spełniają wymogu komentarza,
         - stare załączniki nie spełniają wymogu załącznika,
@@ -10729,7 +10886,7 @@ data:
                 "attachment_validated": False,
                 "status_started_at": None,
             }
-
+    
         cur.execute("""
             SELECT COALESCE(workflow_key, 'default'), assigned_to_email, priority, category, subcategory, sla_due_at, status
             FROM tickets
@@ -10744,7 +10901,7 @@ data:
             "subcategory": row[4] if row and row[4] else None,
             "sla_state": sla_state(row[5] if row and row[5] else None, row[6] if row and row[6] else old_status),
         }
-
+    
         requirement_rules = workflow_status_requirement_rules(
             cur,
             workflow_key,
@@ -10754,7 +10911,7 @@ data:
             assigned_to_email,
             ticket_context=ticket_context,
         )
-
+    
         required = set()
         rule_names = []
         fallback_rules = []
@@ -10764,7 +10921,7 @@ data:
             rule_names.append(rule_name)
             if rule.get("fallback_matched"):
                 fallback_rules.append(rule_name)
-
+    
         status_started_at = ticket_current_status_started_at(cur, ticket_id)
         operator_has_comment = (
             operator_added_comment_for_current_status(cur, ticket_id, user, status_started_at)
@@ -10776,13 +10933,13 @@ data:
             if "attachment" in required
             else False
         )
-
+    
         missing_requirements = []
         if "comment" in required and not operator_has_comment:
             missing_requirements.append("comment")
         if "attachment" in required and not operator_has_attachment:
             missing_requirements.append("attachment")
-
+    
         validation_details = {
             "required": sorted(required),
             "missing": list(missing_requirements),
@@ -10792,7 +10949,7 @@ data:
             "attachment_validated": bool(operator_has_attachment),
             "status_started_at": str(status_started_at),
         }
-
+    
         print(
             "workflow status validation:",
             {
@@ -10812,29 +10969,29 @@ data:
             },
             flush=True,
         )
-
+    
         if not missing_requirements:
             return True, None, [], validation_details
-
+    
         labels = []
         if "comment" in missing_requirements:
             labels.append("nowego komentarza")
         if "attachment" in missing_requirements:
             labels.append("nowego załącznika")
-
+    
         unique_rule_names = []
         for name in rule_names:
             if name and name not in unique_rule_names:
                 unique_rule_names.append(name)
-
+    
         message = status_requirement_guidance(missing_requirements, old_status, new_status)
         if unique_rule_names:
             message += " Reguła: " + ", ".join(unique_rule_names)
-
+    
         validation_details["missing"] = list(missing_requirements)
         validation_details["guidance"] = status_requirement_guidance(missing_requirements, old_status, new_status)
         return False, message, missing_requirements, validation_details
-
+    
     def status_requirement_guidance(missing_requirements, old_status=None, new_status=None):
         parts = []
         if old_status and new_status:
@@ -10847,11 +11004,11 @@ data:
             parts.append("Dodaj nowy załącznik w sekcji Załączniki.")
         parts.append("Liczy się element dodany przez aktualnego operatora po wejściu zgłoszenia w obecny status.")
         return " ".join(parts)
-
-
+    
+    
     @app.get("/api/tickets/<int:ticket_id>/status-requirements")
     @api_login_required
-
+    
     # Endpoint podpowiadający wymagania przed zmianą statusu.
     def api_ticket_status_requirements(user, ticket_id):
         if not is_staff(user):
@@ -10892,11 +11049,11 @@ data:
             "comment_validated": validation_details.get("comment_validated", False),
             "attachment_validated": validation_details.get("attachment_validated", False),
         })
-
-
+    
+    
     @app.post("/api/tickets/<int:ticket_id>/status")
     @api_login_required
-
+    
     # Zmiana statusu zgłoszenia z walidacją workflow.
     def api_update_status(user, ticket_id):
         if not is_staff(user):
@@ -10964,7 +11121,7 @@ data:
         return jsonify({"status": "ok"})
     @app.post("/api/tickets/<int:ticket_id>/assign")
     @api_login_required
-
+    
     # Przypisanie zgłoszenia do operatora.
     def api_assign_ticket(user, ticket_id):
         if not is_staff(user):
@@ -11032,7 +11189,7 @@ data:
         return jsonify({"status": "ok"})
     @app.post("/api/tickets/<int:ticket_id>/watchers")
     @api_login_required
-
+    
     # Dodanie obserwatora zgłoszenia.
     def api_add_watcher(user, ticket_id):
         if not is_staff(user):
@@ -11293,7 +11450,7 @@ data:
         return jsonify({"status": "ok"})
     @app.post("/api/tickets/<int:ticket_id>/comments")
     @api_login_required
-
+    
     # Dodanie komentarza lub notatki wewnętrznej do zgłoszenia.
     def api_add_comment(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
@@ -11391,7 +11548,7 @@ data:
         })
     @app.post("/api/tickets/<int:ticket_id>/attachments")
     @api_login_required
-
+    
     # Przesyłanie i zapis załącznika do zgłoszenia.
     def api_upload_attachment(user, ticket_id):
         if not can_view_ticket(user, ticket_id):
@@ -11469,7 +11626,7 @@ data:
         return jsonify({"status": "ok", "attachment_id": attachment_id}), 201
     @app.get("/api/attachments/<int:attachment_id>/download")
     @api_login_required
-
+    
     # Bezpieczne pobieranie załącznika ze zgłoszenia.
     def api_download_attachment(user, attachment_id):
         conn = get_conn()
