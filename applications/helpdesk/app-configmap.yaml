@@ -568,18 +568,23 @@ data:
     \                tag TEXT NOT NULL,\n                    added_by_email TEXT REFERENCES\
     \ users(email) ON DELETE SET NULL,\n                    added_by_name TEXT,\n\
     \                    created_at TIMESTAMP DEFAULT NOW()\n                );\n\
-    \            \"\"\")\n            cur.execute(\"\"\"\n                CREATE UNIQUE\
-    \ INDEX IF NOT EXISTS ticket_tags_unique_lower_idx\n                ON ticket_tags\
-    \ (ticket_id, lower(tag))\n            \"\"\")\n            cur.execute(\"\"\"\
-    \n                CREATE INDEX IF NOT EXISTS ticket_tags_ticket_id_idx\n     \
-    \           ON ticket_tags (ticket_id)\n            \"\"\")\n            cur.execute(\"\
-    \"\"\n                CREATE TABLE IF NOT EXISTS audit_log (\n               \
-    \     id SERIAL PRIMARY KEY,\n                    actor_email TEXT,\n        \
-    \            actor_name TEXT,\n                    action TEXT NOT NULL,\n   \
-    \                 target_type TEXT NOT NULL,\n                    target_id TEXT,\n\
-    \                    details TEXT,\n                    created_at TIMESTAMP DEFAULT\
-    \ NOW()\n                );\n            \"\"\")\n            password_hash =\
-    \ generate_password_hash(INITIAL_PASSWORD)\n            for first_name, last_name,\
+    \            \"\"\")\n            cur.execute(\"ALTER TABLE ticket_tags ADD COLUMN\
+    \ IF NOT EXISTS tag TEXT\")\n            cur.execute(\"ALTER TABLE ticket_tags\
+    \ ADD COLUMN IF NOT EXISTS added_by_email TEXT\")\n            cur.execute(\"\
+    ALTER TABLE ticket_tags ADD COLUMN IF NOT EXISTS added_by_name TEXT\")\n     \
+    \       cur.execute(\"ALTER TABLE ticket_tags ADD COLUMN IF NOT EXISTS created_at\
+    \ TIMESTAMP DEFAULT NOW()\")\n            cur.execute(\"\"\"\n               \
+    \ CREATE UNIQUE INDEX IF NOT EXISTS ticket_tags_unique_lower_idx\n           \
+    \     ON ticket_tags (ticket_id, lower(tag))\n            \"\"\")\n          \
+    \  cur.execute(\"\"\"\n                CREATE INDEX IF NOT EXISTS ticket_tags_ticket_id_idx\n\
+    \                ON ticket_tags (ticket_id)\n            \"\"\")\n           \
+    \ cur.execute(\"\"\"\n                CREATE TABLE IF NOT EXISTS audit_log (\n\
+    \                    id SERIAL PRIMARY KEY,\n                    actor_email TEXT,\n\
+    \                    actor_name TEXT,\n                    action TEXT NOT NULL,\n\
+    \                    target_type TEXT NOT NULL,\n                    target_id\
+    \ TEXT,\n                    details TEXT,\n                    created_at TIMESTAMP\
+    \ DEFAULT NOW()\n                );\n            \"\"\")\n            password_hash\
+    \ = generate_password_hash(INITIAL_PASSWORD)\n            for first_name, last_name,\
     \ email, department, role in SEED_USERS:\n                cur.execute(\"\"\"\n\
     \                    INSERT INTO users (first_name, last_name, email, department,\
     \ role, password_hash)\n                    VALUES (%s, %s, %s, %s, %s, %s)\n\
@@ -1247,31 +1252,39 @@ data:
     \    return [\n        {\n            \"tag\": r[0],\n            \"added_by_name\"\
     : r[1] or \"\",\n            \"added_by_email\": r[2] or \"\",\n            \"\
     created_at\": str(r[3]),\n        }\n        for r in cur.fetchall()\n    ]\n\
-    def add_ticket_tag(cur, ticket_id, tag, user=None, source=\"manual\"):\n    tag\
-    \ = normalize_ticket_tag(tag)\n    if not tag:\n        return None\n    actor_email\
-    \ = user.get(\"email\") if user else None\n    actor_name = user.get(\"name\"\
-    ) if user else \"System workflow\"\n    cur.execute(\"\"\"\n        INSERT INTO\
-    \ ticket_tags (ticket_id, tag, added_by_email, added_by_name)\n        VALUES\
-    \ (%s, %s, %s, %s)\n        ON CONFLICT (ticket_id, lower(tag)) DO NOTHING\n \
-    \       RETURNING tag\n    \"\"\", (ticket_id, tag, actor_email, actor_name))\n\
-    \    inserted = cur.fetchone()\n    if inserted:\n        add_ticket_event(cur,\
-    \ ticket_id, user, \"ticket_tag_added\", f\"Dodano tag: {tag}\")\n        log_audit(cur,\
-    \ user, \"ticket_tag_added\", \"ticket\", ticket_id, {\"tag\": tag, \"source\"\
-    : source})\n        return tag\n    return None\ndef remove_ticket_tag(cur, ticket_id,\
-    \ tag, user=None, source=\"manual\"):\n    tag = normalize_ticket_tag(tag)\n \
-    \   if not tag:\n        return None\n    cur.execute(\"\"\"\n        DELETE FROM\
-    \ ticket_tags\n        WHERE ticket_id = %s AND lower(tag) = lower(%s)\n     \
-    \   RETURNING tag\n    \"\"\", (ticket_id, tag))\n    row = cur.fetchone()\n \
-    \   if row:\n        removed = row[0]\n        add_ticket_event(cur, ticket_id,\
-    \ user, \"ticket_tag_removed\", f\"Usunięto tag: {removed}\")\n        log_audit(cur,\
-    \ user, \"ticket_tag_removed\", \"ticket\", ticket_id, {\"tag\": removed, \"source\"\
-    : source})\n        return removed\n    return None\ndef ticket_notification_recipients(cur,\
-    \ ticket_id, event_type):\n    \"\"\"Return notification recipients according\
-    \ to the helpdesk workflow.\n    Workflow:\n    - new ticket -> all operators\
-    \ and admins,\n    - internal note -> all operators/admins plus staff watchers,\n\
-    \    - assigned ticket -> requester, assigned operator and watchers,\n    - unassigned\
-    \ ticket -> requester, watchers plus all operators/admins.\n    \"\"\"\n    recipients\
-    \ = set()\n    requester_email, assigned_to_email = ticket_notification_participants(cur,\
+    def add_ticket_tag(cur, ticket_id, tag, user=None, source=\"manual\"):\n    \"\
+    \"\"Add a tag to a ticket.\n\n    Nie używamy tutaj `ON CONFLICT (ticket_id, lower(tag))`,\
+    \ bo w PostgreSQL\n    indeks funkcyjny potrafi powodować błąd przy inferencji\
+    \ konfliktu w zależności\n    od wersji bazy / sposobu utworzenia indeksu. Najpierw\
+    \ sprawdzamy istnienie\n    tagu, a dopiero potem wykonujemy prosty INSERT. Dzięki\
+    \ temu ręczne dodawanie\n    tagu i akcja workflow `add_tag` działają stabilnie.\n\
+    \    \"\"\"\n    tag = normalize_ticket_tag(tag)\n    if not tag:\n        return\
+    \ None\n\n    actor_email = user.get(\"email\") if user else None\n    actor_name\
+    \ = user.get(\"name\") if user else \"System workflow\"\n\n    cur.execute(\"\"\
+    \"\n        SELECT tag\n        FROM ticket_tags\n        WHERE ticket_id = %s\
+    \ AND lower(tag) = lower(%s)\n        LIMIT 1\n    \"\"\", (ticket_id, tag))\n\
+    \    existing = cur.fetchone()\n    if existing:\n        return None\n\n    cur.execute(\"\
+    \"\"\n        INSERT INTO ticket_tags (ticket_id, tag, added_by_email, added_by_name)\n\
+    \        VALUES (%s, %s, %s, %s)\n        RETURNING tag\n    \"\"\", (ticket_id,\
+    \ tag, actor_email, actor_name))\n    inserted = cur.fetchone()\n\n    if inserted:\n\
+    \        add_ticket_event(cur, ticket_id, user, \"ticket_tag_added\", f\"Dodano\
+    \ tag: {tag}\")\n        log_audit(cur, user, \"ticket_tag_added\", \"ticket\"\
+    , ticket_id, {\"tag\": tag, \"source\": source})\n        return tag\n\n    return\
+    \ None\ndef remove_ticket_tag(cur, ticket_id, tag, user=None, source=\"manual\"\
+    ):\n    tag = normalize_ticket_tag(tag)\n    if not tag:\n        return None\n\
+    \    cur.execute(\"\"\"\n        DELETE FROM ticket_tags\n        WHERE ticket_id\
+    \ = %s AND lower(tag) = lower(%s)\n        RETURNING tag\n    \"\"\", (ticket_id,\
+    \ tag))\n    row = cur.fetchone()\n    if row:\n        removed = row[0]\n   \
+    \     add_ticket_event(cur, ticket_id, user, \"ticket_tag_removed\", f\"Usunięto\
+    \ tag: {removed}\")\n        log_audit(cur, user, \"ticket_tag_removed\", \"ticket\"\
+    , ticket_id, {\"tag\": removed, \"source\": source})\n        return removed\n\
+    \    return None\ndef ticket_notification_recipients(cur, ticket_id, event_type):\n\
+    \    \"\"\"Return notification recipients according to the helpdesk workflow.\n\
+    \    Workflow:\n    - new ticket -> all operators and admins,\n    - internal\
+    \ note -> all operators/admins plus staff watchers,\n    - assigned ticket ->\
+    \ requester, assigned operator and watchers,\n    - unassigned ticket -> requester,\
+    \ watchers plus all operators/admins.\n    \"\"\"\n    recipients = set()\n  \
+    \  requester_email, assigned_to_email = ticket_notification_participants(cur,\
     \ ticket_id)\n    if event_type == \"ticket_created\":\n        recipients.update(staff_notification_recipients(cur))\n\
     \        return recipients\n    if event_type == \"internal_note_added\":\n  \
     \      recipients.update(staff_notification_recipients(cur))\n        recipients.update(ticket_watcher_emails(cur,\
@@ -6499,17 +6512,20 @@ data:
     status\": \"ok\"})\n@app.post(\"/api/tickets/<int:ticket_id>/tags\")\n@api_login_required\n\
     def api_add_ticket_tag(user, ticket_id):\n    if not is_staff(user):\n       \
     \ return jsonify({\"error\": \"forbidden\"}), 403\n    if not can_view_ticket(user,\
-    \ ticket_id):\n        return jsonify({\"error\": \"forbidden\"}), 403\n    conn\
-    \ = get_conn()\n    cur = conn.cursor()\n    ok, status_or_response, code = ensure_ticket_mutable(cur,\
-    \ ticket_id)\n    if not ok:\n        cur.close()\n        conn.close()\n    \
-    \    return status_or_response, code\n    payload = request.get_json(silent=True)\
-    \ or {}\n    tag = normalize_ticket_tag(payload.get(\"tag\"))\n    if not tag:\n\
-    \        cur.close()\n        conn.close()\n        return jsonify({\"error\"\
-    : \"Podaj nazwę tagu.\"}), 400\n    added = add_ticket_tag(cur, ticket_id, tag,\
-    \ user, source=\"manual\")\n    conn.commit()\n    cur.close()\n    conn.close()\n\
-    \    publish_event(f\"{user['name']} dodał tag do zgłoszenia #{ticket_id}: {tag}\"\
-    , \"ticket_tag_changed\", ticket_id)\n    return jsonify({\"status\": \"ok\",\
-    \ \"tag\": tag, \"added\": bool(added)})\n@app.delete(\"/api/tickets/<int:ticket_id>/tags/<path:tag>\"\
+    \ ticket_id):\n        return jsonify({\"error\": \"forbidden\"}), 403\n\n   \
+    \ conn = get_conn()\n    cur = conn.cursor()\n    try:\n        ok, status_or_response,\
+    \ code = ensure_ticket_mutable(cur, ticket_id)\n        if not ok:\n         \
+    \   return status_or_response, code\n\n        payload = request.get_json(silent=True)\
+    \ or {}\n        tag = normalize_ticket_tag(payload.get(\"tag\"))\n        if\
+    \ not tag:\n            return jsonify({\"error\": \"Podaj nazwę tagu.\"}), 400\n\
+    \n        added = add_ticket_tag(cur, ticket_id, tag, user, source=\"manual\"\
+    )\n        conn.commit()\n\n        publish_event(f\"{user['name']} dodał tag\
+    \ do zgłoszenia #{ticket_id}: {tag}\", \"ticket_tag_changed\", ticket_id)\n  \
+    \      return jsonify({\"status\": \"ok\", \"tag\": tag, \"added\": bool(added)})\n\
+    \    except Exception as e:\n        conn.rollback()\n        print(f\"add ticket\
+    \ tag error ticket_id={ticket_id}: {e}\", flush=True)\n        return jsonify({\"\
+    error\": \"Nie udało się dodać tagu. Sprawdź logi aplikacji.\"}), 500\n    finally:\n\
+    \        cur.close()\n        conn.close()\n@app.delete(\"/api/tickets/<int:ticket_id>/tags/<path:tag>\"\
     )\n@api_login_required\ndef api_remove_ticket_tag(user, ticket_id, tag):\n   \
     \ if not is_staff(user):\n        return jsonify({\"error\": \"forbidden\"}),\
     \ 403\n    if not can_view_ticket(user, ticket_id):\n        return jsonify({\"\
