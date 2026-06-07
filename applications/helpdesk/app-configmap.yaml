@@ -3219,20 +3219,71 @@ data:
     \ workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;\n \
     \     }} else {{\n        workflowAutomationEditor.splice(idx, 1);\n      }}\n\
     \      renderWorkflowAutomationRules();\n    }}\n    function removeWorkflowAutomationRule(idx)\
-    \ {{\n      deleteWorkflowAutomationRule(idx);\n    }}\n    function workflowRuleExecutionActionSummary(actions)\
+    \ {{\n      deleteWorkflowAutomationRule(idx);\n    }}\n    function workflowRuleExecutionActionLabel(type)\
+    \ {{\n      const labels = {{\n        change_status: \"Zmień status\",\n    \
+    \    change_priority: \"Zmień priorytet\",\n        assign_user: \"Przypisz operatora\"\
+    ,\n        assign_least_loaded_operator: \"Przypisz najmniej obciążonego operatora\"\
+    ,\n        add_workflow_operators_as_watchers: \"Dodaj operatorów workflow jako\
+    \ obserwatorów\",\n        add_watcher: \"Dodaj obserwatora\",\n        notify:\
+    \ \"Wyślij powiadomienie\",\n        add_history: \"Dodaj wpis do historii\",\n\
+    \        add_system_comment: \"Dodaj komentarz systemowy\",\n        require_comment:\
+    \ \"Wymagaj komentarza\",\n        require_attachment: \"Wymagaj załącznika\"\n\
+    \      }};\n      return labels[type] || type || \"Akcja\";\n    }}\n    function\
+    \ workflowRuleExecutionResultLabel(result) {{\n      const labels = {{\n     \
+    \   executed: \"wykonano\",\n        skipped: \"pominięto\",\n        blocked:\
+    \ \"zablokowano\",\n        validation_ok: \"warunek spełniony\",\n        validation_failed:\
+    \ \"warunek niespełniony\",\n        not_required: \"niewymagane\"\n      }};\n\
+    \      return labels[result] || result || \"—\";\n    }}\n    function workflowRuleExecutionActionSummary(actions)\
     \ {{\n      if (!actions) return \"—\";\n      if (typeof actions === \"string\"\
     ) return actions;\n      if (!Array.isArray(actions)) return JSON.stringify(actions);\n\
     \      if (!actions.length) return \"—\";\n      return actions.map(a => {{\n\
-    \        const type = a.action_type || \"akcja\";\n        const result = a.result\
-    \ || \"\";\n        if (type === \"change_status\" && a.result === \"executed\"\
-    ) return `zmiana statusu: ${{a.old_status || \"?\"}} → ${{a.new_status || \"?\"\
-    }}`;\n        if (type === \"change_status\") return `zmiana statusu: ${{result}}\
-    \ ${{a.reason ? \"(\" + a.reason + \")\" : \"\"}}`;\n        if (type === \"notify\"\
-    ) return `powiadomienie: ${{result}}`;\n        if (type === \"add_history\")\
-    \ return `historia: ${{result}}`;\n        return `${{type}}: ${{result}}`;\n\
-    \      }}).join(\"; \");\n    }}\n    function workflowRuleExecutionFilterValues(workflowId\
-    \ = \"\") {{\n      const get = (id) => document.getElementById(id)?.value ||\
-    \ \"\";\n      return {{\n        workflow_id: workflowId || get(\"wreWorkflowId\"\
+    \        const type = a.action_type || \"akcja\";\n        const result = workflowRuleExecutionResultLabel(a.result\
+    \ || \"\");\n        if (type === \"change_status\" && a.result === \"executed\"\
+    ) return `Zmień status: ${{a.old_status || \"?\"}} → ${{a.new_status || \"?\"\
+    }}`;\n        if (type === \"change_status\") return `Zmień status: ${{result}}${{a.reason\
+    \ ? \" (\" + a.reason + \")\" : \"\"}}`;\n        if (type === \"change_priority\"\
+    ) return `Zmień priorytet: ${{a.old_priority || \"?\"}} → ${{a.new_priority ||\
+    \ a.action_value || \"?\"}}`;\n        if (type === \"require_comment\") return\
+    \ `Wymagaj komentarza: ${{result}}`;\n        if (type === \"require_attachment\"\
+    ) return `Wymagaj załącznika: ${{result}}`;\n        return `${{workflowRuleExecutionActionLabel(type)}}:\
+    \ ${{result}}`;\n      }}).join(\"; \");\n    }}\n    function workflowRuleExecutionActionDetails(actions)\
+    \ {{\n      if (!actions) return \"\";\n      if (typeof actions === \"string\"\
+    ) return `<pre class=\"log-details\">${{esc(actions)}}</pre>`;\n      if (!Array.isArray(actions)\
+    \ || !actions.length) return `<span class=\"muted\">Brak akcji.</span>`;\n   \
+    \   return `<ol class=\"compact-list\">${{actions.map(a => {{\n        const type\
+    \ = a.action_type || \"akcja\";\n        const result = workflowRuleExecutionResultLabel(a.result\
+    \ || \"\");\n        const details = Object.entries(a || {{}})\n          .filter(([k])\
+    \ => ![\"action_type\", \"result\"].includes(k))\n          .map(([k, v]) => `<div><span\
+    \ class=\"muted\">${{esc(k)}}:</span> ${{esc(typeof v === \"object\" ? JSON.stringify(v)\
+    \ : String(v ?? \"\"))}}</div>`)\n          .join(\"\");\n        return `<li><strong>${{esc(workflowRuleExecutionActionLabel(type))}}</strong>\
+    \ — ${{esc(result)}}${{details ? `<div class=\"muted\" style=\"margin-top:4px\"\
+    >${{details}}</div>` : \"\"}}</li>`;\n      }}).join(\"\")}}</ol>`;\n    }}\n\
+    \    async function exportWorkflowRuleExecutionsCsv(workflowId = \"\") {{\n  \
+    \    try {{\n        const filters = workflowRuleExecutionFilterValues(workflowId);\n\
+    \        const params = new URLSearchParams();\n        if (filters.workflow_id)\
+    \ params.set(\"workflow_id\", String(filters.workflow_id));\n        if (filters.q)\
+    \ params.set(\"q\", filters.q);\n        if (filters.ticket_id) params.set(\"\
+    ticket_id\", String(filters.ticket_id).replace(/^#/, \"\"));\n        if (filters.event_type\
+    \ && filters.event_type !== \"all\") params.set(\"event_type\", filters.event_type);\n\
+    \        if (filters.matched && filters.matched !== \"all\") params.set(\"matched\"\
+    , filters.matched);\n        if (filters.actor) params.set(\"actor\", filters.actor);\n\
+    \        if (filters.date_from) params.set(\"date_from\", filters.date_from);\n\
+    \        if (filters.date_to) params.set(\"date_to\", filters.date_to);\n    \
+    \    const res = await fetch(`/api/admin/workflow-rule-executions.csv?${{params.toString()}}`,\
+    \ {{ headers: {{ \"X-Helpdesk-Session\": getSid() }} }});\n        if (res.status\
+    \ === 401) {{ clearSid(); window.location.href = \"/login\"; return; }}\n    \
+    \    if (!res.ok) {{\n          let msg = \"Nie udało się wyeksportować logu.\"\
+    ;\n          try {{ const data = await res.json(); msg = data.error || data.details\
+    \ || msg; }} catch (e) {{}}\n          alert(msg);\n          return;\n      \
+    \  }}\n        const blob = await res.blob();\n        const url = URL.createObjectURL(blob);\n\
+    \        const a = document.createElement(\"a\");\n        const stamp = new Date().toISOString().slice(0,19).replace(/[-:T]/g,\
+    \ \"\");\n        a.href = url;\n        a.download = `helpdesk-log-workflow-${{stamp}}.csv`;\n\
+    \        document.body.appendChild(a);\n        a.click();\n        a.remove();\n\
+    \        URL.revokeObjectURL(url);\n      }} catch (err) {{\n        alert(\"\
+    Nie udało się wyeksportować logu: \" + (err && err.message ? err.message : String(err)));\n\
+    \      }}\n    }}\n    function workflowRuleExecutionFilterValues(workflowId =\
+    \ \"\") {{\n      const get = (id) => document.getElementById(id)?.value || \"\
+    \";\n      return {{\n        workflow_id: workflowId || get(\"wreWorkflowId\"\
     ),\n        q: get(\"wreSearch\"),\n        ticket_id: get(\"wreTicketId\"),\n\
     \        event_type: get(\"wreEventType\") || \"all\",\n        matched: get(\"\
     wreMatched\") || \"all\",\n        actor: get(\"wreActor\"),\n        date_from:\
@@ -3280,10 +3331,12 @@ data:
     >\n            <button onclick=\"renderWorkflowRuleExecutions('${{esc(workflowId\
     \ || \"\")}}', 1)\">Zastosuj filtry</button>\n            <button class=\"btn-secondary\"\
     \ onclick=\"clearWorkflowRuleExecutionFilters('${{esc(workflowId || \"\")}}')\"\
-    >Wyczyść filtry</button>\n          </div>\n        </section>\n        <section\
-    \ class=\"card\">\n          <div class=\"pagination-bar\"><span>Wpisy: ${{totalFiltered}}\
-    \ · Strona ${{page}} z ${{totalPages}}</span><div class=\"actions\"><button class=\"\
-    btn-secondary btn-small\" ${{page <= 1 ? \"disabled\" : \"\"}} onclick=\"renderWorkflowRuleExecutions('${{esc(workflowId\
+    >Wyczyść filtry</button>\n            <button class=\"btn-secondary\" onclick=\"\
+    exportWorkflowRuleExecutionsCsv('${{esc(workflowId || \"\")}}')\">Eksport CSV</button>\n\
+    \          </div>\n        </section>\n        <section class=\"card\">\n    \
+    \      <div class=\"pagination-bar\"><span>Wpisy: ${{totalFiltered}} · Strona\
+    \ ${{page}} z ${{totalPages}}</span><div class=\"actions\"><button class=\"btn-secondary\
+    \ btn-small\" ${{page <= 1 ? \"disabled\" : \"\"}} onclick=\"renderWorkflowRuleExecutions('${{esc(workflowId\
     \ || \"\")}}', ${{page - 1}})\">Poprzednia</button><button class=\"btn-secondary\
     \ btn-small\" ${{page >= totalPages ? \"disabled\" : \"\"}} onclick=\"renderWorkflowRuleExecutions('${{esc(workflowId\
     \ || \"\")}}', ${{page + 1}})\">Następna</button></div></div>\n          <div\
@@ -3334,12 +3387,13 @@ data:
     \ || e.actor_email || \"System\")}}<br><span class=\"muted\">${{esc(e.actor_email\
     \ || \"\")}}</span></td>\n            <td>${{e.matched ? `<span class=\"status-badge\
     \ status-new\">Dopasowana</span>` : `<span class=\"status-badge status-closed\"\
-    >Niedopasowana</span>`}}</td>\n            <td>${{esc(workflowRuleExecutionActionSummary(e.actions_executed))}}</td>\n\
-    \            <td>${{esc(e.reason || \"\")}}</td>\n            <td>${{esc(e.created_at\
-    \ || \"\")}}</td>\n          </tr>\n        `).join(\"\");\n        const content\
-    \ = document.getElementById(\"workflowRuleExecutionContent\");\n        if (content)\
-    \ {{\n          content.innerHTML = `<table><thead><tr><th>Reguła / workflow</th><th>Zgłoszenie</th><th>Zdarzenie\
-    \ / status</th><th>Wykonawca</th><th>Wynik</th><th>Akcje</th><th>Powód</th><th>Data</th></tr></thead><tbody>${{rows\
+    >Niedopasowana</span>`}}</td>\n            <td>\n              <div>${{esc(workflowRuleExecutionActionSummary(e.actions_executed))}}</div>\n\
+    \              <details style=\"margin-top:6px\"><summary>Szczegóły akcji</summary>${{workflowRuleExecutionActionDetails(e.actions_executed)}}</details>\n\
+    \            </td>\n            <td>${{esc(e.reason || \"\")}}</td>\n        \
+    \    <td>${{esc(e.created_at || \"\")}}</td>\n          </tr>\n        `).join(\"\
+    \");\n        const content = document.getElementById(\"workflowRuleExecutionContent\"\
+    );\n        if (content) {{\n          content.innerHTML = `<table><thead><tr><th>Reguła\
+    \ / workflow</th><th>Zgłoszenie</th><th>Zdarzenie / status</th><th>Wykonawca</th><th>Wynik</th><th>Akcje</th><th>Powód</th><th>Data</th></tr></thead><tbody>${{rows\
     \ || `<tr><td colspan=\"8\" class=\"muted\">Brak wpisów logu.</td></tr>`}}</tbody></table>`;\n\
     \        }}\n      }} catch (err) {{\n        const content = document.getElementById(\"\
     workflowRuleExecutionContent\");\n        const msg = err && err.name === \"AbortError\"\
@@ -5050,7 +5104,119 @@ data:
     : str(e),\n        }), 500\n    finally:\n        try:\n            if cur:\n\
     \                cur.close()\n        except Exception:\n            pass\n  \
     \      try:\n            if conn:\n                conn.close()\n        except\
-    \ Exception:\n            pass\n@app.get(\"/api/tickets\")\n@api_login_required\n\
+    \ Exception:\n            pass\n\n@app.get(\"/api/workflow-rule-executions.csv\"\
+    )\n@app.get(\"/api/admin/workflow-rule-executions.csv\")\n@api_login_required\n\
+    def api_admin_workflow_rule_executions_csv(user):\n    if not is_admin(user):\n\
+    \        return jsonify({\"error\": \"forbidden\"}), 403\n\n    workflow_id =\
+    \ request.args.get(\"workflow_id\", \"\").strip()\n    ticket_id = request.args.get(\"\
+    ticket_id\", \"\").strip().lstrip(\"#\")\n    automation_id = request.args.get(\"\
+    automation_id\", \"\").strip()\n    q = request.args.get(\"q\", \"\").strip()\n\
+    \    matched_filter = request.args.get(\"matched\", \"all\").strip() or \"all\"\
+    \n    event_type_filter = request.args.get(\"event_type\", \"all\").strip() or\
+    \ \"all\"\n    actor_filter = request.args.get(\"actor\", \"\").strip()\n    date_from\
+    \ = request.args.get(\"date_from\", \"\").strip()\n    date_to = request.args.get(\"\
+    date_to\", \"\").strip()\n\n    clauses = []\n    params = []\n    if workflow_id.isdigit():\n\
+    \        clauses.append(\"wre.workflow_id = %s\")\n        params.append(int(workflow_id))\n\
+    \    if ticket_id.isdigit():\n        clauses.append(\"wre.ticket_id = %s\")\n\
+    \        params.append(int(ticket_id))\n    if automation_id.isdigit():\n    \
+    \    clauses.append(\"wre.automation_id = %s\")\n        params.append(int(automation_id))\n\
+    \    if matched_filter in (\"matched\", \"true\", \"1\"):\n        clauses.append(\"\
+    COALESCE(wre.matched, TRUE) = TRUE\")\n    elif matched_filter in (\"skipped\"\
+    , \"false\", \"0\"):\n        clauses.append(\"COALESCE(wre.matched, TRUE) = FALSE\"\
+    )\n    if event_type_filter and event_type_filter != \"all\":\n        clauses.append(\"\
+    COALESCE(wre.event_type, '') = %s\")\n        params.append(event_type_filter)\n\
+    \    if actor_filter:\n        like = f\"%{actor_filter}%\"\n        clauses.append(\"\
+    (COALESCE(wre.actor_name, '') ILIKE %s OR COALESCE(wre.actor_email, '') ILIKE\
+    \ %s)\")\n        params.extend([like, like])\n    if date_from:\n        clauses.append(\"\
+    wre.created_at >= %s::date\")\n        params.append(date_from)\n    if date_to:\n\
+    \        clauses.append(\"wre.created_at < (%s::date + INTERVAL '1 day')\")\n\
+    \        params.append(date_to)\n    if q:\n        like = f\"%{q}%\"\n      \
+    \  clauses.append(\"(\" + \" OR \".join([\n            \"COALESCE(wa.name, '')\
+    \ ILIKE %s\",\n            \"COALESCE(wd.name, '') ILIKE %s\",\n            \"\
+    COALESCE(t.title, '') ILIKE %s\",\n            \"COALESCE(wre.event_type, '')\
+    \ ILIKE %s\",\n            \"COALESCE(wre.reason, '') ILIKE %s\",\n          \
+    \  \"COALESCE(wre.actions_executed, '') ILIKE %s\",\n        ]) + \")\")\n   \
+    \     params.extend([like] * 6)\n    where_sql = \"WHERE \" + \" AND \".join(clauses)\
+    \ if clauses else \"\"\n\n    def action_text(actions_raw):\n        try:\n  \
+    \          actions = json.loads(actions_raw or \"[]\") if isinstance(actions_raw,\
+    \ str) else actions_raw\n        except Exception:\n            return str(actions_raw\
+    \ or \"\")\n        if not isinstance(actions, list):\n            return json.dumps(actions,\
+    \ ensure_ascii=False)\n        parts = []\n        for action in actions:\n  \
+    \          if not isinstance(action, dict):\n                parts.append(str(action))\n\
+    \                continue\n            action_type = action.get(\"action_type\"\
+    ) or \"akcja\"\n            result = action.get(\"result\") or \"\"\n        \
+    \    details = []\n            for key, value in action.items():\n           \
+    \     if key in (\"action_type\", \"result\"):\n                    continue\n\
+    \                if isinstance(value, (dict, list)):\n                    value\
+    \ = json.dumps(value, ensure_ascii=False)\n                details.append(f\"\
+    {key}={value}\")\n            parts.append(f\"{action_type}: {result}\" + (\"\
+    \ (\" + \", \".join(details) + \")\" if details else \"\"))\n        return \"\
+    \ | \".join(parts)\n\n    conn = None\n    cur = None\n    try:\n        conn\
+    \ = get_conn()\n        cur = conn.cursor()\n        cur.execute(\"SET LOCAL statement_timeout\
+    \ = '10000ms'\")\n        cur.execute(\"\"\"\n            CREATE TABLE IF NOT\
+    \ EXISTS workflow_rule_executions (\n                id SERIAL PRIMARY KEY,\n\
+    \                automation_id INTEGER,\n                workflow_id INTEGER,\n\
+    \                workflow_key TEXT,\n                ticket_id INTEGER,\n    \
+    \            event_type TEXT,\n                matched BOOLEAN DEFAULT TRUE,\n\
+    \                actions_executed TEXT,\n                reason TEXT,\n      \
+    \          actor_email TEXT,\n                actor_name TEXT,\n             \
+    \   current_status TEXT,\n                event_new_status TEXT,\n           \
+    \     created_at TIMESTAMP DEFAULT NOW()\n            )\n        \"\"\")\n   \
+    \     for ddl in [\n            \"ALTER TABLE workflow_rule_executions ADD COLUMN\
+    \ IF NOT EXISTS automation_id INTEGER\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS workflow_id INTEGER\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS workflow_key TEXT\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS ticket_id INTEGER\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS event_type TEXT\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS matched BOOLEAN DEFAULT TRUE\",\n            \"ALTER\
+    \ TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actions_executed TEXT\"\
+    ,\n            \"ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS\
+    \ reason TEXT\",\n            \"ALTER TABLE workflow_rule_executions ADD COLUMN\
+    \ IF NOT EXISTS actor_email TEXT\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS actor_name TEXT\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS current_status TEXT\",\n            \"ALTER TABLE workflow_rule_executions\
+    \ ADD COLUMN IF NOT EXISTS event_new_status TEXT\",\n            \"ALTER TABLE\
+    \ workflow_rule_executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT\
+    \ NOW()\",\n        ]:\n            cur.execute(ddl)\n        conn.commit()\n\
+    \        cur.execute(f\"\"\"\n            SELECT\n                wre.id,\n  \
+    \              wre.automation_id,\n                COALESCE(wa.name, 'Reguła usunięta')\
+    \ AS automation_name,\n                wre.workflow_id,\n                COALESCE(wd.name,\
+    \ wre.workflow_key, 'Workflow usunięty') AS workflow_name,\n                COALESCE(wd.workflow_key,\
+    \ wre.workflow_key, '') AS workflow_key,\n                wre.ticket_id,\n   \
+    \             COALESCE(t.title, '') AS ticket_title,\n                COALESCE(wre.event_type,\
+    \ '') AS event_type,\n                COALESCE(wre.matched, TRUE) AS matched,\n\
+    \                COALESCE(wre.actions_executed, '[]') AS actions_executed,\n \
+    \               COALESCE(wre.reason, '') AS reason,\n                COALESCE(wre.actor_email,\
+    \ '') AS actor_email,\n                COALESCE(wre.actor_name, '') AS actor_name,\n\
+    \                COALESCE(wre.current_status, '') AS current_status,\n       \
+    \         COALESCE(wre.event_new_status, '') AS event_new_status,\n          \
+    \      COALESCE(wre.created_at, NOW()) AS created_at\n            FROM workflow_rule_executions\
+    \ wre\n            LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id\n\
+    \            LEFT JOIN workflow_definitions wd ON wd.id = wre.workflow_id\n  \
+    \          LEFT JOIN tickets t ON t.id = wre.ticket_id\n            {where_sql}\n\
+    \            ORDER BY wre.id DESC\n            LIMIT 10000\n        \"\"\", tuple(params))\n\
+    \        rows = cur.fetchall()\n        output = io.StringIO()\n        output.write(\"\
+    \\ufeff\")\n        writer = csv.writer(output, delimiter=\";\")\n        writer.writerow([\"\
+    ID\", \"Reguła\", \"Workflow\", \"Zgłoszenie\", \"Tytuł zgłoszenia\", \"Zdarzenie\"\
+    , \"Status z\", \"Status na\", \"Wynik\", \"Akcje\", \"Powód\", \"Wykonawca\"\
+    , \"E-mail wykonawcy\", \"Data\"])\n        for r in rows:\n            writer.writerow([\n\
+    \                r[0],\n                r[2],\n                r[4],\n       \
+    \         f\"#{r[6]}\" if r[6] else \"\",\n                r[7],\n           \
+    \     r[8],\n                r[14],\n                r[15],\n                \"\
+    dopasowana\" if bool(r[9]) else \"niedopasowana\",\n                action_text(r[10]),\n\
+    \                r[11],\n                r[13] or \"System\",\n              \
+    \  r[12],\n                str(r[16]),\n            ])\n        filename = \"\
+    helpdesk-log-workflow.csv\"\n        return Response(\n            output.getvalue(),\n\
+    \            mimetype=\"text/csv; charset=utf-8\",\n            headers={\"Content-Disposition\"\
+    : f\"attachment; filename={filename}\"}\n        )\n    except Exception as e:\n\
+    \        try:\n            if conn:\n                conn.rollback()\n       \
+    \ except Exception:\n            pass\n        print(\"workflow rule executions\
+    \ CSV API error:\", repr(e), flush=True)\n        return jsonify({\n         \
+    \   \"error\": \"Nie udało się wyeksportować logu automatyzacji.\",\n        \
+    \    \"details\": str(e),\n        }), 500\n    finally:\n        try:\n     \
+    \       if cur:\n                cur.close()\n        except Exception:\n    \
+    \        pass\n        try:\n            if conn:\n                conn.close()\n\
+    \        except Exception:\n            pass\n@app.get(\"/api/tickets\")\n@api_login_required\n\
     def api_tickets(user):\n    raw_statuses = clean(request.args.get(\"statuses\"\
     )) or clean(request.args.get(\"status\"))\n    status_filters = []\n    if raw_statuses:\n\
     \        status_filters = [s.strip() for s in raw_statuses.split(\",\") if s.strip()]\n\
