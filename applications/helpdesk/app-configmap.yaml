@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: helpdesk-app
   namespace: helpdesk
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
 data:
   app.py: |
     import os
