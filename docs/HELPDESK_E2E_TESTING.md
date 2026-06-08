@@ -151,3 +151,16 @@ export HELPDESK_USER_PASSWORD="..."
 ```
 
 Jeżeli konta nie są ustawione, testy zależne od tych profili zostaną pominięte.
+
+## v14 — raporty i audyt: walidacja danych
+
+Dodane testy sprawdzają nie tylko dostępność endpointów, ale również sens danych:
+
+- raport dzienny po utworzeniu zgłoszenia zwiększa licznik utworzonych zgłoszeń,
+- zgłoszenie o priorytecie `Niski` zwiększa agregację `by_priority`,
+- zgłoszenie w kategorii `Inne` zwiększa agregację `by_category`,
+- trend dzienny `by_day` pokazuje wzrost dla bieżącej daty,
+- eksport CSV raportów zawiera sekcje: podsumowanie, priorytety, kategorie i trend dzienny,
+- audyt zawiera wpis po utworzeniu zgłoszenia testowego,
+- eksport CSV audytu respektuje filtr po ID zgłoszenia,
+- eksport macierzy uprawnień zawiera role `user`, `operator`, `admin`.

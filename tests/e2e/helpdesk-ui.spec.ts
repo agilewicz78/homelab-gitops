@@ -965,3 +965,131 @@ test.describe('Helpdesk E2E role użytkowników i widoczność modułów', () =>
     }
   });
 });
+
+
+test.describe('Helpdesk E2E raporty i audyt — walidacja danych', () => {
+  function rowCount(rows: any[], value: string): number {
+    const row = (rows || []).find((item: any) => String(item.value || item.label || '').toLowerCase() === value.toLowerCase());
+    return Number(row?.count || 0);
+  }
+
+  function dayCreated(rows: any[], day: string): number {
+    const row = (rows || []).find((item: any) => String(item.day || '') === day);
+    return Number(row?.created || 0);
+  }
+
+  test('raport po utworzeniu zgłoszenia pokazuje wzrost liczników, priorytetu, kategorii i trendu dziennego', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const today = isoDateDaysAgo(0);
+    const reportPath = `/api/reports?from=${today}&to=${today}`;
+
+    const before = await apiJson(request, 'GET', reportPath, sid);
+    expect(before.res.ok(), `Raport przed testem -> HTTP ${before.res.status()}: ${before.text}`).toBeTruthy();
+
+    const beforeCreated = Number(before.json.summary?.created || 0);
+    const beforeLowPriority = rowCount(before.json.by_priority || [], 'Niski');
+    const beforeOtherCategory = rowCount(before.json.by_category || [], 'Inne');
+    const beforeTodayCreated = dayCreated(before.json.by_day || [], today);
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: `E2E raport dane ${stamp}`,
+        description: 'Zgłoszenie testowe do walidacji danych raportów.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Niski'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia do raportu -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+
+    const after = await apiJson(request, 'GET', reportPath, sid);
+    expect(after.res.ok(), `Raport po teście -> HTTP ${after.res.status()}: ${after.text}`).toBeTruthy();
+
+    expect(Number(after.json.summary?.created || 0), `summary.created powinno wzrosnąć po utworzeniu zgłoszenia. Przed: ${before.text}; Po: ${after.text}`).toBeGreaterThanOrEqual(beforeCreated + 1);
+    expect(rowCount(after.json.by_priority || [], 'Niski'), 'Licznik priorytetu Niski powinien wzrosnąć.').toBeGreaterThanOrEqual(beforeLowPriority + 1);
+    expect(rowCount(after.json.by_category || [], 'Inne'), 'Licznik kategorii Inne powinien wzrosnąć.').toBeGreaterThanOrEqual(beforeOtherCategory + 1);
+    expect(dayCreated(after.json.by_day || [], today), 'Trend dzienny dla dzisiaj powinien wzrosnąć.').toBeGreaterThanOrEqual(beforeTodayCreated + 1);
+  });
+
+  test('eksport CSV raportów zawiera sekcje i dane agregacji', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const today = isoDateDaysAgo(0);
+
+    const csv = await request.get(`${baseURL}/api/reports.csv?from=${today}&to=${today}`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const csvText = await csv.text();
+    expect(csv.ok(), `Eksport CSV raportów -> HTTP ${csv.status()}: ${csvText.slice(0, 800)}`).toBeTruthy();
+    expect(csvText).toMatch(/Raport helpdesk/i);
+    expect(csvText).toMatch(/Podsumowanie/i);
+    expect(csvText).toMatch(/Utworzone według priorytetu/i);
+    expect(csvText).toMatch(/Utworzone według kategorii/i);
+    expect(csvText).toMatch(/Trend dzienny/i);
+  });
+
+  test('audyt po utworzeniu zgłoszenia zawiera wpis dotyczący zgłoszenia testowego', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const title = `E2E audyt dane ${stamp}`;
+
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title,
+        description: 'Zgłoszenie testowe do walidacji audytu.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Normalny'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia do audytu -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const ticketId = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia w odpowiedzi: ${created.text}`).toBeTruthy();
+
+    const auditById = await apiJson(request, 'GET', `/api/audit?q=${encodeURIComponent(String(ticketId))}&page_size=25`, sid);
+    expect(auditById.res.ok(), `Audyt po ID zgłoszenia -> HTTP ${auditById.res.status()}: ${auditById.text}`).toBeTruthy();
+    const auditRows = auditById.json.audit || [];
+    const matching = auditRows.some((row: any) => String(row.target_id || '').includes(String(ticketId)) || String(row.details || '').includes(String(ticketId)) || String(row.details || '').includes(title));
+    expect(matching, `Audyt powinien zawierać wpis dla zgłoszenia #${ticketId}. Odpowiedź: ${auditById.text}`).toBeTruthy();
+  });
+
+  test('eksport CSV audytu respektuje filtr i zawiera wpis testowy', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const title = `E2E audyt CSV ${stamp}`;
+
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title,
+        description: 'Zgłoszenie testowe do walidacji eksportu CSV audytu.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Normalny'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia do CSV audytu -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const ticketId = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia w odpowiedzi: ${created.text}`).toBeTruthy();
+
+    const csv = await request.get(`${baseURL}/api/audit.csv?q=${encodeURIComponent(String(ticketId))}`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const csvText = await csv.text();
+    expect(csv.ok(), `Eksport CSV audytu -> HTTP ${csv.status()}: ${csvText.slice(0, 800)}`).toBeTruthy();
+    expect(csvText).toMatch(/ID;Data;Aktor;Email;Akcja;Obiekt;ID obiektu;Szczegóły|ID.*Data.*Aktor.*Akcja/i);
+    expect(csvText, `CSV audytu powinien zawierać ID zgłoszenia #${ticketId}.`).toContain(String(ticketId));
+  });
+
+  test('eksport macierzy uprawnień zawiera role podstawowe', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const csv = await request.get(`${baseURL}/api/admin/permissions.csv`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const csvText = await csv.text();
+    expect(csv.ok(), `Eksport CSV macierzy uprawnień -> HTTP ${csv.status()}: ${csvText.slice(0, 800)}`).toBeTruthy();
+    expect(csvText).toMatch(/user/i);
+    expect(csvText).toMatch(/operator/i);
+    expect(csvText).toMatch(/admin/i);
+    expect(csvText).toMatch(/permission|uprawn/i);
+  });
+});
