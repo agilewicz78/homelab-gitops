@@ -5,7 +5,7 @@ import { test, expect, Page, APIRequestContext } from '@playwright/test';
  *
  * Etap 2 — testy UI listy akcji workflow.
  *
- * Wersja v31.1:
+ * Wersja v31.2:
  * - poprawia problem z v31, gdzie pierwszy test zostawał na liście workflow,
  *   bo nagłówek tabeli "AKCJE" spełniał zbyt luźny warunek oczekiwania.
  * - test otwiera workflow przez konkretny przycisk "Edytuj" w wierszu workflow,
@@ -278,17 +278,28 @@ async function deleteAutomationSafe(
 }
 
 async function openWorkflowAdmin(page: Page) {
-  try {
+  /**
+   * v31.2:
+   * Przy pełnym zbiorczym uruchomieniu poprzednie testy mogą zostawić UI na dashboardzie,
+   * otwartym panelu powiadomień albo modalu. Dlatego nie polegamy wyłącznie na kliknięciu
+   * w tekst "Workflow", tylko po zalogowaniu wymuszamy czyste wejście do ekranu workflow.
+   */
+  await page.keyboard.press('Escape').catch(() => undefined);
+  await page.keyboard.press('Escape').catch(() => undefined);
+
+  const canRender = await page
+    .evaluate(() => typeof (window as any).renderAdminWorkflows === 'function')
+    .catch(() => false);
+
+  if (canRender) {
+    await page.evaluate(() => (window as any).renderAdminWorkflows());
+  } else {
     await clickFirstVisible(page, [
+      'nav a:has-text("Workflow")',
+      'header a:has-text("Workflow")',
       'a:has-text("Workflow")',
       'button:has-text("Workflow")',
-      'text=Workflow',
     ]);
-  } catch (clickError) {
-    const canRender = await page.evaluate(() => typeof (window as any).renderAdminWorkflows === 'function').catch(() => false);
-    if (!canRender) throw clickError;
-
-    await page.evaluate(() => (window as any).renderAdminWorkflows());
   }
 
   await page.waitForLoadState('networkidle');
@@ -300,51 +311,58 @@ async function openWorkflowAdmin(page: Page) {
 
 async function openSpecificWorkflowEditor(page: Page, createdRule: CreatedWorkflowRule) {
   /**
-   * Otwieramy edycję konkretnego workflow.
-   * To jest poprawka względem v31: nie klikamy pierwszego lepszego tekstu "Edytuj",
-   * tylko szukamy wiersza zawierającego nazwę albo klucz workflow.
+   * v31.2:
+   * Klikamy tylko "Edytuj" w kontenerze konkretnego workflow.
+   * Nie ma już fallbacku na całe body, bo w pełnym zbiorczym teście mógł kliknąć
+   * niezwiązany element z dashboardu albo listy zgłoszeń.
    */
   const workflowIdentity = createdRule.workflowKey || createdRule.workflowName;
+  const escapedIdentity = workflowIdentity.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const workflowRe = new RegExp(escapedIdentity, 'i');
 
-  const rowCandidates = [
-    page.locator('tr').filter({ hasText: workflowIdentity }).first(),
-    page.locator('section, article, div, li').filter({ hasText: workflowIdentity }).first(),
-    page.locator('body').filter({ hasText: workflowIdentity }),
+  const candidates = [
+    page.locator('tr').filter({ hasText: workflowRe }),
+    page.locator('article').filter({ hasText: workflowRe }),
+    page.locator('section').filter({ hasText: workflowRe }),
+    page.locator('li').filter({ hasText: workflowRe }),
+    page.locator('div').filter({ hasText: workflowRe }),
   ];
 
   let clicked = false;
 
-  for (const row of rowCandidates) {
-    if (await row.count().catch(() => 0)) {
-      const editButton = row.locator('button:has-text("Edytuj"), a:has-text("Edytuj"), text=Edytuj').first();
-      if (await editButton.count().catch(() => 0)) {
+  for (const group of candidates) {
+    const count = await group.count().catch(() => 0);
+
+    for (let i = 0; i < count; i++) {
+      const row = group.nth(i);
+
+      if (!(await row.isVisible().catch(() => false))) {
+        continue;
+      }
+
+      const editButton = row.locator('button:has-text("Edytuj"), a:has-text("Edytuj")').first();
+
+      if (await editButton.isVisible().catch(() => false)) {
         await editButton.scrollIntoViewIfNeeded();
         await editButton.click();
         clicked = true;
         break;
       }
     }
+
+    if (clicked) break;
   }
 
   if (!clicked) {
-    /**
-     * Fallback: klikamy pierwszy widoczny przycisk Edytuj.
-     * Po kliknięciu i tak sprawdzimy, czy pojawiła się reguła utworzona przez API.
-     */
-    await clickFirstVisible(page, [
-      'button:has-text("Edytuj")',
-      'a:has-text("Edytuj")',
-      'text=Edytuj',
-    ]);
+    const body = await page.locator('body').innerText({ timeout: 5000 }).catch(() => '');
+    throw new Error(
+      `Nie znaleziono przycisku Edytuj dla workflow "${workflowIdentity}". ` +
+      `Aktualny widok prawdopodobnie nie jest listą workflow. Fragment body:\n${body.slice(0, 2000)}`
+    );
   }
 
   await page.waitForLoadState('networkidle');
 
-  /**
-   * Bardzo ważne:
-   * Nie akceptujemy już samego tekstu "AKCJE", bo występuje on na liście workflow
-   * jako nagłówek kolumny i powodował fałszywe przejście do dalszej części testu.
-   */
   await expect(page.locator('body')).toContainText(
     new RegExp(`${createdRule.ruleName}|Reguły automatyzacji|Automatyzacje workflow|Test reguły|Dodaj z szablonu`, 'i'),
     {
@@ -406,7 +424,7 @@ async function openActionSelectorIfPresent(page: Page) {
   return null;
 }
 
-test.describe('Helpdesk E2E v31.1 — Etap 2 UI listy akcji workflow', () => {
+test.describe('Helpdesk E2E v31.2 — Etap 2 UI listy akcji workflow', () => {
   test('UI formularza workflow pokazuje akcje "Wymagaj komentarza" i "Wymagaj załącznika"', async ({ page, request }) => {
     const createdRule = await createWorkflowRuleWithRequiredActionsViaApi(request);
 
