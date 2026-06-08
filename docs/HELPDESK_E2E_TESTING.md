@@ -194,3 +194,18 @@ Uruchomienie:
 ```bash
 npm run test:e2e
 ```
+
+
+## Pakiet v19 — powiadomienia
+
+Dodano testy regresyjne dla centrum powiadomień:
+
+- `GET /api/notifications` zwraca listę powiadomień.
+- `POST /api/notifications/<id>/read` oznacza powiadomienie jako przeczytane.
+- `POST /api/notifications/<id>/unread` oznacza powiadomienie jako nieprzeczytane.
+- `POST /api/notifications/read-all` obsługuje operację zbiorczą.
+- `POST /api/notifications/delete-read` obsługuje usuwanie przeczytanych.
+- `DELETE /api/notifications/<id>` usuwa pojedynczy wpis, jeśli istnieje.
+- UI panelu powiadomień otwiera się bez krytycznych błędów JavaScript i HTTP 5xx.
+
+Część testów pojedynczego powiadomienia jest warunkowa: jeśli środowisko testowe nie ma żadnych powiadomień, test zostaje pominięty zamiast wymuszać konkretną konfigurację workflow.

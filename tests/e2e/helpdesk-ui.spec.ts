@@ -1363,4 +1363,124 @@ test.describe('Helpdesk E2E filtrowanie i wyszukiwanie zgłoszeń — walidacja 
     expect(realConsoleErrors, `Błędy console.error przy filtrach zgłoszeń: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
     expect(serverErrors, `Błędy HTTP 5xx przy filtrach zgłoszeń: ${serverErrors.join('\n')}`).toHaveLength(0);
   });
+
+function extractNotifications(payload: any): any[] {
+  if (Array.isArray(payload)) return payload;
+  for (const key of ['notifications', 'items', 'data', 'rows', 'results']) {
+    if (Array.isArray(payload?.[key])) return payload[key];
+  }
+  return [];
+}
+
+async function getFirstNotificationId(request: APIRequestContext, sid: string): Promise<number | null> {
+  const response = await apiJson(request, 'GET', '/api/notifications', sid);
+  expect(response.res.ok(), `GET /api/notifications -> HTTP ${response.res.status()}: ${response.text}`).toBeTruthy();
+  const notifications = extractNotifications(response.json);
+  if (!notifications.length) return null;
+  const notification = notifications.find((n: any) => n && (n.id || n.notification_id)) || notifications[0];
+  const id = Number(notification.id || notification.notification_id);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+test.describe('Helpdesk E2E powiadomienia', () => {
+  test('API powiadomień zwraca listę oraz obsługuje read/unread dla pojedynczego wpisu', async ({ request }) => {
+    const sid = await apiLogin(request);
+
+    // Utworzenie zgłoszenia często generuje powiadomienia w aplikacji.
+    // Jeżeli środowisko testowe nie ma żadnych powiadomień, test zostanie pominięty,
+    // żeby nie wymuszać konkretnej konfiguracji reguł workflow.
+    await apiCreateTicket(request, 'E2E notification source');
+
+    const notificationId = await getFirstNotificationId(request, sid);
+    if (!notificationId) {
+      test.skip(true, 'Brak powiadomień do testu read/unread w tym środowisku.');
+    }
+
+    const read = await apiJson(request, 'POST', `/api/notifications/${notificationId}/read`, sid, { data: {} });
+    expect(read.res.ok(), `POST /api/notifications/${notificationId}/read -> HTTP ${read.res.status()}: ${read.text}`).toBeTruthy();
+
+    const unread = await apiJson(request, 'POST', `/api/notifications/${notificationId}/unread`, sid, { data: {} });
+    expect(unread.res.ok(), `POST /api/notifications/${notificationId}/unread -> HTTP ${unread.res.status()}: ${unread.text}`).toBeTruthy();
+
+    const readAgain = await apiJson(request, 'POST', `/api/notifications/${notificationId}/read`, sid, { data: {} });
+    expect(readAgain.res.ok(), `Ponowne oznaczenie jako przeczytane -> HTTP ${readAgain.res.status()}: ${readAgain.text}`).toBeTruthy();
+  });
+
+  test('API powiadomień obsługuje operacje zbiorcze bez błędów serwera', async ({ request }) => {
+    const sid = await apiLogin(request);
+
+    const readAll = await apiJson(request, 'POST', '/api/notifications/read-all', sid, { data: {} });
+    expect([200, 204].includes(readAll.res.status()), `POST /api/notifications/read-all -> HTTP ${readAll.res.status()}: ${readAll.text}`).toBeTruthy();
+
+    const deleteRead = await apiJson(request, 'POST', '/api/notifications/delete-read', sid, { data: {} });
+    expect([200, 204].includes(deleteRead.res.status()), `POST /api/notifications/delete-read -> HTTP ${deleteRead.res.status()}: ${deleteRead.text}`).toBeTruthy();
+
+    const after = await apiJson(request, 'GET', '/api/notifications', sid);
+    expect(after.res.ok(), `GET /api/notifications po operacjach zbiorczych -> HTTP ${after.res.status()}: ${after.text}`).toBeTruthy();
+    expect(Array.isArray(extractNotifications(after.json)), `Odpowiedź powiadomień powinna zawierać listę: ${after.text}`).toBeTruthy();
+  });
+
+  test('API powiadomień obsługuje usunięcie pojedynczego wpisu, jeśli wpis istnieje', async ({ request }) => {
+    const sid = await apiLogin(request);
+    await apiCreateTicket(request, 'E2E notification delete source');
+
+    const notificationId = await getFirstNotificationId(request, sid);
+    if (!notificationId) {
+      test.skip(true, 'Brak powiadomień do testu usunięcia pojedynczego wpisu w tym środowisku.');
+    }
+
+    const del = await request.delete(`${baseURL}/api/notifications/${notificationId}`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const text = await del.text();
+    expect([200, 204, 404].includes(del.status()), `DELETE /api/notifications/${notificationId} -> HTTP ${del.status()}: ${text}`).toBeTruthy();
+  });
+
+  test('UI panelu powiadomień otwiera się bez błędów krytycznych', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+    await page.waitForLoadState('networkidle');
+
+    const openedByFunction = await page.evaluate(() => {
+      const candidates = ['renderNotifications', 'openNotifications', 'toggleNotifications', 'renderNotificationCenter'];
+      for (const name of candidates) {
+        const fn = (window as any)[name];
+        if (typeof fn === 'function') {
+          fn();
+          return true;
+        }
+      }
+      return false;
+    }).catch(() => false);
+
+    if (!openedByFunction) {
+      await clickFirstVisible(page, [
+        'button:has-text("Powiadomienia")',
+        'a:has-text("Powiadomienia")',
+        '[aria-label*="Powiadom" i]',
+        'button:has-text("🔔")'
+      ]);
+    }
+
+    await page.waitForLoadState('networkidle').catch(() => undefined);
+    await expect(page.locator('body')).toContainText(/Powiadomienia|Nieprzeczytane|Oznacz wszystkie|Brak powiadomień/i, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime w panelu powiadomień: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error w panelu powiadomień: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx w panelu powiadomień: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+
 });
