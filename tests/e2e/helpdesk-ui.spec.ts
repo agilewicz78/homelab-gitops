@@ -4,6 +4,10 @@ import fs from 'fs';
 const baseURL = process.env.HELPDESK_URL || 'https://helpdesk.lab.local';
 const adminEmail = process.env.HELPDESK_ADMIN_EMAIL || '';
 const adminPassword = process.env.HELPDESK_ADMIN_PASSWORD || '';
+const operatorEmail = process.env.HELPDESK_OPERATOR_EMAIL || '';
+const operatorPassword = process.env.HELPDESK_OPERATOR_PASSWORD || '';
+const normalUserEmail = process.env.HELPDESK_USER_EMAIL || '';
+const normalUserPassword = process.env.HELPDESK_USER_PASSWORD || '';
 
 async function firstVisibleLocator(page: Page, selector: string, timeoutMs = 7000) {
   // Playwright domyślnie bierze pierwszy element pasujący do selektora.
@@ -596,3 +600,80 @@ test.describe('Helpdesk E2E SLA, raporty i audyt', () => {
   });
 });
 
+
+
+test.describe('Helpdesk E2E negatywne API i uprawnienia', () => {
+  test('API bez sesji oraz z błędnym SID zwraca 401', async ({ request }) => {
+    const noSession = await request.get(`${baseURL}/api/me`);
+    expect(noSession.status(), `GET /api/me bez sesji powinien zwrócić 401, zwrócił ${noSession.status()}: ${await noSession.text()}`).toBe(401);
+
+    const badSid = await request.get(`${baseURL}/api/me`, {
+      headers: { 'X-Helpdesk-Session': 'e2e-invalid-session-id' }
+    });
+    expect(badSid.status(), `GET /api/me z błędnym SID powinien zwrócić 401, zwrócił ${badSid.status()}: ${await badSid.text()}`).toBe(401);
+  });
+
+  test('puste albo niepoprawne zgłoszenie nie jest tworzone', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const emptyTicket = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: '',
+        description: '',
+        category: '',
+        subcategory: '',
+        priority: ''
+      }
+    });
+    expect(emptyTicket.res.status(), `Puste zgłoszenie powinno zwrócić 4xx, zwróciło ${emptyTicket.res.status()}: ${emptyTicket.text}`).toBeGreaterThanOrEqual(400);
+    expect(emptyTicket.res.status(), `Puste zgłoszenie powinno zwrócić 4xx, zwróciło ${emptyTicket.res.status()}: ${emptyTicket.text}`).toBeLessThan(500);
+  });
+
+  test('nieistniejące zgłoszenie zwraca 404 albo kontrolowany 4xx', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const missingId = 999999999;
+    const missing = await apiJson(request, 'GET', `/api/tickets/${missingId}`, sid);
+    expect(missing.res.status(), `Nieistniejące zgłoszenie powinno zwrócić 404/4xx, zwróciło ${missing.res.status()}: ${missing.text}`).toBeGreaterThanOrEqual(400);
+    expect(missing.res.status(), `Nieistniejące zgłoszenie nie powinno zwracać 5xx, zwróciło ${missing.res.status()}: ${missing.text}`).toBeLessThan(500);
+  });
+
+  test('załącznik bez pliku zwraca kontrolowany błąd 4xx', async ({ request }) => {
+    const { id, sid } = await apiCreateTicket(request, 'E2E negatywny załącznik');
+    const response = await request.post(`${baseURL}/api/tickets/${id}/attachments`, {
+      headers: { 'X-Helpdesk-Session': sid },
+      multipart: {}
+    });
+    const text = await response.text();
+    expect(response.status(), `Załącznik bez pliku powinien zwrócić 4xx, zwrócił ${response.status()}: ${text}`).toBeGreaterThanOrEqual(400);
+    expect(response.status(), `Załącznik bez pliku nie powinien zwracać 5xx, zwrócił ${response.status()}: ${text}`).toBeLessThan(500);
+  });
+
+  test('operator bez uprawnień administracyjnych nie może zarządzać macierzą uprawnień', async ({ request }) => {
+    test.skip(!operatorEmail || !operatorPassword, 'Ustaw HELPDESK_OPERATOR_EMAIL i HELPDESK_OPERATOR_PASSWORD, aby sprawdzić odmowy dostępu operatora.');
+    const operatorSid = await apiLoginWith(request, operatorEmail, operatorPassword);
+    const forbidden = await apiJson(request, 'GET', '/api/admin/permissions', operatorSid);
+    expect(forbidden.res.status(), `Operator bez permissions.view powinien dostać 403, zwrócono ${forbidden.res.status()}: ${forbidden.text}`).toBe(403);
+    expect(JSON.stringify(forbidden.json), 'Odpowiedź 403 powinna zawierać informację o braku uprawnienia.').toMatch(/forbidden|permission|uprawn/i);
+  });
+
+  test('zwykły użytkownik nie ma dostępu do endpointów administracyjnych', async ({ request }) => {
+    test.skip(!normalUserEmail || !normalUserPassword, 'Ustaw HELPDESK_USER_EMAIL i HELPDESK_USER_PASSWORD, aby sprawdzić odmowy dostępu zwykłego użytkownika.');
+    const userSid = await apiLoginWith(request, normalUserEmail, normalUserPassword);
+    const permissions = await apiJson(request, 'GET', '/api/admin/permissions', userSid);
+    expect(permissions.res.status(), `Zwykły użytkownik powinien dostać 403 do /api/admin/permissions, zwrócono ${permissions.res.status()}: ${permissions.text}`).toBe(403);
+
+    const audit = await apiJson(request, 'GET', '/api/audit', userSid);
+    expect([401, 403]).toContain(audit.res.status());
+  });
+
+  test('odmowa dostępu jest rejestrowana w audycie jako permission_denied', async ({ request }) => {
+    test.skip(!normalUserEmail || !normalUserPassword, 'Ustaw HELPDESK_USER_EMAIL i HELPDESK_USER_PASSWORD, aby sprawdzić audyt odmów dostępu.');
+    const userSid = await apiLoginWith(request, normalUserEmail, normalUserPassword);
+    await apiJson(request, 'GET', '/api/admin/permissions', userSid);
+
+    const adminSid = await apiLogin(request);
+    const audit = await apiJson(request, 'GET', '/api/audit?q=permission_denied&page_size=50', adminSid);
+    expect(audit.res.ok(), `GET /api/audit dla permission_denied -> HTTP ${audit.res.status()}: ${audit.text}`).toBeTruthy();
+    const auditText = JSON.stringify(audit.json);
+    expect(auditText, 'Audyt powinien zawierać wpis permission_denied po odmowie dostępu.').toMatch(/permission_denied/i);
+  });
+});

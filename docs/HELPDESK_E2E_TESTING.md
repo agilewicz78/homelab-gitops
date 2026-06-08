@@ -94,3 +94,24 @@ Nowe testy regresji sprawdzają:
 - otwarcie ekranów **Raporty**, **Kalendarz SLA** i **Audyt** w UI bez błędów JavaScript oraz bez odpowiedzi HTTP 5xx.
 
 Te testy wymagają konta z uprawnieniami administracyjnymi albo operacyjnymi do raportów, SLA i audytu.
+
+## Pakiet v11 — testy negatywne API i uprawnień
+
+Dodane testy sprawdzają:
+
+- `401` dla API bez sesji oraz z błędnym `X-Helpdesk-Session`,
+- kontrolowane błędy `4xx` dla pustego zgłoszenia, nieistniejącego zgłoszenia i załącznika bez pliku,
+- brak dostępu operatora do macierzy uprawnień, jeśli nie ma `permissions.view`,
+- brak dostępu zwykłego użytkownika do endpointów administracyjnych,
+- audyt odmowy dostępu jako `permission_denied`.
+
+Dodatkowe testy ról są uruchamiane tylko wtedy, gdy ustawisz zmienne:
+
+```bash
+export HELPDESK_OPERATOR_EMAIL="operator-test@example.local"
+export HELPDESK_OPERATOR_PASSWORD="..."
+export HELPDESK_USER_EMAIL="user-test@example.local"
+export HELPDESK_USER_PASSWORD="..."
+```
+
+Jeżeli te zmienne nie są ustawione, testy zależne od operatora lub zwykłego użytkownika zostaną pominięte.
