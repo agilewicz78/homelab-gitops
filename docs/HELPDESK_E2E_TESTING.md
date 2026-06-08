@@ -220,3 +220,19 @@ Dodane testy sprawdzają:
 - widoczność załącznika w szczegółach zgłoszenia,
 - wpisy historii aktywności po komentarzu i załączniku,
 - renderowanie sekcji historii statusu / aktywności w UI bez błędów JavaScript i HTTP 5xx.
+
+## Pakiet v21 — zarządzanie użytkownikami
+
+Pakiet v21 rozszerza testy o zarządzanie użytkownikami:
+
+- utworzenie tymczasowego użytkownika przez API administracyjne,
+- sprawdzenie listy i szczegółów użytkownika,
+- logowanie nowym kontem,
+- edycja roli użytkownika z `user` na `operator`,
+- reset hasła i weryfikacja, że stare hasło przestaje działać,
+- usunięcie konta testowego i weryfikacja, że nie można się nim zalogować,
+- blokada duplikatu użytkownika,
+- blokada usunięcia własnego konta administratora,
+- otwarcie ekranu `Użytkownicy` w UI bez błędów JS i HTTP 5xx.
+
+Testy tworzą konta z prefiksem `e2e-...@example.local` i próbują je usunąć w bloku `finally`, żeby nie zostawiać danych testowych po nieudanym przebiegu.

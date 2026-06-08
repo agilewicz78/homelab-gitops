@@ -1620,4 +1620,167 @@ test.describe('Helpdesk E2E historia statusu i aktywności zgłoszenia', () => {
   });
 });
 
+
+test.describe('Helpdesk E2E zarządzanie użytkownikami', () => {
+  async function cleanupUser(request: APIRequestContext, sid: string, email: string) {
+    if (!email) return;
+    await apiJson(request, 'DELETE', `/api/admin/users/${encodeURIComponent(email)}`, sid).catch(() => undefined);
+  }
+
+  test('administrator tworzy, edytuje, resetuje hasło i usuwa użytkownika testowego', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').toLowerCase();
+    const email = `e2e-user-${stamp}@example.local`;
+    const initialPassword = `E2eStart-${Date.now()}!`;
+    const newPassword = `E2eReset-${Date.now()}!`;
+
+    await cleanupUser(request, sid, email);
+
+    try {
+      const created = await apiJson(request, 'POST', '/api/admin/users', sid, {
+        data: {
+          first_name: 'E2E',
+          last_name: 'Użytkownik',
+          email,
+          department: 'IT',
+          roles: ['user'],
+          password: initialPassword
+        }
+      });
+      expect(created.res.ok(), `Utworzenie użytkownika -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+      expect([200, 201]).toContain(created.res.status());
+
+      const listed = await apiJson(request, 'GET', '/api/admin/users', sid);
+      expect(listed.res.ok(), `Lista użytkowników -> HTTP ${listed.res.status()}: ${listed.text}`).toBeTruthy();
+      const users = Array.isArray(listed.json.users) ? listed.json.users : [];
+      expect(
+        users.some((u: any) => String(u.email || '').toLowerCase() === email),
+        `Lista użytkowników nie zawiera ${email}. Odpowiedź: ${listed.text.slice(0, 1500)}`
+      ).toBeTruthy();
+
+      const detail = await apiJson(request, 'GET', `/api/admin/users/${encodeURIComponent(email)}`, sid);
+      expect(detail.res.ok(), `Szczegóły użytkownika -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+      expect(String(detail.json.email || '').toLowerCase()).toBe(email);
+      expect(detail.json.roles || [], `Nowy użytkownik powinien mieć rolę user: ${detail.text}`).toContain('user');
+
+      const userSid = await apiLoginWith(request, email, initialPassword);
+      const userPerms = await apiJson(request, 'GET', '/api/permissions/me', userSid);
+      expect(userPerms.res.ok(), `Uprawnienia nowego użytkownika -> HTTP ${userPerms.res.status()}: ${userPerms.text}`).toBeTruthy();
+      expect(JSON.stringify(userPerms.json), 'Nowe konto powinno mieć profil/rolę user.').toMatch(/user/i);
+
+      const updated = await apiJson(request, 'PUT', `/api/admin/users/${encodeURIComponent(email)}`, sid, {
+        data: {
+          first_name: 'E2E',
+          last_name: 'Operator',
+          department: 'IT',
+          roles: ['operator']
+        }
+      });
+      expect(updated.res.ok(), `Edycja użytkownika -> HTTP ${updated.res.status()}: ${updated.text}`).toBeTruthy();
+
+      const updatedDetail = await apiJson(request, 'GET', `/api/admin/users/${encodeURIComponent(email)}`, sid);
+      expect(updatedDetail.res.ok(), `Szczegóły po edycji -> HTTP ${updatedDetail.res.status()}: ${updatedDetail.text}`).toBeTruthy();
+      expect(updatedDetail.json.roles || [], `Po edycji użytkownik powinien mieć rolę operator: ${updatedDetail.text}`).toContain('operator');
+      expect(String(updatedDetail.json.last_name || '')).toBe('Operator');
+
+      const reset = await apiJson(request, 'POST', `/api/admin/users/${encodeURIComponent(email)}/password`, sid, {
+        data: { new_password: newPassword, confirm_password: newPassword }
+      });
+      expect(reset.res.ok(), `Reset hasła -> HTTP ${reset.res.status()}: ${reset.text}`).toBeTruthy();
+
+      const oldLogin = await request.post(`${baseURL}/api/login`, { data: { email, password: initialPassword } });
+      expect(oldLogin.ok(), 'Stare hasło nie powinno działać po resecie.').toBeFalsy();
+
+      const newSid = await apiLoginWith(request, email, newPassword);
+      const meAfterReset = await apiJson(request, 'GET', '/api/me', newSid);
+      expect(meAfterReset.res.ok(), `Login po resecie hasła -> HTTP ${meAfterReset.res.status()}: ${meAfterReset.text}`).toBeTruthy();
+
+      const deleted = await apiJson(request, 'DELETE', `/api/admin/users/${encodeURIComponent(email)}`, sid);
+      expect(deleted.res.ok(), `Usunięcie użytkownika -> HTTP ${deleted.res.status()}: ${deleted.text}`).toBeTruthy();
+
+      const missing = await apiJson(request, 'GET', `/api/admin/users/${encodeURIComponent(email)}`, sid);
+      expect(missing.res.status(), `Po usunięciu użytkownik powinien zwracać 404, otrzymano ${missing.res.status()}: ${missing.text}`).toBe(404);
+
+      const loginDeleted = await request.post(`${baseURL}/api/login`, { data: { email, password: newPassword } });
+      expect(loginDeleted.ok(), 'Usunięte konto nie powinno umożliwiać logowania.').toBeFalsy();
+    } finally {
+      await cleanupUser(request, sid, email);
+    }
+  });
+
+  test('API użytkowników odrzuca duplikat i blokuje usunięcie własnego konta administratora', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-').toLowerCase();
+    const email = `e2e-duplicate-${stamp}@example.local`;
+    const password = `E2eDuplicate-${Date.now()}!`;
+
+    await cleanupUser(request, sid, email);
+
+    try {
+      const create = await apiJson(request, 'POST', '/api/admin/users', sid, {
+        data: {
+          first_name: 'E2E',
+          last_name: 'Duplikat',
+          email,
+          department: 'IT',
+          roles: ['user'],
+          password
+        }
+      });
+      expect(create.res.ok(), `Utworzenie użytkownika do testu duplikatu -> HTTP ${create.res.status()}: ${create.text}`).toBeTruthy();
+
+      const duplicate = await apiJson(request, 'POST', '/api/admin/users', sid, {
+        data: {
+          first_name: 'E2E',
+          last_name: 'Duplikat',
+          email,
+          department: 'IT',
+          roles: ['user'],
+          password
+        }
+      });
+      expect(duplicate.res.status(), `Duplikat użytkownika powinien zwrócić 409, otrzymano ${duplicate.res.status()}: ${duplicate.text}`).toBe(409);
+
+      const selfDelete = await apiJson(request, 'DELETE', `/api/admin/users/${encodeURIComponent(adminEmail)}`, sid);
+      expect(selfDelete.res.status(), `Usunięcie własnego konta powinno być zablokowane 4xx, otrzymano ${selfDelete.res.status()}: ${selfDelete.text}`).toBeGreaterThanOrEqual(400);
+      expect(selfDelete.res.status(), `Usunięcie własnego konta powinno być zablokowane 4xx, otrzymano ${selfDelete.res.status()}: ${selfDelete.text}`).toBeLessThan(500);
+    } finally {
+      await cleanupUser(request, sid, email);
+    }
+  });
+
+  test('UI modułu Użytkownicy otwiera się bez błędów krytycznych', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+    const canRender = await page.evaluate(() => typeof (window as any).renderAdminUsers === 'function').catch(() => false);
+    if (canRender) {
+      await page.evaluate(() => (window as any).renderAdminUsers());
+    } else {
+      await clickFirstVisible(page, [
+        'button:has-text("Użytkownicy")',
+        'a:has-text("Użytkownicy")',
+        'text=Użytkownicy'
+      ]);
+    }
+    await page.waitForLoadState('networkidle');
+    await expect(page.locator('body')).toContainText(/Użytkownicy|Zarządzanie użytkownikami|Role/i, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime w module Użytkownicy: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error w module Użytkownicy: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx w module Użytkownicy: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+
 });
