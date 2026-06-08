@@ -601,6 +601,206 @@ test.describe('Helpdesk E2E SLA, raporty i audyt', () => {
 });
 
 
+test.describe('Helpdesk E2E rozszerzone walidacje workflow', () => {
+  async function createLowPriorityTicketForWorkflow(request: APIRequestContext, sid: string, titlePrefix: string) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: `${titlePrefix} ${stamp}`,
+        description: 'Zgłoszenie testowe dla rozszerzonej walidacji workflow.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Niski'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia testowego -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const ticketId = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia w odpowiedzi: ${created.text}`).toBeTruthy();
+    return { ticketId, stamp };
+  }
+
+  async function pickTransitionStatuses(request: APIRequestContext, sid: string, ticketId: number) {
+    const detail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia #${ticketId} -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+    const statuses: string[] = (detail.json.meta?.statuses || []).filter((s: string) => s && s !== 'Zamknięte');
+    test.skip(statuses.length < 3, `Workflow ma mniej niż 3 statusy testowe: ${statuses.join(', ')}`);
+    const initialStatus = ticket.status;
+    const intermediateStatus = statuses.find(s => s !== initialStatus) || statuses[0];
+    const targetStatus = statuses.find(s => s !== initialStatus && s !== intermediateStatus) || statuses.find(s => s !== intermediateStatus);
+    expect(intermediateStatus, 'Brak statusu pośredniego dla testu workflow.').toBeTruthy();
+    expect(targetStatus, 'Brak statusu docelowego dla testu workflow.').toBeTruthy();
+    return { ticket, statuses, initialStatus, intermediateStatus: intermediateStatus as string, targetStatus: targetStatus as string };
+  }
+
+  async function workflowForTicket(request: APIRequestContext, sid: string, workflowKey: string) {
+    const workflowsResponse = await apiJson(request, 'GET', '/api/admin/workflows', sid);
+    expect(workflowsResponse.res.ok(), `Lista workflow -> HTTP ${workflowsResponse.res.status()}: ${workflowsResponse.text}`).toBeTruthy();
+    const workflows = workflowsResponse.json.workflows || [];
+    const workflow = workflows.find((w: any) => w.workflow_key === workflowKey) || workflows.find((w: any) => w.is_default) || workflows[0];
+    expect(workflow?.id, 'Nie znaleziono workflow dla testu.').toBeTruthy();
+    return workflow;
+  }
+
+  async function createValidationRule(request: APIRequestContext, sid: string, workflowId: number, targetStatus: string, actionType: 'require_comment' | 'require_attachment', stamp: string) {
+    const payload = {
+      name: `E2E ${actionType} aktualny status ${stamp}`,
+      event_type: 'status_changed',
+      // Puste condition_status oznacza dowolny status źródłowy.
+      condition_status: '',
+      condition_to_status: targetStatus,
+      condition_role: '*',
+      condition_comment_visibility: '*',
+      assigned_state: '*',
+      condition_priority: 'Niski',
+      condition_category: 'Inne',
+      condition_subcategory: 'Inne',
+      condition_sla_state: '*',
+      condition_status_operator: 'eq',
+      condition_to_status_operator: 'eq',
+      condition_role_operator: 'eq',
+      condition_comment_visibility_operator: 'eq',
+      assigned_state_operator: 'eq',
+      condition_priority_operator: 'eq',
+      condition_category_operator: 'eq',
+      condition_subcategory_operator: 'eq',
+      condition_sla_state_operator: 'eq',
+      action_type: actionType,
+      action_status: '',
+      actions: [
+        { action_order: 1, action_type: actionType, action_value: null, is_active: true }
+      ],
+      is_active: true,
+      stop_processing: true,
+      priority: 1
+    };
+    const rule = await apiJson(request, 'POST', `/api/admin/workflows/${workflowId}/automations`, sid, { data: payload });
+    expect(rule.res.ok(), `Utworzenie reguły ${actionType} -> HTTP ${rule.res.status()}: ${rule.text}`).toBeTruthy();
+    const automationId = Number(rule.json.id || rule.json.automation_id);
+    expect(automationId, `Brak ID reguły workflow w odpowiedzi: ${rule.text}`).toBeTruthy();
+    return automationId;
+  }
+
+  test('stary komentarz sprzed wejścia w status nie spełnia wymogu komentarza', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const { ticketId, stamp } = await createLowPriorityTicketForWorkflow(request, sid, 'E2E stary komentarz');
+    const { ticket, intermediateStatus, targetStatus } = await pickTransitionStatuses(request, sid, ticketId);
+
+    const oldComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, sid, {
+      data: { content: `Stary komentarz przed zmianą statusu ${stamp}`, visibility: 'public' }
+    });
+    expect(oldComment.res.ok(), `Dodanie starego komentarza -> HTTP ${oldComment.res.status()}: ${oldComment.text}`).toBeTruthy();
+
+    const move = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: intermediateStatus } });
+    test.skip(!move.res.ok(), `Nie udało się ustawić statusu pośredniego ${intermediateStatus}: HTTP ${move.res.status()} ${move.text}`);
+
+    const workflow = await workflowForTicket(request, sid, ticket.workflow_key || 'default');
+    let automationId: number | undefined;
+    try {
+      automationId = await createValidationRule(request, sid, workflow.id, targetStatus, 'require_comment', stamp);
+
+      const blocked = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(blocked.res.status(), `Stary komentarz nie powinien spełnić wymogu; HTTP ${blocked.res.status()}: ${blocked.text}`).toBe(409);
+      expect(JSON.stringify(blocked.json)).toMatch(/comment|komentarz/i);
+
+      const currentComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, sid, {
+        data: { content: `Komentarz w aktualnym statusie ${stamp}`, visibility: 'public' }
+      });
+      expect(currentComment.res.ok(), `Dodanie aktualnego komentarza -> HTTP ${currentComment.res.status()}: ${currentComment.text}`).toBeTruthy();
+
+      const ok = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(ok.res.ok(), `Po aktualnym komentarzu zmiana statusu powinna przejść; HTTP ${ok.res.status()}: ${ok.text}`).toBeTruthy();
+    } finally {
+      if (automationId) await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, sid).catch(() => undefined);
+    }
+  });
+
+  test('stary załącznik sprzed wejścia w status nie spełnia wymogu załącznika', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const { ticketId, stamp } = await createLowPriorityTicketForWorkflow(request, sid, 'E2E stary załącznik');
+    const { ticket, intermediateStatus, targetStatus } = await pickTransitionStatuses(request, sid, ticketId);
+
+    const oldAttachment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/attachments`, sid, {
+      multipart: {
+        file: {
+          name: `e2e-old-attachment-${stamp}.txt`,
+          mimeType: 'text/plain',
+          buffer: Buffer.from('Stary załącznik dodany przed wejściem w aktualny status.\n')
+        }
+      }
+    });
+    expect(oldAttachment.res.ok(), `Dodanie starego załącznika -> HTTP ${oldAttachment.res.status()}: ${oldAttachment.text}`).toBeTruthy();
+
+    const move = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: intermediateStatus } });
+    test.skip(!move.res.ok(), `Nie udało się ustawić statusu pośredniego ${intermediateStatus}: HTTP ${move.res.status()} ${move.text}`);
+
+    const workflow = await workflowForTicket(request, sid, ticket.workflow_key || 'default');
+    let automationId: number | undefined;
+    try {
+      automationId = await createValidationRule(request, sid, workflow.id, targetStatus, 'require_attachment', stamp);
+
+      const blocked = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(blocked.res.status(), `Stary załącznik nie powinien spełnić wymogu; HTTP ${blocked.res.status()}: ${blocked.text}`).toBe(409);
+      expect(JSON.stringify(blocked.json)).toMatch(/attachment|załącznik/i);
+
+      const currentAttachment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/attachments`, sid, {
+        multipart: {
+          file: {
+            name: `e2e-current-attachment-${stamp}.txt`,
+            mimeType: 'text/plain',
+            buffer: Buffer.from('Załącznik dodany w aktualnym statusie.\n')
+          }
+        }
+      });
+      expect(currentAttachment.res.ok(), `Dodanie aktualnego załącznika -> HTTP ${currentAttachment.res.status()}: ${currentAttachment.text}`).toBeTruthy();
+
+      const ok = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(ok.res.ok(), `Po aktualnym załączniku zmiana statusu powinna przejść; HTTP ${ok.res.status()}: ${ok.text}`).toBeTruthy();
+    } finally {
+      if (automationId) await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, sid).catch(() => undefined);
+    }
+  });
+
+  test('komentarz innego operatora nie spełnia wymogu komentarza dla aktualnego operatora', async ({ request }) => {
+    test.skip(!operatorEmail || !operatorPassword, 'Ustaw HELPDESK_OPERATOR_EMAIL i HELPDESK_OPERATOR_PASSWORD, aby sprawdzić komentarz innego operatora.');
+    test.skip(operatorEmail === adminEmail, 'Konto operatora testowego musi być inne niż konto admina.');
+
+    const adminSid = await apiLogin(request);
+    const operatorSid = await apiLoginWith(request, operatorEmail, operatorPassword);
+    const { ticketId, stamp } = await createLowPriorityTicketForWorkflow(request, adminSid, 'E2E komentarz innego operatora');
+    const { ticket, intermediateStatus, targetStatus } = await pickTransitionStatuses(request, adminSid, ticketId);
+
+    const move = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, adminSid, { data: { status: intermediateStatus } });
+    test.skip(!move.res.ok(), `Nie udało się ustawić statusu pośredniego ${intermediateStatus}: HTTP ${move.res.status()} ${move.text}`);
+
+    const workflow = await workflowForTicket(request, adminSid, ticket.workflow_key || 'default');
+    let automationId: number | undefined;
+    try {
+      automationId = await createValidationRule(request, adminSid, workflow.id, targetStatus, 'require_comment', stamp);
+
+      const otherComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, operatorSid, {
+        data: { content: `Komentarz dodany przez innego operatora ${stamp}`, visibility: 'public' }
+      });
+      expect(otherComment.res.ok(), `Komentarz innego operatora -> HTTP ${otherComment.res.status()}: ${otherComment.text}`).toBeTruthy();
+
+      const blocked = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, adminSid, { data: { status: targetStatus } });
+      expect(blocked.res.status(), `Komentarz innego operatora nie powinien spełnić wymogu admina; HTTP ${blocked.res.status()}: ${blocked.text}`).toBe(409);
+      expect(JSON.stringify(blocked.json)).toMatch(/comment|komentarz/i);
+
+      const adminComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, adminSid, {
+        data: { content: `Komentarz aktualnego operatora ${stamp}`, visibility: 'public' }
+      });
+      expect(adminComment.res.ok(), `Komentarz aktualnego operatora -> HTTP ${adminComment.res.status()}: ${adminComment.text}`).toBeTruthy();
+
+      const ok = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, adminSid, { data: { status: targetStatus } });
+      expect(ok.res.ok(), `Po komentarzu aktualnego operatora zmiana statusu powinna przejść; HTTP ${ok.res.status()}: ${ok.text}`).toBeTruthy();
+    } finally {
+      if (automationId) await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, adminSid).catch(() => undefined);
+    }
+  });
+});
+
+
 
 test.describe('Helpdesk E2E negatywne API i uprawnienia', () => {
   test('API bez sesji oraz z błędnym SID zwraca 401', async ({ request }) => {

@@ -115,3 +115,18 @@ export HELPDESK_USER_PASSWORD="..."
 ```
 
 Jeżeli te zmienne nie są ustawione, testy zależne od operatora lub zwykłego użytkownika zostaną pominięte.
+
+## v12 — rozszerzone walidacje workflow
+
+Dodano scenariusze regresyjne dla najważniejszych założeń workflow:
+
+- stary komentarz dodany przed wejściem zgłoszenia w aktualny status nie spełnia wymogu komentarza,
+- stary załącznik dodany przed wejściem zgłoszenia w aktualny status nie spełnia wymogu załącznika,
+- komentarz dodany przez innego operatora nie spełnia wymogu dla operatora, który zmienia status.
+
+Ostatni test wymaga ustawienia konta operatora testowego:
+
+```bash
+export HELPDESK_OPERATOR_EMAIL="operator-test@example.local"
+export HELPDESK_OPERATOR_PASSWORD="HASLO_OPERATORA_LOKALNIE"
+```
