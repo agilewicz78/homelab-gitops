@@ -1,0 +1,15 @@
+
+# Local Python environment
+.venv/
+__pycache__/
+*.pyc
+
+# Node dependencies
+node_modules/
+
+# Playwright outputs
+playwright-report/
+test-results/
+
+# Local environment files with secrets
+.env
