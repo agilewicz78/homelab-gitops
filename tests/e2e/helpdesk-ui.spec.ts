@@ -1934,4 +1934,189 @@ test.describe('Helpdesk E2E powiązane zgłoszenia i duplikaty', () => {
   });
 });
 
+
+test.describe('Helpdesk E2E administracja workflow', () => {
+  async function workflowForAdmin(request: APIRequestContext, sid: string, workflowKey?: string) {
+    const workflowsResponse = await apiJson(request, 'GET', '/api/admin/workflows', sid);
+    expect(workflowsResponse.res.ok(), `Lista workflow -> HTTP ${workflowsResponse.res.status()}: ${workflowsResponse.text}`).toBeTruthy();
+    const workflows = workflowsResponse.json.workflows || [];
+    const workflow = workflows.find((w: any) => workflowKey && w.workflow_key === workflowKey) || workflows.find((w: any) => w.is_default) || workflows[0];
+    expect(workflow?.id, `Brak workflow w odpowiedzi: ${workflowsResponse.text.slice(0, 1200)}`).toBeTruthy();
+    return workflow;
+  }
+
+  async function createWorkflowAdminTicket(request: APIRequestContext, sid: string, stamp: string) {
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: `E2E administracja workflow ${stamp}`,
+        description: 'Zgłoszenie pomocnicze do testu administracji workflow.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Niski'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia pomocniczego workflow -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const ticketId = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia pomocniczego: ${created.text}`).toBeTruthy();
+
+    const detail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia pomocniczego #${ticketId} -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+    const statuses: string[] = (detail.json.meta?.statuses || []).filter((s: string) => s && s !== 'Zamknięte');
+    test.skip(statuses.length < 2, `Za mało statusów workflow do testu administracji: ${statuses.join(', ')}`);
+    const currentStatus = ticket.status || statuses[0] || 'Nowe';
+    const targetStatus = statuses.find(s => s !== currentStatus) || statuses[0];
+    expect(targetStatus, `Brak statusu docelowego dla zgłoszenia pomocniczego: ${JSON.stringify(detail.json.meta || {})}`).toBeTruthy();
+    return { ticket, ticketId, currentStatus, targetStatus: targetStatus as string };
+  }
+
+  function workflowAdminRulePayload(name: string, targetStatus: string) {
+    return {
+      name,
+      event_type: 'status_changed',
+      // Do zapisu reguły używamy tego samego wariantu, który działa w testach walidacji:
+      // pusty condition_status = dowolny status źródłowy.
+      // Uwaga: endpoint symulacji interpretuje taki zapis inaczej, dlatego niżej
+      // do samego testu symulacji budujemy osobną kopię z konkretnym currentStatus.
+      condition_status: '',
+      condition_to_status: targetStatus,
+      condition_role: '*',
+      condition_comment_visibility: '*',
+      assigned_state: '*',
+      condition_priority: 'Niski',
+      condition_category: 'Inne',
+      condition_subcategory: 'Inne',
+      condition_sla_state: '*',
+      condition_status_operator: 'eq',
+      condition_to_status_operator: 'eq',
+      condition_role_operator: 'eq',
+      condition_comment_visibility_operator: 'eq',
+      assigned_state_operator: 'eq',
+      condition_priority_operator: 'eq',
+      condition_category_operator: 'eq',
+      condition_subcategory_operator: 'eq',
+      condition_sla_state_operator: 'eq',
+      action_type: 'require_comment',
+      action_status: '',
+      actions: [
+        { action_order: 1, action_type: 'require_comment', action_value: null, is_active: true }
+      ],
+      is_active: true,
+      stop_processing: true,
+      priority: 1
+    };
+  }
+
+  test('API administracji workflow tworzy, testuje i usuwa regułę automatyzacji', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const { ticket, currentStatus, targetStatus } = await createWorkflowAdminTicket(request, sid, stamp);
+    const workflow = await workflowForAdmin(request, sid, ticket.workflow_key || 'default');
+    const ruleName = `E2E admin workflow rule ${stamp}`;
+    const payload = workflowAdminRulePayload(ruleName, targetStatus);
+    let automationId: number | undefined;
+
+    try {
+      const created = await apiJson(request, 'POST', `/api/admin/workflows/${workflow.id}/automations`, sid, { data: payload });
+      expect(created.res.ok(), `Utworzenie reguły workflow -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+      automationId = Number(created.json.id || created.json.automation_id);
+      expect(automationId, `Brak ID reguły workflow w odpowiedzi: ${created.text}`).toBeTruthy();
+
+      const workflowsAfterCreate = await apiJson(request, 'GET', '/api/admin/workflows', sid);
+      expect(workflowsAfterCreate.res.ok(), `Lista workflow po utworzeniu reguły -> HTTP ${workflowsAfterCreate.res.status()}: ${workflowsAfterCreate.text}`).toBeTruthy();
+      expect(JSON.stringify(workflowsAfterCreate.json), 'Lista workflow powinna zawierać nazwę reguły testowej.').toContain(ruleName);
+
+      const sampleBase = {
+        event_type: 'status_changed',
+        current_status: currentStatus,
+        event_new_status: targetStatus,
+        actor_role: 'operator',
+        comment_visibility: 'public',
+        assigned_state: 'assigned',
+        priority: 'Niski',
+        category: 'Inne',
+        subcategory: 'Inne',
+        sla_state: 'ok',
+        operator_added_attachment: false
+      };
+
+      // Symulator workflow nie traktuje pustego condition_status tak samo jak zapis reguły.
+      // Dlatego do samej symulacji przekazujemy kopię reguły z konkretnym statusem źródłowym,
+      // żeby sprawdzić logikę require_comment bez zmiany działającego formatu zapisu.
+      const simulationRule = { ...payload, condition_status: currentStatus, condition_to_status: targetStatus };
+      const simulationBlocked = await apiJson(request, 'POST', `/api/admin/workflows/${workflow.id}/automations/test`, sid, {
+        data: { rule: simulationRule, sample: { ...sampleBase, operator_added_comment: false } }
+      });
+      expect(simulationBlocked.res.ok(), `Test reguły workflow bez komentarza -> HTTP ${simulationBlocked.res.status()}: ${simulationBlocked.text}`).toBeTruthy();
+      expect(simulationBlocked.json.matched, `Reguła powinna pasować do danych testowych: ${simulationBlocked.text}`).toBeTruthy();
+      expect(simulationBlocked.json.blocked_by_validation, `Reguła powinna blokować operację bez komentarza: ${simulationBlocked.text}`).toBeTruthy();
+      expect(JSON.stringify(simulationBlocked.json.missing_requirements || []), 'Brakujący wymóg powinien zawierać komentarz.').toMatch(/comment/i);
+
+      const simulationAllowed = await apiJson(request, 'POST', `/api/admin/workflows/${workflow.id}/automations/test`, sid, {
+        data: { rule: simulationRule, sample: { ...sampleBase, operator_added_comment: true } }
+      });
+      expect(simulationAllowed.res.ok(), `Test reguły workflow z komentarzem -> HTTP ${simulationAllowed.res.status()}: ${simulationAllowed.text}`).toBeTruthy();
+      expect(simulationAllowed.json.blocked_by_validation, `Reguła nie powinna blokować po dodaniu komentarza: ${simulationAllowed.text}`).toBeFalsy();
+      expect(Array.isArray(simulationAllowed.json.actions_preview || []), 'Test reguły powinien zwracać podgląd akcji.').toBeTruthy();
+
+      const deleted = await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, sid);
+      expect(deleted.res.ok(), `Usunięcie reguły workflow -> HTTP ${deleted.res.status()}: ${deleted.text}`).toBeTruthy();
+      automationId = undefined;
+    } finally {
+      if (automationId) {
+        await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, sid).catch(() => undefined);
+      }
+    }
+  });
+
+  test('UI panelu Workflow, szablonów i logu automatyzacji otwiera się bez błędów krytycznych', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+    await openModule(page, 'Workflow', 'renderAdminWorkflows');
+    await expect(page.locator('body')).toContainText(/Workflow|Reguły|Automatyzacje|Log automatyzacji/i, { timeout: 15000 });
+
+    try {
+      await clickFirstVisible(page, [
+        'button:has-text("Edytuj")',
+        'text=Edytuj'
+      ]);
+    } catch (_) {
+      const canRenderForm = await page.evaluate(() => typeof (window as any).renderAdminWorkflowForm === 'function').catch(() => false);
+      test.skip(!canRenderForm, 'Brak widocznego przycisku Edytuj i brak funkcji renderAdminWorkflowForm w UI.');
+      await page.evaluate(() => (window as any).renderAdminWorkflowForm());
+    }
+    await expect(page.locator('body')).toContainText(/Reguły automatyzacji|Automatyzacje workflow|Test reguły|Dodaj z szablonu/i, { timeout: 15000 });
+
+    const templateButtonCount = await firstVisibleCount(page, 'button:has-text("Dodaj z szablonu")');
+    if (templateButtonCount > 0) {
+      await (await firstVisibleLocator(page, 'button:has-text("Dodaj z szablonu")')).click();
+      await expect(page.locator('body')).toContainText(/Szablon|Użyj tego szablonu|Dodaj regułę z szablonu/i, { timeout: 10000 });
+    }
+
+    const canRenderLog = await page.evaluate(() => typeof (window as any).renderWorkflowRuleExecutions === 'function').catch(() => false);
+    if (canRenderLog) {
+      await page.evaluate(() => (window as any).renderWorkflowRuleExecutions());
+    } else {
+      await openModule(page, 'Workflow', 'renderAdminWorkflows');
+      await clickFirstVisible(page, ['button:has-text("Log automatyzacji")', 'button:has-text("Log")', 'text=Log automatyzacji']);
+    }
+    await expect(page.locator('body')).toContainText(/Log automatyzacji|Reguła|Zdarzenie|Wynik|Brak wpisów logu/i, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime w panelu Workflow: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error w panelu Workflow: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx w panelu Workflow: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+
 });

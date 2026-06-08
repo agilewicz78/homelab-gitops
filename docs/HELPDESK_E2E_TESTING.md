@@ -251,3 +251,14 @@ Dodano testy E2E dla powiązań zgłoszeń:
 - renderowanie sekcji Powiązane zgłoszenia w UI bez błędów JavaScript i HTTP 5xx.
 
 Test duplikatów jest obecnie oznaczony jako `skip`, ponieważ aktualny model aplikacji obsługuje tylko `relation_type = related`. Po dodaniu formalnej funkcji „duplikat zgłoszenia” test należy aktywować i rozszerzyć.
+
+## Pakiet v25 — administracja workflow
+
+Dodano testy regresyjne panelu administracji workflow:
+
+- API tworzenia, testowania i usuwania reguły automatyzacji workflow.
+- Symulacja reguły przez `/api/admin/workflows/<id>/automations/test`.
+- Sprawdzenie blokady walidacyjnej `require_comment` oraz podglądu akcji.
+- UI panelu Workflow, listy szablonów i logu automatyzacji bez błędów JavaScript oraz HTTP 5xx.
+
+Te testy zabezpieczają wcześniejsze regresje w obszarze workflow, m.in. brakujące funkcje JavaScript, błędy przycisku `Dodaj z szablonu` oraz problemy z widokiem logu automatyzacji.
