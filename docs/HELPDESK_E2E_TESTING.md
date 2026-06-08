@@ -1,108 +1,115 @@
 # Helpdesk — testy API i UI E2E
 
-Ten pakiet służy do testowania helpdesku w Twoim labie. Testy UI wymagają dostępu do adresu aplikacji, np. `https://helpdesk.lab.local`, dlatego uruchamiaj je na komputerze, który widzi Twoją sieć labową i ma rozwiązywanie DNS/hosts dla `helpdesk.lab.local`.
+Ten katalog zawiera testy uruchamiane lokalnie z maszyny, która widzi adres `https://helpdesk.lab.local`.
+Nie zapisuj haseł w repozytorium. Dane logowania podawaj wyłącznie przez zmienne środowiskowe.
 
-## 1. Wymagania
-
-Na komputerze testującym zainstaluj:
-
-- Python 3.10+
-- Node.js 20+
-- npm
-- dostęp sieciowy do `https://helpdesk.lab.local`
-
-Sprawdź połączenie:
+## Wymagania
 
 ```bash
-curl -k -I https://helpdesk.lab.local
+sudo apt install -y python3-venv python3-pip nodejs npm
 ```
 
-## 2. Rozpakowanie paczki
-
-Z katalogu repo:
+## Konfiguracja Python
 
 ```bash
-unzip helpdesk-e2e-tests.zip -d .
+cd ~/homelab-gitops
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install requests
 ```
 
-## 3. Test API smoke
-
-Ustaw dane testowe tylko lokalnie w terminalu:
+## Zmienne środowiskowe
 
 ```bash
 export HELPDESK_URL="https://helpdesk.lab.local"
-export HELPDESK_ADMIN_EMAIL="admin@example.local"
+export HELPDESK_ADMIN_EMAIL="admin@incoprp.local"
 export HELPDESK_ADMIN_PASSWORD="TU_WPISZ_HASLO_LOKALNIE"
+export HELPDESK_IGNORE_TLS=1
 ```
 
-Uruchom:
+## Smoke test API
+
+Podstawowy test API:
 
 ```bash
-python3 -m pip install requests
-python3 scripts/helpdesk_api_smoke.py --insecure
+python scripts/helpdesk_api_smoke.py --insecure
 ```
 
-Opcjonalnie, aby test utworzył testowe zgłoszenie:
+Test API z utworzeniem zgłoszenia:
 
 ```bash
-python3 scripts/helpdesk_api_smoke.py --insecure --create-ticket
+python scripts/helpdesk_api_smoke.py --insecure --create-ticket
 ```
 
-## 4. Testy UI Playwright
+Test API z utworzeniem zgłoszenia, dodaniem komentarza, dodaniem załącznika i ponowną weryfikacją szczegółów:
 
-Instalacja:
+```bash
+python scripts/helpdesk_api_smoke.py --insecure --exercise-ticket
+```
+
+## Testy UI Playwright
+
+Instalacja zależności:
 
 ```bash
 npm install
 npx playwright install chromium
 ```
 
-Uruchomienie w trybie headless:
+Uruchomienie testów UI:
 
 ```bash
-export HELPDESK_URL="https://helpdesk.lab.local"
-export HELPDESK_ADMIN_EMAIL="admin@example.local"
-export HELPDESK_ADMIN_PASSWORD="TU_WPISZ_HASLO_LOKALNIE"
-export HELPDESK_IGNORE_TLS=1
 npm run test:e2e
 ```
 
-Uruchomienie z widoczną przeglądarką:
+Uruchomienie testów UI z widoczną przeglądarką:
 
 ```bash
 npm run test:e2e:headed
 ```
 
-Raport:
+Raport HTML:
 
 ```bash
 npm run report
 ```
 
-## 5. Co przesłać do analizy
+## Zakres testów UI
 
-Po nieudanym teście spakuj i prześlij:
+Testy UI sprawdzają obecnie:
+
+- logowanie i start aplikacji,
+- ładowanie listy zgłoszeń,
+- podstawowe moduły administracyjne bez błędów JavaScript i HTTP 5xx,
+- utworzenie zgłoszenia przez UI,
+- dodanie komentarza do zgłoszenia przez UI,
+- dodanie załącznika do zgłoszenia przez UI.
+
+## Gdy test się nie powiedzie
+
+Zbierz wyniki Playwrighta:
 
 ```bash
-tar -czf helpdesk-test-results.tar.gz playwright-report test-results
-kubectl logs -n helpdesk deploy/helpdesk-app --tail=300 > helpdesk-app.log
-kubectl get pods -n helpdesk -o wide > helpdesk-pods.txt
-kubectl describe pod -n helpdesk -l app=helpdesk-app > helpdesk-pod-describe.txt
+tar -czf helpdesk-ui-test-results.tar.gz playwright-report test-results
 ```
 
-Prześlij:
+Zbierz logi aplikacji:
 
-- `helpdesk-test-results.tar.gz`
-- `helpdesk-app.log`
-- `helpdesk-pods.txt`
-- `helpdesk-pod-describe.txt`
+```bash
+kubectl logs -n helpdesk deploy/helpdesk-app --tail=300 > helpdesk-app.log
+kubectl get pods -n helpdesk -o wide > helpdesk-pods.txt
+```
 
-Nie przesyłaj haseł, tokenów, sekretów ani plików `.env`.
+Prześlij do analizy:
 
-## 6. Opcja GitHub Actions
+```text
+helpdesk-ui-test-results.tar.gz
+helpdesk-app.log
+helpdesk-pods.txt
+```
 
-Publiczny runner GitHub nie widzi `helpdesk.lab.local`. Testy E2E w GitHub Actions mają sens dopiero po dodaniu self-hosted runnera w Twojej sieci labowej. Bez tego GitHub Actions może uruchamiać tylko testy statyczne.
 
-## Uwaga do testu UI v3
+## v5
 
-Wersja v3 nie traktuje samego komunikatu przeglądarki `Failed to load resource ... 401/403` jako błędu JavaScript. Takie wpisy mogą pojawić się przy sprawdzaniu modułów zależnych od uprawnień. Test nadal wykrywa realne błędy runtime, np. `ReferenceError`, `is not defined`, błędy logu automatyzacji oraz odpowiedzi HTTP 5xx.
+Poprawiono helpery UI `clickFirstVisible` i `fillFirstVisible`, żeby czekały na asynchroniczne wyrenderowanie widoków po logowaniu.

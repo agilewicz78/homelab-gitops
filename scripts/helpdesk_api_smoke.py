@@ -132,6 +132,45 @@ def create_ticket_if_enabled(client: HelpdeskClient, enabled: bool) -> Optional[
     raise SmokeFailure(f"Nie udało się utworzyć zgłoszenia testowego. Ostatni błąd: {last_error}")
 
 
+
+def exercise_ticket_if_enabled(client: HelpdeskClient, ticket_id: Optional[int], enabled: bool) -> None:
+    """Opcjonalny test funkcjonalny API: komentarz, załącznik i ponowny odczyt zgłoszenia."""
+    if not enabled:
+        print("[SKIP] Ćwiczenie zgłoszenia pominięte; użyj --exercise-ticket aby włączyć")
+        return
+    if ticket_id is None:
+        ticket_id = create_ticket_if_enabled(client, True)
+    if ticket_id is None:
+        raise SmokeFailure("Nie udało się ustalić ID zgłoszenia do testu funkcjonalnego")
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    comment = f"Komentarz smoke API {stamp}"
+    response = client.request("POST", f"/api/tickets/{ticket_id}/comments", json={"content": comment, "visibility": "public"})
+    if response.status_code not in (200, 201):
+        raise SmokeFailure(f"Dodanie komentarza do #{ticket_id} -> HTTP {response.status_code}: {response.text[:500]}")
+    print_ok(f"Dodano komentarz do zgłoszenia #{ticket_id}")
+
+    filename = f"smoke-api-{stamp}.txt"
+    file_bytes = b"Zalacznik testowy smoke API.\n"
+    response = client.request(
+        "POST",
+        f"/api/tickets/{ticket_id}/attachments",
+        files={"file": (filename, file_bytes, "text/plain")},
+    )
+    if response.status_code not in (200, 201):
+        raise SmokeFailure(f"Dodanie załącznika do #{ticket_id} -> HTTP {response.status_code}: {response.text[:500]}")
+    print_ok(f"Dodano załącznik do zgłoszenia #{ticket_id}")
+
+    detail = client.json_request("GET", f"/api/tickets/{ticket_id}")
+    comments = detail.get("comments", [])
+    attachments = detail.get("attachments", [])
+    if not any(comment in str(c.get("content", "")) for c in comments):
+        raise SmokeFailure(f"Po dodaniu komentarza nie znaleziono go w szczegółach zgłoszenia #{ticket_id}")
+    if not any(filename == a.get("original_filename") for a in attachments):
+        raise SmokeFailure(f"Po dodaniu załącznika nie znaleziono pliku {filename} w szczegółach zgłoszenia #{ticket_id}")
+    print_ok(f"Szczegóły zgłoszenia #{ticket_id} zawierają dodany komentarz i załącznik")
+
+
 def check_optional_endpoints(client: HelpdeskClient) -> None:
     endpoints = [
         ("GET", "/api/reports"),
@@ -155,6 +194,7 @@ def main() -> int:
     parser.add_argument("--password", default=os.environ.get("HELPDESK_ADMIN_PASSWORD"), help="Hasło konta testowego/admina")
     parser.add_argument("--insecure", action="store_true", help="Wyłącz weryfikację TLS, przydatne dla labowego CA")
     parser.add_argument("--create-ticket", action="store_true", help="Utwórz testowe zgłoszenie")
+    parser.add_argument("--exercise-ticket", action="store_true", help="Utwórz lub użyj zgłoszenia testowego, dodaj komentarz i załącznik, a potem zweryfikuj szczegóły")
     args = parser.parse_args()
 
     if not args.url or not args.email or not args.password:
@@ -172,7 +212,9 @@ def main() -> int:
         print_step("Opcjonalne endpointy")
         check_optional_endpoints(client)
         print_step("Tworzenie zgłoszenia testowego")
-        create_ticket_if_enabled(client, args.create_ticket)
+        ticket_id = create_ticket_if_enabled(client, args.create_ticket)
+        print_step("Komentarz i załącznik API")
+        exercise_ticket_if_enabled(client, ticket_id, args.exercise_ticket)
     except SmokeFailure as exc:
         print(f"\n[FAIL] {exc}", file=sys.stderr)
         return 1
