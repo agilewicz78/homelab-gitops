@@ -236,3 +236,18 @@ Pakiet v21 rozszerza testy o zarządzanie użytkownikami:
 - otwarcie ekranu `Użytkownicy` w UI bez błędów JS i HTTP 5xx.
 
 Testy tworzą konta z prefiksem `e2e-...@example.local` i próbują je usunąć w bloku `finally`, żeby nie zostawiać danych testowych po nieudanym przebiegu.
+
+
+## Pakiet v22 — powiązane zgłoszenia i duplikaty
+
+Dodano testy E2E dla powiązań zgłoszeń:
+
+- dodanie powiązania między dwoma zgłoszeniami przez API,
+- walidacja, że nie można powiązać zgłoszenia z samym sobą,
+- walidacja, że nie można dodać tego samego powiązania drugi raz,
+- widoczność powiązania w obu zgłoszeniach,
+- zapis informacji o dodaniu/usunięciu powiązania w historii aktywności,
+- usunięcie powiązania,
+- renderowanie sekcji Powiązane zgłoszenia w UI bez błędów JavaScript i HTTP 5xx.
+
+Test duplikatów jest obecnie oznaczony jako `skip`, ponieważ aktualny model aplikacji obsługuje tylko `relation_type = related`. Po dodaniu formalnej funkcji „duplikat zgłoszenia” test należy aktywować i rozszerzyć.

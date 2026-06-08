@@ -1025,13 +1025,44 @@ test.describe('Helpdesk E2E role użytkowników i widoczność modułów', () =>
     return { sid, permissions, roles, raw: response.json };
   }
 
+  async function moduleMenuVisibleCount(page: Page, label: string): Promise<number> {
+    // Menu aplikacji renderuje się asynchronicznie po /api/me.
+    // Szukamy najpierw w elementach nawigacyjnych, a dopiero potem w tekście strony,
+    // żeby nie pomylić widocznego menu z ukrytymi wpisami powiadomień.
+    const selectors = [
+      `nav a:has-text("${label}")`,
+      `header a:has-text("${label}")`,
+      `.topbar a:has-text("${label}")`,
+      `.nav a:has-text("${label}")`,
+      `a:has-text("${label}")`,
+      `button:has-text("${label}")`,
+      `[role="button"]:has-text("${label}")`,
+      `text=${label}`,
+    ];
+
+    let visible = 0;
+    for (const selector of selectors) {
+      visible += await firstVisibleCount(page, selector);
+    }
+    return visible;
+  }
+
   async function assertMenuMatchesPermissions(page: Page, permissions: Set<string>, accountLabel: string) {
+    await page.waitForLoadState('networkidle').catch(() => undefined);
+    await page.waitForTimeout(500);
+
     for (const item of moduleExpectations) {
       const expectedVisible = item.permissions.some(permission => permissions.has(permission));
-      const visibleCount = await firstVisibleCount(page, `text=${item.label}`);
       if (expectedVisible) {
-        expect(visibleCount, `${accountLabel}: moduł "${item.label}" powinien być widoczny, bo użytkownik ma jedno z uprawnień: ${item.permissions.join(', ')}`).toBeGreaterThan(0);
+        await expect.poll(
+          async () => moduleMenuVisibleCount(page, item.label),
+          {
+            message: `${accountLabel}: moduł "${item.label}" powinien być widoczny, bo użytkownik ma jedno z uprawnień: ${item.permissions.join(', ')}`,
+            timeout: 10000,
+          }
+        ).toBeGreaterThan(0);
       } else {
+        const visibleCount = await moduleMenuVisibleCount(page, item.label);
         expect(visibleCount, `${accountLabel}: moduł "${item.label}" powinien być ukryty, bo użytkownik nie ma uprawnień: ${item.permissions.join(', ')}`).toBe(0);
       }
     }
@@ -1780,6 +1811,126 @@ test.describe('Helpdesk E2E zarządzanie użytkownikami', () => {
     expect(pageErrors, `Błędy JavaScript runtime w module Użytkownicy: ${pageErrors.join('\n')}`).toHaveLength(0);
     expect(realConsoleErrors, `Błędy console.error w module Użytkownicy: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
     expect(serverErrors, `Błędy HTTP 5xx w module Użytkownicy: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+
+
+test.describe('Helpdesk E2E powiązane zgłoszenia i duplikaty', () => {
+  function linkedTicketsFromDetail(payload: any): any[] {
+    const ticket = ticketFromDetail(payload);
+    if (Array.isArray(payload?.linked_tickets)) return payload.linked_tickets;
+    if (Array.isArray(payload?.related_tickets)) return payload.related_tickets;
+    if (Array.isArray(payload?.links)) return payload.links;
+    if (Array.isArray(ticket?.linked_tickets)) return ticket.linked_tickets;
+    if (Array.isArray(ticket?.related_tickets)) return ticket.related_tickets;
+    if (Array.isArray(ticket?.links)) return ticket.links;
+    return [];
+  }
+
+  function linkIds(rows: any[]): number[] {
+    return rows
+      .map((row: any) => Number(row.linked_ticket_id || row.ticket_id || row.id || row.ticket?.id || row.linked_ticket?.id))
+      .filter((id: number) => Number.isFinite(id) && id > 0);
+  }
+
+  function detailEvents(payload: any): any[] {
+    return Array.isArray(payload?.events) ? payload.events : [];
+  }
+
+  async function removeLinkIfExists(request: APIRequestContext, sid: string, ticketId: number, linkedTicketId: number) {
+    await apiJson(request, 'DELETE', `/api/tickets/${ticketId}/links/${linkedTicketId}`, sid).catch(() => undefined);
+  }
+
+  test('API dodaje powiązanie zgłoszeń, pokazuje je w obu zgłoszeniach i pozwala je usunąć', async ({ request }) => {
+    const first = await apiCreateTicket(request, 'E2E powiązanie A');
+    const second = await apiCreateTicket(request, 'E2E powiązanie B');
+    const sid = first.sid;
+
+    try {
+      const selfLink = await apiJson(request, 'POST', `/api/tickets/${first.id}/links`, sid, {
+        data: { linked_ticket_id: first.id, relation_type: 'related' }
+      });
+      expect(selfLink.res.status(), `Powiązanie zgłoszenia z samym sobą powinno zwrócić 4xx, otrzymano ${selfLink.res.status()}: ${selfLink.text}`).toBeGreaterThanOrEqual(400);
+      expect(selfLink.res.status(), `Powiązanie zgłoszenia z samym sobą nie powinno zwracać 5xx, otrzymano ${selfLink.res.status()}: ${selfLink.text}`).toBeLessThan(500);
+
+      const addLink = await apiJson(request, 'POST', `/api/tickets/${first.id}/links`, sid, {
+        data: { linked_ticket_id: second.id, relation_type: 'related' }
+      });
+      expect(addLink.res.ok(), `Dodanie powiązania -> HTTP ${addLink.res.status()}: ${addLink.text}`).toBeTruthy();
+
+      const duplicate = await apiJson(request, 'POST', `/api/tickets/${first.id}/links`, sid, {
+        data: { linked_ticket_id: second.id, relation_type: 'related' }
+      });
+      expect(duplicate.res.status(), `Ponowne dodanie tego samego powiązania powinno zwrócić 409, otrzymano ${duplicate.res.status()}: ${duplicate.text}`).toBe(409);
+
+      const firstDetail = await apiJson(request, 'GET', `/api/tickets/${first.id}`, sid);
+      const secondDetail = await apiJson(request, 'GET', `/api/tickets/${second.id}`, sid);
+      expect(firstDetail.res.ok(), `Szczegóły pierwszego zgłoszenia -> HTTP ${firstDetail.res.status()}: ${firstDetail.text}`).toBeTruthy();
+      expect(secondDetail.res.ok(), `Szczegóły drugiego zgłoszenia -> HTTP ${secondDetail.res.status()}: ${secondDetail.text}`).toBeTruthy();
+
+      expect(linkIds(linkedTicketsFromDetail(firstDetail.json)), `Pierwsze zgłoszenie powinno zawierać powiązanie do #${second.id}: ${firstDetail.text.slice(0, 1200)}`).toContain(second.id);
+      expect(linkIds(linkedTicketsFromDetail(secondDetail.json)), `Drugie zgłoszenie powinno zawierać powiązanie do #${first.id}: ${secondDetail.text.slice(0, 1200)}`).toContain(first.id);
+
+      const eventsText = JSON.stringify([...detailEvents(firstDetail.json), ...detailEvents(secondDetail.json)], null, 2);
+      expect(eventsText, 'Historia aktywności powinna zawierać informację o dodaniu powiązania.').toMatch(/powiąz|link|related/i);
+
+      const remove = await apiJson(request, 'DELETE', `/api/tickets/${first.id}/links/${second.id}`, sid);
+      expect(remove.res.ok(), `Usunięcie powiązania -> HTTP ${remove.res.status()}: ${remove.text}`).toBeTruthy();
+
+      const afterFirst = await apiJson(request, 'GET', `/api/tickets/${first.id}`, sid);
+      const afterSecond = await apiJson(request, 'GET', `/api/tickets/${second.id}`, sid);
+      expect(linkIds(linkedTicketsFromDetail(afterFirst.json)), `Po usunięciu pierwsze zgłoszenie nie powinno zawierać powiązania do #${second.id}.`).not.toContain(second.id);
+      expect(linkIds(linkedTicketsFromDetail(afterSecond.json)), `Po usunięciu drugie zgłoszenie nie powinno zawierać powiązania do #${first.id}.`).not.toContain(first.id);
+
+      const afterEventsText = JSON.stringify([...detailEvents(afterFirst.json), ...detailEvents(afterSecond.json)], null, 2);
+      expect(afterEventsText, 'Historia aktywności powinna zawierać informację o usunięciu powiązania.').toMatch(/usun.*powiąz|powiąz.*usun|removed|link_removed/i);
+    } finally {
+      await removeLinkIfExists(request, sid, first.id, second.id);
+      await removeLinkIfExists(request, sid, second.id, first.id);
+    }
+  });
+
+  test('UI szczegółów zgłoszenia pokazuje sekcję powiązanych zgłoszeń bez błędów krytycznych', async ({ page, request }) => {
+    const first = await apiCreateTicket(request, 'E2E UI powiązanie A');
+    const second = await apiCreateTicket(request, 'E2E UI powiązanie B');
+    const sid = first.sid;
+
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    try {
+      const addLink = await apiJson(request, 'POST', `/api/tickets/${first.id}/links`, sid, {
+        data: { linked_ticket_id: second.id, relation_type: 'related' }
+      });
+      expect(addLink.res.ok(), `Dodanie powiązania przez API przed testem UI -> HTTP ${addLink.res.status()}: ${addLink.text}`).toBeTruthy();
+
+      await login(page);
+      await openTicketInUi(page, first.id);
+      await expect(page.locator('body')).toContainText(/Powiązane zgłoszenia|Powiązania|Dodaj powiązanie/i, { timeout: 15000 });
+      await expect(page.locator('body')).toContainText(new RegExp(`#${second.id}\\b|${escapeRegExp(second.title)}`), { timeout: 15000 });
+
+      const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+      expect(pageErrors, `Błędy JavaScript runtime w sekcji powiązań: ${pageErrors.join('\n')}`).toHaveLength(0);
+      expect(realConsoleErrors, `Błędy console.error w sekcji powiązań: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+      expect(serverErrors, `Błędy HTTP 5xx w sekcji powiązań: ${serverErrors.join('\n')}`).toHaveLength(0);
+    } finally {
+      await removeLinkIfExists(request, sid, first.id, second.id);
+      await removeLinkIfExists(request, sid, second.id, first.id);
+    }
+  });
+
+  test.skip('duplikaty zgłoszeń: osobny typ relacji duplicate nie jest jeszcze wdrożony w aktualnym modelu', async () => {
+    // Obecna aplikacja obsługuje relację ticket_links jako relation_type = "related".
+    // Gdy dodamy formalny model duplikatów, ten test należy zmienić na aktywny scenariusz:
+    // oznacz zgłoszenie B jako duplikat A, sprawdź widoczność relacji, historię oraz walidacje.
   });
 });
 
