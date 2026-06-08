@@ -1483,4 +1483,141 @@ test.describe('Helpdesk E2E powiadomienia', () => {
   });
 });
 
+
+test.describe('Helpdesk E2E historia statusu i aktywności zgłoszenia', () => {
+  function arrayFromDetail(payload: any, key: string): any[] {
+    return Array.isArray(payload?.[key]) ? payload[key] : [];
+  }
+
+  function stringifyArray(rows: any[]): string {
+    return JSON.stringify(rows, null, 2);
+  }
+
+  async function pickAnyTargetStatus(request: APIRequestContext, sid: string, ticketId: number) {
+    const detail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia #${ticketId} -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+    const statuses: string[] = (detail.json.meta?.statuses || []).filter((s: string) => s && s !== ticket.status && s !== 'Zamknięte');
+    const targetStatus = statuses[0];
+    expect(targetStatus, `Brak statusu docelowego innego niż ${ticket.status}. Dostępne statusy: ${(detail.json.meta?.statuses || []).join(', ')}`).toBeTruthy();
+    return { oldStatus: ticket.status as string, targetStatus: targetStatus as string };
+  }
+
+  test('zmiana statusu zapisuje wpis w status_history oraz aktywności zgłoszenia', async ({ request }) => {
+    const created = await apiCreateTicket(request, 'E2E historia statusu');
+    const { oldStatus, targetStatus } = await pickAnyTargetStatus(request, created.sid, created.id);
+
+    const before = await apiJson(request, 'GET', `/api/tickets/${created.id}`, created.sid);
+    const beforeStatusHistory = arrayFromDetail(before.json, 'status_history').length;
+    const beforeEvents = arrayFromDetail(before.json, 'events').length;
+
+    const change = await apiJson(request, 'POST', `/api/tickets/${created.id}/status`, created.sid, { data: { status: targetStatus } });
+    expect(change.res.ok(), `Zmiana statusu -> HTTP ${change.res.status()}: ${change.text}`).toBeTruthy();
+
+    const after = await apiJson(request, 'GET', `/api/tickets/${created.id}`, created.sid);
+    expect(after.res.ok(), `Szczegóły po zmianie statusu -> HTTP ${after.res.status()}: ${after.text}`).toBeTruthy();
+    const afterTicket = ticketFromDetail(after.json);
+    expect(afterTicket.status, `Status zgłoszenia po zmianie powinien wynosić ${targetStatus}.`).toBe(targetStatus);
+
+    const statusHistory = arrayFromDetail(after.json, 'status_history');
+    expect(statusHistory.length, `status_history powinno mieć nowy wpis. Odpowiedź: ${after.text.slice(0, 1500)}`).toBeGreaterThan(beforeStatusHistory);
+    expect(
+      statusHistory.some((entry: any) => entry.old_status === oldStatus && entry.new_status === targetStatus),
+      `status_history nie zawiera przejścia ${oldStatus} -> ${targetStatus}. Wpisy: ${stringifyArray(statusHistory)}`
+    ).toBeTruthy();
+
+    const events = arrayFromDetail(after.json, 'events');
+    expect(events.length, `events powinno mieć nowy wpis aktywności po zmianie statusu.`).toBeGreaterThan(beforeEvents);
+    expect(
+      stringifyArray(events),
+      'Historia aktywności powinna zawierać informację o zmianie statusu.'
+    ).toMatch(new RegExp(`${escapeRegExp(oldStatus)}|${escapeRegExp(targetStatus)}|status`, 'i'));
+  });
+
+  test('komentarz i załącznik są widoczne w szczegółach oraz historii aktywności', async ({ request }) => {
+    const created = await apiCreateTicket(request, 'E2E historia aktywności');
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const commentText = `Komentarz historii aktywności E2E ${stamp}`;
+    const attachmentName = `e2e-history-attachment-${stamp}.txt`;
+
+    const before = await apiJson(request, 'GET', `/api/tickets/${created.id}`, created.sid);
+    const beforeEvents = arrayFromDetail(before.json, 'events').length;
+
+    const comment = await apiJson(request, 'POST', `/api/tickets/${created.id}/comments`, created.sid, {
+      data: { content: commentText, visibility: 'public' }
+    });
+    expect(comment.res.ok(), `Dodanie komentarza -> HTTP ${comment.res.status()}: ${comment.text}`).toBeTruthy();
+
+    const attachment = await apiJson(request, 'POST', `/api/tickets/${created.id}/attachments`, created.sid, {
+      multipart: {
+        file: {
+          name: attachmentName,
+          mimeType: 'text/plain',
+          buffer: Buffer.from('Załącznik testujący historię aktywności zgłoszenia.\n')
+        }
+      }
+    });
+    expect(attachment.res.ok(), `Dodanie załącznika -> HTTP ${attachment.res.status()}: ${attachment.text}`).toBeTruthy();
+
+    const after = await apiJson(request, 'GET', `/api/tickets/${created.id}`, created.sid);
+    expect(after.res.ok(), `Szczegóły po komentarzu i załączniku -> HTTP ${after.res.status()}: ${after.text}`).toBeTruthy();
+
+    const comments = arrayFromDetail(after.json, 'comments');
+    expect(
+      comments.some((entry: any) => String(entry.content || '').includes(commentText)),
+      `Lista komentarzy nie zawiera komentarza testowego. Komentarze: ${stringifyArray(comments)}`
+    ).toBeTruthy();
+
+    const attachments = arrayFromDetail(after.json, 'attachments');
+    expect(
+      attachments.some((entry: any) => String(entry.original_filename || entry.filename || '').includes(attachmentName)),
+      `Lista załączników nie zawiera pliku testowego. Załączniki: ${stringifyArray(attachments)}`
+    ).toBeTruthy();
+
+    const events = arrayFromDetail(after.json, 'events');
+    expect(events.length, 'Historia aktywności powinna mieć nowe wpisy po komentarzu i załączniku.').toBeGreaterThan(beforeEvents);
+    const eventsText = stringifyArray(events);
+    expect(eventsText, 'Historia aktywności powinna zawierać komentarz albo zdarzenie komentarza.').toMatch(new RegExp(`${escapeRegExp(commentText)}|komentarz|comment`, 'i'));
+    expect(eventsText, 'Historia aktywności powinna zawierać załącznik albo zdarzenie załącznika.').toMatch(new RegExp(`${escapeRegExp(attachmentName)}|załącznik|attachment|plik`, 'i'));
+  });
+
+  test('UI szczegółów zgłoszenia pokazuje historię statusu i historię aktywności bez błędów krytycznych', async ({ page, request }) => {
+    const created = await apiCreateTicket(request, 'E2E UI historia');
+    const { targetStatus } = await pickAnyTargetStatus(request, created.sid, created.id);
+    const commentText = `Komentarz UI historia ${new Date().toISOString()}`;
+
+    const comment = await apiJson(request, 'POST', `/api/tickets/${created.id}/comments`, created.sid, {
+      data: { content: commentText, visibility: 'public' }
+    });
+    expect(comment.res.ok(), `Dodanie komentarza do UI historii -> HTTP ${comment.res.status()}: ${comment.text}`).toBeTruthy();
+
+    const change = await apiJson(request, 'POST', `/api/tickets/${created.id}/status`, created.sid, { data: { status: targetStatus } });
+    expect(change.res.ok(), `Zmiana statusu do UI historii -> HTTP ${change.res.status()}: ${change.text}`).toBeTruthy();
+
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+    await openTicketInUi(page, created.id);
+
+    await expect(page.locator('body')).toContainText(/Historia statusu|Historia aktywności|Aktywność/i, { timeout: 15000 });
+    await expect(page.locator('body')).toContainText(commentText, { timeout: 15000 });
+    await expect(page.locator('body')).toContainText(targetStatus, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime w historii zgłoszenia: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error w historii zgłoszenia: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx w historii zgłoszenia: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+
 });

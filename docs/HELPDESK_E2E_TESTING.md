@@ -209,3 +209,14 @@ Dodano testy regresyjne dla centrum powiadomień:
 - UI panelu powiadomień otwiera się bez krytycznych błędów JavaScript i HTTP 5xx.
 
 Część testów pojedynczego powiadomienia jest warunkowa: jeśli środowisko testowe nie ma żadnych powiadomień, test zostaje pominięty zamiast wymuszać konkretną konfigurację workflow.
+
+## Pakiet v20 — historia statusu i aktywności zgłoszenia
+
+Dodane testy sprawdzają:
+
+- wpis w `status_history` po zmianie statusu,
+- wpis w historii aktywności po zmianie statusu,
+- widoczność komentarza w szczegółach zgłoszenia,
+- widoczność załącznika w szczegółach zgłoszenia,
+- wpisy historii aktywności po komentarzu i załączniku,
+- renderowanie sekcji historii statusu / aktywności w UI bez błędów JavaScript i HTTP 5xx.
