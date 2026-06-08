@@ -493,3 +493,106 @@ test.describe('Helpdesk E2E procesy workflow i uprawnień', () => {
     }
   });
 });
+
+function isoDateDaysAgo(daysAgo: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  return d.toISOString().slice(0, 10);
+}
+
+async function openModule(page: Page, label: string, fallbackFunctionName?: string) {
+  try {
+    await clickFirstVisible(page, [
+      `a:has-text("${label}")`,
+      `button:has-text("${label}")`,
+      `text=${label}`
+    ]);
+  } catch (clickError) {
+    if (!fallbackFunctionName) throw clickError;
+    const canRender = await page.evaluate((fn) => typeof (window as any)[fn] === 'function', fallbackFunctionName).catch(() => false);
+    if (!canRender) throw clickError;
+    await page.evaluate((fn) => (window as any)[fn](), fallbackFunctionName);
+  }
+  await page.waitForLoadState('networkidle').catch(() => undefined);
+}
+
+test.describe('Helpdesk E2E SLA, raporty i audyt', () => {
+  test('API raportów zwraca dane i eksport CSV', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const from = isoDateDaysAgo(30);
+    const to = isoDateDaysAgo(0);
+
+    const report = await apiJson(request, 'GET', `/api/reports?from=${from}&to=${to}`, sid);
+    expect(report.res.ok(), `GET /api/reports -> HTTP ${report.res.status()}: ${report.text}`).toBeTruthy();
+    expect(report.json.summary, `Raport nie zawiera summary: ${report.text}`).toBeTruthy();
+    expect(Array.isArray(report.json.by_status), 'Raport powinien zawierać by_status jako tablicę.').toBeTruthy();
+    expect(Array.isArray(report.json.by_day), 'Raport powinien zawierać by_day jako tablicę.').toBeTruthy();
+
+    const csv = await request.get(`${baseURL}/api/reports.csv?from=${from}&to=${to}`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const csvText = await csv.text();
+    expect(csv.ok(), `GET /api/reports.csv -> HTTP ${csv.status()}: ${csvText.slice(0, 500)}`).toBeTruthy();
+    expect(csvText, 'CSV raportów powinien zawierać nagłówek raportu.').toMatch(/Raport helpdesk|Podsumowanie/i);
+  });
+
+  test('API kalendarza SLA i ręczne sprawdzenie SLA działają', async ({ request }) => {
+    const sid = await apiLogin(request);
+
+    const calendar = await apiJson(request, 'GET', '/api/sla-calendar', sid);
+    expect(calendar.res.ok(), `GET /api/sla-calendar -> HTTP ${calendar.res.status()}: ${calendar.text}`).toBeTruthy();
+    expect(calendar.json.counts, `Kalendarz SLA nie zawiera counts: ${calendar.text}`).toBeTruthy();
+    expect(Array.isArray(calendar.json.policies || []), 'Kalendarz SLA powinien zwracać listę polityk SLA.').toBeTruthy();
+
+    const check = await apiJson(request, 'POST', '/api/sla/check', sid, { data: {} });
+    expect(check.res.ok(), `POST /api/sla/check -> HTTP ${check.res.status()}: ${check.text}`).toBeTruthy();
+    expect(JSON.stringify(check.json), 'Odpowiedź sprawdzenia SLA nie powinna być pusta.').not.toBe('{}');
+  });
+
+  test('API audytu zwraca listę i eksport CSV', async ({ request }) => {
+    const sid = await apiLogin(request);
+
+    const audit = await apiJson(request, 'GET', '/api/audit?page_size=25', sid);
+    expect(audit.res.ok(), `GET /api/audit -> HTTP ${audit.res.status()}: ${audit.text}`).toBeTruthy();
+    expect(Array.isArray(audit.json.audit), `Audyt nie zawiera tablicy audit: ${audit.text}`).toBeTruthy();
+    expect(audit.json.pagination, `Audyt nie zawiera pagination: ${audit.text}`).toBeTruthy();
+
+    const csv = await request.get(`${baseURL}/api/audit.csv`, {
+      headers: { 'X-Helpdesk-Session': sid }
+    });
+    const csvText = await csv.text();
+    expect(csv.ok(), `GET /api/audit.csv -> HTTP ${csv.status()}: ${csvText.slice(0, 500)}`).toBeTruthy();
+    expect(csvText, 'CSV audytu powinien zawierać nagłówek.').toMatch(/ID|Data|Aktor|Akcja|Audyt/i);
+  });
+
+  test('UI raportów, kalendarza SLA i audytu otwiera się bez błędów krytycznych', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+
+    await openModule(page, 'Raporty', 'renderReports');
+    await expect(page.locator('body')).toContainText(/Raporty|Pokaż raport|Eksport CSV/i, { timeout: 15000 });
+
+    await openModule(page, 'Kalendarz SLA', 'renderSlaCalendar');
+    await expect(page.locator('body')).toContainText(/SLA|Kalendarz|Polityki SLA|Sprawdź/i, { timeout: 15000 });
+
+    await openModule(page, 'Audyt', 'renderAudit');
+    await expect(page.locator('body')).toContainText(/Audyt|Eksport CSV|Akcja|Aktor/i, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
+

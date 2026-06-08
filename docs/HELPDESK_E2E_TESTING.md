@@ -62,7 +62,11 @@ Testy UI sprawdzają:
 - dodanie komentarza przez UI,
 - dodanie załącznika przez UI,
 - proces workflow: blokada zmiany statusu bez nowego komentarza i załącznika operatora,
-- dynamiczne menu: ukrycie Kalendarza SLA po odebraniu uprawnienia operatorowi.
+- dynamiczne menu: ukrycie Kalendarza SLA po odebraniu uprawnienia operatorowi,
+- API raportów oraz eksport CSV raportów,
+- API kalendarza SLA i ręczne sprawdzenie SLA,
+- API audytu oraz eksport CSV audytu,
+- UI modułów Raporty, Kalendarz SLA i Audyt bez błędów krytycznych.
 
 Test dynamicznego menu jest pomijany, jeśli nie ustawisz `HELPDESK_OPERATOR_EMAIL` i `HELPDESK_OPERATOR_PASSWORD`.
 
@@ -78,3 +82,15 @@ tar -czf helpdesk-ui-test-results.tar.gz playwright-report test-results
 kubectl logs -n helpdesk deploy/helpdesk-app --tail=300 > helpdesk-app.log
 kubectl get pods -n helpdesk -o wide > helpdesk-pods.txt
 ```
+
+
+## Testy SLA, raportów i audytu
+
+Nowe testy regresji sprawdzają:
+
+- `GET /api/reports` i `GET /api/reports.csv`,
+- `GET /api/sla-calendar` i `POST /api/sla/check`,
+- `GET /api/audit` i `GET /api/audit.csv`,
+- otwarcie ekranów **Raporty**, **Kalendarz SLA** i **Audyt** w UI bez błędów JavaScript oraz bez odpowiedzi HTTP 5xx.
+
+Te testy wymagają konta z uprawnieniami administracyjnymi albo operacyjnymi do raportów, SLA i audytu.
