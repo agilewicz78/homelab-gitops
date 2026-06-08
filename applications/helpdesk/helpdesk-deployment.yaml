@@ -1,68 +1,124 @@
 apiVersion: apps/v1
 kind: Deployment
+
 metadata:
   name: helpdesk
   namespace: helpdesk
+  labels:
+    app: helpdesk
+
 spec:
+  # Jeden pod aplikacji, ponieważ aplikacja korzysta z lokalnego wolumenu /venv
+  # tworzonego przez initContainer oraz współdzielonego z kontenerem aplikacji.
   replicas: 1
+
   strategy:
+    # Recreate ogranicza ryzyko jednoczesnego uruchomienia dwóch wersji aplikacji
+    # korzystających z tej samej logiki migracji bazy.
     type: Recreate
+
   selector:
     matchLabels:
       app: helpdesk
+
   template:
     metadata:
       labels:
         app: helpdesk
+
     spec:
+      # Pod-level securityContext:
+      # - uruchamianie bez roota,
+      # - stały UID/GID,
+      # - fsGroup dla wolumenów,
+      # - seccomp RuntimeDefault wymagany przez profil PodSecurity restricted.
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         runAsGroup: 1000
         fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+
       initContainers:
         - name: install-deps
           image: python:3.12-slim
+
+          # InitContainer przygotowuje środowisko Python w wolumenie emptyDir /venv.
+          # Dzięki temu główny kontener może uruchomić aplikację z tymi samymi
+          # zależnościami bez budowania własnego obrazu Dockera.
           command:
             - /bin/sh
             - -c
             - |
               python -m venv /venv
               /venv/bin/pip install --no-cache-dir flask gunicorn psycopg2-binary flask-sock
+
           volumeMounts:
             - name: venv
               mountPath: /venv
+
+          # Container-level securityContext wymagany przez PodSecurity restricted:
+          # - brak privilege escalation,
+          # - drop wszystkich capabilities.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
       containers:
         - name: helpdesk
           image: python:3.12-slim
+
+          # Główny kontener uruchamia aplikację Flask przez Gunicorn.
           command:
             - /bin/sh
             - -c
             - |
               /venv/bin/gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 50 app:app
+
           workingDir: /app
+
           ports:
-            - containerPort: 8080
+            - name: http
+              containerPort: 8080
+
           env:
+            # Dane połączenia z PostgreSQL działającym w tym samym namespace.
             - name: DB_HOST
               value: helpdesk-postgres
             - name: DB_PORT
               value: "5432"
+
+            # HOME ustawione na /tmp, aby biblioteki Pythona nie próbowały pisać
+            # do katalogów niedostępnych dla użytkownika nie-root.
             - name: HOME
               value: /tmp
+
           envFrom:
+            # Sekret aplikacyjny, np. SECRET_KEY / ustawienia aplikacji.
             - secretRef:
                 name: helpdesk-app-secret
+
+            # Sekret bazy danych, np. użytkownik/hasło/nazwa bazy.
             - secretRef:
                 name: helpdesk-db-secret
+
           volumeMounts:
+            # Kod aplikacji z ConfigMap helpdesk-app.
             - name: app
               mountPath: /app
               readOnly: true
+
+            # Środowisko Python przygotowane przez initContainer.
             - name: venv
               mountPath: /venv
+
+            # Trwały wolumen na załączniki zgłoszeń.
             - name: attachments
               mountPath: /data/attachments
+
           resources:
             requests:
               cpu: 100m
@@ -70,17 +126,27 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+
+          # Container-level securityContext dla głównej aplikacji.
+          # Dodany seccomp na poziomie Poda obejmuje oba kontenery,
+          # a poniższe ustawienia zamykają ostrzeżenia allowPrivilegeEscalation/capabilities.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop:
                 - ALL
+
       volumes:
+        # app.py i pozostała zawartość aplikacji z ConfigMap.
         - name: app
           configMap:
             name: helpdesk-app
+
+        # Tymczasowy wolumen na virtualenv tworzony przy starcie poda.
         - name: venv
           emptyDir: {}
+
+        # Trwałe miejsce na załączniki helpdesku.
         - name: attachments
           persistentVolumeClaim:
             claimName: helpdesk-attachments
