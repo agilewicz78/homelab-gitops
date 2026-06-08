@@ -164,3 +164,18 @@ Dodane testy sprawdzają nie tylko dostępność endpointów, ale również sens
 - audyt zawiera wpis po utworzeniu zgłoszenia testowego,
 - eksport CSV audytu respektuje filtr po ID zgłoszenia,
 - eksport macierzy uprawnień zawiera role `user`, `operator`, `admin`.
+
+## Pakiet v15 — filtrowanie i wyszukiwanie zgłoszeń
+
+Dodano testy regresji dla głównej listy zgłoszeń:
+
+- wyszukiwanie po unikalnym tytule,
+- wyszukiwanie po numerze `#ID`,
+- filtrowanie po priorytecie,
+- filtrowanie po kategorii i podkategorii,
+- filtrowanie po statusie,
+- filtrowanie po dacie utworzenia,
+- podstawowy test UI pola wyszukiwania oraz czyszczenia filtrów,
+- kontrola braku błędów JavaScript i HTTP 5xx podczas używania filtrów.
+
+Te testy zabezpieczają regresję, która wcześniej powodowała pustą pierwszą stronę po zmianach w filtrach zgłoszeń.

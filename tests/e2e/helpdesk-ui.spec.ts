@@ -1093,3 +1093,147 @@ test.describe('Helpdesk E2E raporty i audyt — walidacja danych', () => {
     expect(csvText).toMatch(/permission|uprawn/i);
   });
 });
+
+
+test.describe('Helpdesk E2E filtrowanie i wyszukiwanie zgłoszeń — walidacja danych', () => {
+  function extractTickets(payload: any): any[] {
+    if (Array.isArray(payload)) return payload;
+    if (Array.isArray(payload.tickets)) return payload.tickets;
+    if (Array.isArray(payload.items)) return payload.items;
+    if (Array.isArray(payload.rows)) return payload.rows;
+    return [];
+  }
+
+  async function createTicketForFiltering(request: APIRequestContext, sid: string) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const title = `E2E filtr wyszukiwanie ${stamp}`;
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title,
+        description: `Opis unikalny do filtrowania ${stamp}`,
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Niski'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia do testów filtrów -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const id = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(id, `Brak ID zgłoszenia w odpowiedzi: ${created.text}`).toBeTruthy();
+
+    const detail = await apiJson(request, 'GET', `/api/tickets/${id}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia do filtrów -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+    return { id, title, stamp, status: ticket.status || 'Nowe', priority: ticket.priority || 'Niski', category: ticket.category || 'Inne', subcategory: ticket.subcategory || 'Inne' };
+  }
+
+  async function expectTicketVisibleInList(request: APIRequestContext, sid: string, path: string, ticketId: number, label: string) {
+    const response = await apiJson(request, 'GET', path, sid);
+    expect(response.res.ok(), `${label} -> HTTP ${response.res.status()}: ${response.text}`).toBeTruthy();
+    const tickets = extractTickets(response.json);
+    const ids = tickets.map((ticket: any) => Number(ticket.id || ticket.ticket_id || ticket.ticket?.id));
+    expect(ids, `${label}: lista nie zawiera zgłoszenia #${ticketId}. Odpowiedź: ${response.text.slice(0, 1200)}`).toContain(ticketId);
+    return response;
+  }
+
+  test('API listy zgłoszeń znajduje zgłoszenie po unikalnym tytule i numerze #ID', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const ticket = await createTicketForFiltering(request, sid);
+
+    await expectTicketVisibleInList(
+      request,
+      sid,
+      `/api/tickets?assigned=all&q=${encodeURIComponent(ticket.title)}`,
+      ticket.id,
+      'Wyszukiwanie po unikalnym tytule'
+    );
+
+    await expectTicketVisibleInList(
+      request,
+      sid,
+      `/api/tickets?assigned=all&q=${encodeURIComponent('#' + ticket.id)}`,
+      ticket.id,
+      'Wyszukiwanie po numerze #ID'
+    );
+  });
+
+  test('API listy zgłoszeń respektuje filtry priorytetu, kategorii, podkategorii i statusu', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const ticket = await createTicketForFiltering(request, sid);
+
+    const base = `/api/tickets?assigned=all&q=${encodeURIComponent(ticket.title)}`;
+    await expectTicketVisibleInList(request, sid, `${base}&priority=${encodeURIComponent(ticket.priority)}`, ticket.id, 'Filtr priorytetu');
+    await expectTicketVisibleInList(request, sid, `${base}&category=${encodeURIComponent(ticket.category)}`, ticket.id, 'Filtr kategorii');
+    await expectTicketVisibleInList(request, sid, `${base}&subcategory=${encodeURIComponent(ticket.subcategory)}`, ticket.id, 'Filtr podkategorii');
+    await expectTicketVisibleInList(request, sid, `${base}&status=${encodeURIComponent(ticket.status)}`, ticket.id, 'Filtr statusu');
+  });
+
+  test('API listy zgłoszeń respektuje filtr daty utworzenia', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const ticket = await createTicketForFiltering(request, sid);
+    const today = isoDateDaysAgo(0);
+
+    await expectTicketVisibleInList(
+      request,
+      sid,
+      `/api/tickets?assigned=all&q=${encodeURIComponent(ticket.title)}&created_from=${today}&created_to=${today}`,
+      ticket.id,
+      'Filtr daty utworzenia od/do'
+    );
+  });
+
+  test('UI filtrów zgłoszeń działa bez błędów krytycznych i znajduje zgłoszenie po tytule', async ({ page, request }) => {
+    const sid = await apiLogin(request);
+    const ticket = await createTicketForFiltering(request, sid);
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+    await page.waitForLoadState('networkidle');
+
+    // Domyślny widok operatora/admina może pokazywać tylko zgłoszenia przypisane do mnie.
+    // Zgłoszenia tworzone przez test są zwykle nieprzypisane, więc dla testu filtrów
+    // przełączamy listę na pełny zakres, jeśli pole wyboru jest dostępne w UI.
+    const assignedSelect = page.locator('select:has(option[value="all"])').first();
+    if (await assignedSelect.count() && await assignedSelect.isVisible().catch(() => false)) {
+      await assignedSelect.selectOption('all').catch(() => undefined);
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+    }
+
+    const searchInput = page.locator('input[name="q"], input[name="search"], input[placeholder*="Szukaj" i], input[placeholder*="wyszuk" i]').first();
+    if (await searchInput.count()) {
+      await searchInput.fill(ticket.title);
+      const filterButton = page.locator('button:has-text("Filtruj"), button:has-text("Szukaj"), button:has-text("Zastosuj")').first();
+      if (await filterButton.count() && await filterButton.isVisible().catch(() => false)) {
+        await filterButton.click();
+      } else {
+        await searchInput.press('Enter').catch(() => undefined);
+      }
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+      await expect(page.locator('body')).toContainText(ticket.title, { timeout: 15000 });
+    } else {
+      // Jeżeli aktualny układ UI nie ma pola wyszukiwania w DOM, test nadal sprawdza API wyżej.
+      test.skip(true, 'Nie znaleziono pola wyszukiwania na liście zgłoszeń w aktualnym UI.');
+    }
+
+    const clearButton = page.locator('button:has-text("Wyczyść filtry"), button:has-text("Wyczyść"), a:has-text("Wyczyść filtry")').first();
+    if (await clearButton.count() && await clearButton.isVisible().catch(() => false)) {
+      await clearButton.click();
+      await page.waitForLoadState('networkidle').catch(() => undefined);
+      await expect(page.locator('body')).toContainText(/Zgłoszenia|Status|Priorytet|Brak zgłoszeń/i, { timeout: 15000 });
+    }
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime przy filtrach zgłoszeń: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error przy filtrach zgłoszeń: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx przy filtrach zgłoszeń: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+});
