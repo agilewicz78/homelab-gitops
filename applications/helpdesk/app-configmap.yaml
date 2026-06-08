@@ -1905,8 +1905,19 @@ data:
                 continue
             name = clean(item.get("name")) or "Reguła workflow"
             event_type = clean(item.get("event_type"))
-            condition_status = clean(item.get("condition_status")) or None
-            condition_to_status = clean(item.get("condition_to_status")) or None
+
+            # Statusy mogą być podane jako konkretna nazwa kroku albo jako wildcard.
+            # Ujednolicamy zapis tak, żeby formularz, API i symulator nie traktowały
+            # pustej wartości jako dosłownego statusu "None".
+            condition_status = clean(item.get("condition_status"))
+            condition_to_status = clean(item.get("condition_to_status"))
+            if condition_status == "any":
+                condition_status = "*"
+            if condition_to_status == "any":
+                condition_to_status = "*"
+            condition_status = condition_status or None
+            condition_to_status = condition_to_status or None
+
             condition_role = clean(item.get("condition_role")) or None
             condition_visibility = clean(item.get("condition_comment_visibility")) or None
             assigned_state = clean(item.get("assigned_state")) or "*"
@@ -1963,9 +1974,10 @@ data:
                 condition_sla_state = "*"
             if condition_sla_state == "any":
                 condition_sla_state = "*"
-            if condition_status and condition_status not in steps:
+            # "*" oznacza dowolny status i jest poprawną wartością warunku.
+            if condition_status and condition_status != "*" and condition_status not in steps:
                 continue
-            if condition_to_status and condition_to_status not in steps:
+            if condition_to_status and condition_to_status != "*" and condition_to_status not in steps:
                 continue
             actions = normalize_workflow_automation_actions(item, steps)
             if not actions:
@@ -2236,7 +2248,20 @@ data:
         return WORKFLOW_CONDITION_OPERATOR_LABELS.get(normalize_workflow_condition_operator(operator), "równa się")
     
     # Porównuje wartość warunku workflow z użyciem operatora warunku.
-    def workflow_condition_matches_value(condition_value, actual_value, operator="eq", wildcard_values=("*", "any")):
+    def workflow_condition_matches_value(condition_value, actual_value, operator="eq", wildcard_values=("", "*", "any")):
+        """
+        Porównuje warunek workflow z wartością rzeczywistą.
+
+        Ważne: w konfiguracji workflow wartości:
+        - pusty string "",
+        - None zapisany w bazie,
+        - "*",
+        - "any"
+
+        oznaczają "dowolna wartość". Dzięki temu formularz workflow,
+        API zapisu reguły, symulator reguł i właściwy silnik workflow
+        interpretują warunki w ten sam sposób.
+        """
         operator = normalize_workflow_condition_operator(operator)
         condition_value = clean(condition_value)
         actual_value = clean(actual_value)
@@ -8322,9 +8347,17 @@ data:
         if error:
             return jsonify({"error": error}), 400
     
+        def sample_default_status(condition_value, fallback=""):
+            """Zwraca przykładowy status do symulatora bez używania wildcarda jako realnego statusu."""
+            value = clean(condition_value)
+            if value in ("", "*", "any"):
+                return fallback
+            return value
+
+        first_step = steps[0] if steps else "Nowe"
         actor_role = clean(sample.get("actor_role")) or item.get("condition_role") or "*"
-        current_status = clean(sample.get("current_status")) or item.get("condition_status") or (steps[0] if steps else "Nowe")
-        event_new_status = clean(sample.get("event_new_status")) or item.get("condition_to_status") or ""
+        current_status = clean(sample.get("current_status")) or sample_default_status(item.get("condition_status"), first_step)
+        event_new_status = clean(sample.get("event_new_status")) or sample_default_status(item.get("condition_to_status"), "")
         event_type = clean(sample.get("event_type")) or item.get("event_type") or "comment_added"
         visibility = clean(sample.get("comment_visibility")) or item.get("condition_comment_visibility") or "*"
         assigned_state = clean(sample.get("assigned_state")) or item.get("assigned_state") or "*"
