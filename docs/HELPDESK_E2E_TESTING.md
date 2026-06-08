@@ -130,3 +130,24 @@ Ostatni test wymaga ustawienia konta operatora testowego:
 export HELPDESK_OPERATOR_EMAIL="operator-test@example.local"
 export HELPDESK_OPERATOR_PASSWORD="HASLO_OPERATORA_LOKALNIE"
 ```
+
+## v13 — role użytkowników i widoczność modułów
+
+Dodane testy sprawdzają profile użytkowników:
+
+- menu administratora jest zgodne z realnymi uprawnieniami z `/api/permissions/me`,
+- menu operatora jest zgodne z realnymi uprawnieniami,
+- menu zwykłego użytkownika jest zgodne z realnymi uprawnieniami,
+- backend administracyjny zwraca `403` dla operatora/użytkownika bez wymaganych uprawnień,
+- endpointy administracyjne działają tylko wtedy, gdy profil ma odpowiednie kody uprawnień.
+
+Testy operatora i zwykłego użytkownika wymagają zmiennych:
+
+```bash
+export HELPDESK_OPERATOR_EMAIL="operator-test@example.local"
+export HELPDESK_OPERATOR_PASSWORD="..."
+export HELPDESK_USER_EMAIL="user-test@example.local"
+export HELPDESK_USER_PASSWORD="..."
+```
+
+Jeżeli konta nie są ustawione, testy zależne od tych profili zostaną pominięte.

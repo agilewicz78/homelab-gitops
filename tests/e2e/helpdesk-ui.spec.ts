@@ -877,3 +877,91 @@ test.describe('Helpdesk E2E negatywne API i uprawnienia', () => {
     expect(auditText, 'Audyt powinien zawierać wpis permission_denied po odmowie dostępu.').toMatch(/permission_denied/i);
   });
 });
+
+
+test.describe('Helpdesk E2E role użytkowników i widoczność modułów', () => {
+  const moduleExpectations = [
+    { label: 'Raporty', permissions: ['reports.view'] },
+    { label: 'Kalendarz SLA', permissions: ['sla.view', 'sla.manage'] },
+    { label: 'Workflow', permissions: ['workflow.manage', 'workflow.view_logs'] },
+    { label: 'Audyt', permissions: ['audit.view'] },
+    { label: 'Użytkownicy', permissions: ['users.manage'] },
+    { label: 'Uprawnienia', permissions: ['permissions.view', 'permissions.manage'] },
+  ];
+
+  async function permissionsFor(request: APIRequestContext, email: string, password: string) {
+    const sid = await apiLoginWith(request, email, password);
+    const response = await apiJson(request, 'GET', '/api/permissions/me', sid);
+    expect(response.res.ok(), `GET /api/permissions/me dla ${email} -> HTTP ${response.res.status()}: ${response.text}`).toBeTruthy();
+    const permissions = new Set<string>(response.json.permissions || []);
+    const roles = response.json.roles || response.json.role_keys || [];
+    return { sid, permissions, roles, raw: response.json };
+  }
+
+  async function assertMenuMatchesPermissions(page: Page, permissions: Set<string>, accountLabel: string) {
+    for (const item of moduleExpectations) {
+      const expectedVisible = item.permissions.some(permission => permissions.has(permission));
+      const visibleCount = await firstVisibleCount(page, `text=${item.label}`);
+      if (expectedVisible) {
+        expect(visibleCount, `${accountLabel}: moduł "${item.label}" powinien być widoczny, bo użytkownik ma jedno z uprawnień: ${item.permissions.join(', ')}`).toBeGreaterThan(0);
+      } else {
+        expect(visibleCount, `${accountLabel}: moduł "${item.label}" powinien być ukryty, bo użytkownik nie ma uprawnień: ${item.permissions.join(', ')}`).toBe(0);
+      }
+    }
+  }
+
+  test('menu administratora jest zgodne z jego realnymi uprawnieniami', async ({ page, request }) => {
+    const { permissions } = await permissionsFor(request, adminEmail, adminPassword);
+    await login(page);
+    await assertMenuMatchesPermissions(page, permissions, 'admin');
+  });
+
+  test('menu operatora jest zgodne z jego realnymi uprawnieniami', async ({ page, request }) => {
+    test.skip(!operatorEmail || !operatorPassword, 'Ustaw HELPDESK_OPERATOR_EMAIL i HELPDESK_OPERATOR_PASSWORD, aby sprawdzić profil operatora.');
+    const { permissions } = await permissionsFor(request, operatorEmail, operatorPassword);
+    await loginAs(page, operatorEmail, operatorPassword);
+    await assertMenuMatchesPermissions(page, permissions, 'operator');
+  });
+
+  test('menu zwykłego użytkownika jest zgodne z jego realnymi uprawnieniami', async ({ page, request }) => {
+    test.skip(!normalUserEmail || !normalUserPassword, 'Ustaw HELPDESK_USER_EMAIL i HELPDESK_USER_PASSWORD, aby sprawdzić profil zwykłego użytkownika.');
+    const { permissions } = await permissionsFor(request, normalUserEmail, normalUserPassword);
+    await loginAs(page, normalUserEmail, normalUserPassword);
+    await assertMenuMatchesPermissions(page, permissions, 'user');
+  });
+
+  test('backend administracyjny respektuje uprawnienia profilu operatora i użytkownika', async ({ request }) => {
+    test.skip(!operatorEmail || !operatorPassword || !normalUserEmail || !normalUserPassword, 'Ustaw konta operatora i zwykłego użytkownika, aby sprawdzić profile backendowe.');
+
+    const operator = await permissionsFor(request, operatorEmail, operatorPassword);
+    const user = await permissionsFor(request, normalUserEmail, normalUserPassword);
+
+    const checks = [
+      { label: 'operator', sid: operator.sid, permissions: operator.permissions },
+      { label: 'user', sid: user.sid, permissions: user.permissions },
+    ];
+
+    for (const checked of checks) {
+      const permissionsEndpoint = await apiJson(request, 'GET', '/api/admin/permissions', checked.sid);
+      if (checked.permissions.has('permissions.view') || checked.permissions.has('permissions.manage')) {
+        expect(permissionsEndpoint.res.ok(), `${checked.label}: /api/admin/permissions powinno działać przy permissions.view/manage; HTTP ${permissionsEndpoint.res.status()}: ${permissionsEndpoint.text}`).toBeTruthy();
+      } else {
+        expect(permissionsEndpoint.res.status(), `${checked.label}: /api/admin/permissions powinno zwrócić 403 bez permissions.view/manage; HTTP ${permissionsEndpoint.res.status()}: ${permissionsEndpoint.text}`).toBe(403);
+      }
+
+      const auditEndpoint = await apiJson(request, 'GET', '/api/audit', checked.sid);
+      if (checked.permissions.has('audit.view')) {
+        expect(auditEndpoint.res.ok(), `${checked.label}: /api/audit powinno działać przy audit.view; HTTP ${auditEndpoint.res.status()}: ${auditEndpoint.text}`).toBeTruthy();
+      } else {
+        expect([401, 403]).toContain(auditEndpoint.res.status());
+      }
+
+      const workflowLogEndpoint = await apiJson(request, 'GET', '/api/admin/workflow-rule-executions', checked.sid);
+      if (checked.permissions.has('workflow.view_logs') || checked.permissions.has('workflow.manage')) {
+        expect(workflowLogEndpoint.res.ok(), `${checked.label}: log workflow powinien działać przy workflow.view_logs/manage; HTTP ${workflowLogEndpoint.res.status()}: ${workflowLogEndpoint.text}`).toBeTruthy();
+      } else {
+        expect(workflowLogEndpoint.res.status(), `${checked.label}: log workflow powinien zwrócić 403 bez workflow.view_logs/manage; HTTP ${workflowLogEndpoint.res.status()}: ${workflowLogEndpoint.text}`).toBe(403);
+      }
+    }
+  });
+});
