@@ -72,25 +72,28 @@ async function openNewTicketForm(page: Page) {
   await expect(page.locator('body')).toContainText(/Nowe zgłoszenie|Tytuł problemu/i, { timeout: 15000 });
 }
 
-async function login(page: Page) {
-  if (!adminEmail || !adminPassword) {
-    throw new Error('Ustaw HELPDESK_ADMIN_EMAIL oraz HELPDESK_ADMIN_PASSWORD przed uruchomieniem testów UI.');
+async function loginAs(page: Page, email: string, password: string) {
+  if (!email || !password) {
+    throw new Error('Brakuje e-maila lub hasła użytkownika testowego.');
   }
 
   await page.goto(baseURL, { waitUntil: 'domcontentloaded' });
+  await page.evaluate(() => {
+    try { sessionStorage.clear(); localStorage.clear(); } catch (_) {}
+  }).catch(() => undefined);
   await fillFirstVisible(page, [
     'input[name="email"]',
     'input[type="email"]',
     'input[name="username"]',
     'input[placeholder*="email" i]',
     'input[placeholder*="login" i]'
-  ], adminEmail);
+  ], email);
   await fillFirstVisible(page, [
     'input[name="password"]',
     'input[type="password"]',
     'input[placeholder*="hasło" i]',
     'input[placeholder*="password" i]'
-  ], adminPassword);
+  ], password);
   await clickFirstVisible(page, [
     'button:has-text("Zaloguj")',
     'button:has-text("Login")',
@@ -100,22 +103,33 @@ async function login(page: Page) {
   await expect(page.locator('body')).not.toContainText(/unauthorized|Nie udało się zalogować/i);
 }
 
+async function login(page: Page) {
+  if (!adminEmail || !adminPassword) {
+    throw new Error('Ustaw HELPDESK_ADMIN_EMAIL oraz HELPDESK_ADMIN_PASSWORD przed uruchomieniem testów UI.');
+  }
+  await loginAs(page, adminEmail, adminPassword);
+}
+
 function isIgnorableConsoleError(message: string): boolean {
   return /favicon|ResizeObserver/i.test(message)
     || /Failed to load resource: the server responded with a status of (401|403)/i.test(message);
+}
+
+async function apiLoginWith(request: APIRequestContext, email: string, password: string): Promise<string> {
+  const res = await request.post(`${baseURL}/api/login`, {
+    data: { email, password }
+  });
+  expect(res.ok(), `Logowanie API ${email} zwróciło HTTP ${res.status()}: ${await res.text()}`).toBeTruthy();
+  const data = await res.json();
+  expect(data.sid, 'Brak pola sid w odpowiedzi /api/login').toBeTruthy();
+  return data.sid;
 }
 
 async function apiLogin(request: APIRequestContext): Promise<string> {
   if (!adminEmail || !adminPassword) {
     throw new Error('Ustaw HELPDESK_ADMIN_EMAIL oraz HELPDESK_ADMIN_PASSWORD przed uruchomieniem testów UI.');
   }
-  const res = await request.post(`${baseURL}/api/login`, {
-    data: { email: adminEmail, password: adminPassword }
-  });
-  expect(res.ok(), `Logowanie API zwróciło HTTP ${res.status()}: ${await res.text()}`).toBeTruthy();
-  const data = await res.json();
-  expect(data.sid, 'Brak pola sid w odpowiedzi /api/login').toBeTruthy();
-  return data.sid;
+  return apiLoginWith(request, adminEmail, adminPassword);
 }
 
 async function apiCreateTicket(request: APIRequestContext, titlePrefix = 'UI E2E'): Promise<{ id: number; title: string; sid: string }> {
@@ -151,6 +165,40 @@ async function openTicketInUi(page: Page, ticketId: number) {
     await page.waitForLoadState('networkidle');
   }
   await expect(page.locator('body')).toContainText(new RegExp(`#${ticketId}\\b`), { timeout: 15000 });
+}
+
+
+
+async function apiJson(request: APIRequestContext, method: string, path: string, sid: string, options: any = {}) {
+  const res = await request.fetch(`${baseURL}${path}`, {
+    method,
+    headers: { 'X-Helpdesk-Session': sid, ...(options.headers || {}) },
+    data: options.data,
+    multipart: options.multipart,
+  });
+  const text = await res.text();
+  let json: any = {};
+  try { json = text ? JSON.parse(text) : {}; } catch { json = { raw: text }; }
+  return { res, json, text };
+}
+
+function ticketFromDetail(detail: any) {
+  return detail.ticket || detail;
+}
+
+function directPermissionsForRole(payload: any, roleKey: string): string[] {
+  const role = (payload.roles || []).find((r: any) => r.key === roleKey || r.role_key === roleKey);
+  return Array.from(new Set(role?.direct_permission_codes || role?.permission_codes || [])).sort() as string[];
+}
+
+async function firstVisibleCount(page: Page, selector: string): Promise<number> {
+  const locator = page.locator(selector);
+  const count = await locator.count().catch(() => 0);
+  let visible = 0;
+  for (let i = 0; i < count; i++) {
+    if (await locator.nth(i).isVisible().catch(() => false)) visible++;
+  }
+  return visible;
 }
 
 test.describe('Helpdesk UI E2E smoke', () => {
@@ -266,5 +314,182 @@ test.describe('Helpdesk UI E2E funkcjonalne', () => {
     await page.waitForLoadState('networkidle');
 
     await expect(page.locator('body')).toContainText(fileName, { timeout: 15000 });
+  });
+});
+
+
+test.describe('Helpdesk E2E procesy workflow i uprawnień', () => {
+  test('workflow blokuje zmianę statusu bez nowego komentarza i załącznika operatora', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+
+    // Tworzymy testowe zgłoszenie o priorytecie Niski, aby tymczasowa reguła
+    // była jak najwęziej ograniczona i nie wpływała na zwykłe zgłoszenia.
+    const created = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: `E2E workflow validation ${stamp}`,
+        description: 'Zgłoszenie testujące wymagany komentarz i załącznik przy zmianie statusu.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority: 'Niski'
+      }
+    });
+    expect(created.res.ok(), `Tworzenie zgłoszenia testowego -> HTTP ${created.res.status()}: ${created.text}`).toBeTruthy();
+    const ticketId = Number(created.json.id || created.json.ticket_id || created.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia w odpowiedzi: ${created.text}`).toBeTruthy();
+
+    const detail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia #${ticketId} -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+    const oldStatus = ticket.status;
+    const statuses: string[] = detail.json.meta?.statuses || [];
+    const targetStatus = statuses.find(s => s !== oldStatus && s !== 'Zamknięte');
+    expect(targetStatus, `Nie znaleziono statusu docelowego innego niż ${oldStatus}`).toBeTruthy();
+
+    const workflowsResponse = await apiJson(request, 'GET', '/api/admin/workflows', sid);
+    expect(workflowsResponse.res.ok(), `Lista workflow -> HTTP ${workflowsResponse.res.status()}: ${workflowsResponse.text}`).toBeTruthy();
+    const workflows = workflowsResponse.json.workflows || [];
+    const workflow = workflows.find((w: any) => w.workflow_key === ticket.workflow_key) || workflows.find((w: any) => w.is_default) || workflows[0];
+    expect(workflow?.id, `Nie znaleziono workflow dla zgłoszenia #${ticketId}`).toBeTruthy();
+
+    let automationId: number | undefined;
+    try {
+      const automationPayload = {
+        name: `E2E wymaga komentarza i załącznika ${stamp}`,
+        event_type: 'status_changed',
+        // Brak condition_status oznacza dowolny status źródłowy.
+        // Nie używamy '*', bo API waliduje status źródłowy względem listy statusów workflow.
+        condition_status: '',
+        condition_to_status: targetStatus,
+        condition_role: '*',
+        condition_comment_visibility: '*',
+        assigned_state: '*',
+        condition_priority: 'Niski',
+        condition_category: 'Inne',
+        condition_subcategory: 'Inne',
+        condition_sla_state: '*',
+        condition_status_operator: 'eq',
+        condition_to_status_operator: 'eq',
+        condition_role_operator: 'eq',
+        condition_comment_visibility_operator: 'eq',
+        assigned_state_operator: 'eq',
+        condition_priority_operator: 'eq',
+        condition_category_operator: 'eq',
+        condition_subcategory_operator: 'eq',
+        condition_sla_state_operator: 'eq',
+        action_type: 'require_comment',
+        action_status: '',
+        actions: [
+          { action_order: 1, action_type: 'require_comment', action_value: null, is_active: true },
+          { action_order: 2, action_type: 'require_attachment', action_value: null, is_active: true }
+        ],
+        is_active: true,
+        stop_processing: true,
+        priority: 1
+      };
+      const rule = await apiJson(request, 'POST', `/api/admin/workflows/${workflow.id}/automations`, sid, { data: automationPayload });
+      expect(rule.res.ok(), `Utworzenie reguły workflow -> HTTP ${rule.res.status()}: ${rule.text}`).toBeTruthy();
+      automationId = Number(rule.json.id || rule.json.automation_id);
+      expect(automationId, `Brak ID reguły workflow w odpowiedzi: ${rule.text}`).toBeTruthy();
+
+      const noRequirements = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(noRequirements.res.status(), `Zmiana statusu bez komentarza i załącznika powinna zwrócić 409, zwróciła ${noRequirements.res.status()}: ${noRequirements.text}`).toBe(409);
+      expect(JSON.stringify(noRequirements.json)).toMatch(/comment|komentarz/i);
+      expect(JSON.stringify(noRequirements.json)).toMatch(/attachment|załącznik/i);
+
+      const comment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, sid, {
+        data: { content: `Komentarz wymagany przez E2E ${stamp}`, visibility: 'public' }
+      });
+      expect(comment.res.ok(), `Dodanie komentarza -> HTTP ${comment.res.status()}: ${comment.text}`).toBeTruthy();
+
+      // Dodanie komentarza może w tej aplikacji uruchomić inne istniejące reguły workflow,
+      // np. automatyczne przejście z „Nowe” do „W trakcie”. Dlatego reguła E2E
+      // ma pusty źródłowy status, czyli pasuje do dowolnego statusu; po komentarzu dodajemy jeszcze jeden
+      // komentarz w aktualnym statusie, aby warunek „komentarz w obecnym statusie”
+      // był spełniony niezależnie od automatycznych przejść.
+      const afterCommentDetail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+      const currentAfterComment = ticketFromDetail(afterCommentDetail.json).status;
+      if (currentAfterComment !== targetStatus) {
+        const currentComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/comments`, sid, {
+          data: { content: `Komentarz w aktualnym statusie E2E ${stamp}`, visibility: 'public' }
+        });
+        expect(currentComment.res.ok(), `Dodanie komentarza w aktualnym statusie -> HTTP ${currentComment.res.status()}: ${currentComment.text}`).toBeTruthy();
+      }
+
+      const onlyComment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(onlyComment.res.status(), `Zmiana statusu tylko z komentarzem powinna zwrócić 409, zwróciła ${onlyComment.res.status()}: ${onlyComment.text}`).toBe(409);
+      expect(JSON.stringify(onlyComment.json)).toMatch(/attachment|załącznik/i);
+
+      const attachment = await apiJson(request, 'POST', `/api/tickets/${ticketId}/attachments`, sid, {
+        multipart: {
+          file: {
+            name: `e2e-workflow-${stamp}.txt`,
+            mimeType: 'text/plain',
+            buffer: Buffer.from('Załącznik wymagany przez E2E workflow.\n')
+          }
+        }
+      });
+      expect(attachment.res.ok(), `Dodanie załącznika -> HTTP ${attachment.res.status()}: ${attachment.text}`).toBeTruthy();
+
+      const ok = await apiJson(request, 'POST', `/api/tickets/${ticketId}/status`, sid, { data: { status: targetStatus } });
+      expect(ok.res.ok(), `Zmiana statusu po komentarzu i załączniku powinna przejść, HTTP ${ok.res.status()}: ${ok.text}`).toBeTruthy();
+
+      const after = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+      expect(ticketFromDetail(after.json).status).toBe(targetStatus);
+    } finally {
+      if (automationId) {
+        await apiJson(request, 'DELETE', `/api/admin/workflows/${workflow.id}/automations/${automationId}`, sid).catch(() => undefined);
+      }
+    }
+  });
+
+  test('dynamiczne menu ukrywa Kalendarz SLA po odebraniu uprawnienia operatorowi', async ({ page, request }) => {
+    const operatorEmail = process.env.HELPDESK_OPERATOR_EMAIL || '';
+    const operatorPassword = process.env.HELPDESK_OPERATOR_PASSWORD || '';
+    test.skip(!operatorEmail || !operatorPassword, 'Ustaw HELPDESK_OPERATOR_EMAIL i HELPDESK_OPERATOR_PASSWORD, aby testować dynamiczne menu operatora.');
+
+    const sid = await apiLogin(request);
+    const before = await apiJson(request, 'GET', '/api/admin/permissions', sid);
+    expect(before.res.ok(), `Pobranie uprawnień -> HTTP ${before.res.status()}: ${before.text}`).toBeTruthy();
+    const originalOperatorDirect = directPermissionsForRole(before.json, 'operator');
+    const originalUserDirect = directPermissionsForRole(before.json, 'user');
+    expect(originalOperatorDirect.length, 'Nie udało się odczytać bezpośrednich uprawnień roli operator.').toBeGreaterThan(0);
+    expect(originalUserDirect.length, 'Nie udało się odczytać bezpośrednich uprawnień roli user.').toBeGreaterThan(0);
+
+    // Operator dziedziczy po roli user, więc aby wiarygodnie sprawdzić znikanie menu,
+    // tymczasowo zdejmujemy SLA z obu ról i zawsze przywracamy oryginał w finally.
+    const withoutSlaOperator = originalOperatorDirect.filter(code => code !== 'sla.view' && code !== 'sla.manage');
+    const withoutSlaUser = originalUserDirect.filter(code => code !== 'sla.view' && code !== 'sla.manage');
+    try {
+      const updateUser = await apiJson(request, 'POST', '/api/admin/permissions', sid, {
+        data: { role_key: 'user', permission_codes: withoutSlaUser }
+      });
+      expect(updateUser.res.ok(), `Odebranie userowi SLA -> HTTP ${updateUser.res.status()}: ${updateUser.text}`).toBeTruthy();
+
+      const updateOperator = await apiJson(request, 'POST', '/api/admin/permissions', sid, {
+        data: { role_key: 'operator', permission_codes: withoutSlaOperator }
+      });
+      expect(updateOperator.res.ok(), `Odebranie operatorowi SLA -> HTTP ${updateOperator.res.status()}: ${updateOperator.text}`).toBeTruthy();
+
+      const operatorSid = await apiLoginWith(request, operatorEmail, operatorPassword);
+      const operatorPerms = await apiJson(request, 'GET', '/api/permissions/me', operatorSid);
+      const effectivePermissions: string[] = operatorPerms.json.permissions || operatorPerms.json.permission_codes || [];
+      test.skip(effectivePermissions.includes('sla.view') || effectivePermissions.includes('sla.manage'),
+        'Konto operatora nadal ma efektywne uprawnienia SLA, prawdopodobnie przez dodatkową rolę. Użyj czystego konta z rolą operator.');
+
+      await loginAs(page, operatorEmail, operatorPassword);
+      await page.waitForLoadState('networkidle');
+      await expect.poll(async () => firstVisibleCount(page, 'a:has-text("Kalendarz SLA"), button:has-text("Kalendarz SLA")'), {
+        message: 'Kalendarz SLA powinien zniknąć z menu operatora po odebraniu sla.view/sla.manage',
+        timeout: 10000,
+      }).toBe(0);
+    } finally {
+      await apiJson(request, 'POST', '/api/admin/permissions', sid, {
+        data: { role_key: 'operator', permission_codes: originalOperatorDirect }
+      }).catch(() => undefined);
+      await apiJson(request, 'POST', '/api/admin/permissions', sid, {
+        data: { role_key: 'user', permission_codes: originalUserDirect }
+      }).catch(() => undefined);
+    }
   });
 });

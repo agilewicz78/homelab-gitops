@@ -1,25 +1,11 @@
-# Helpdesk — testy API i UI E2E
+# Helpdesk E2E Testing
 
-Ten katalog zawiera testy uruchamiane lokalnie z maszyny, która widzi adres `https://helpdesk.lab.local`.
-Nie zapisuj haseł w repozytorium. Dane logowania podawaj wyłącznie przez zmienne środowiskowe.
-
-## Wymagania
-
-```bash
-sudo apt install -y python3-venv python3-pip nodejs npm
-```
-
-## Konfiguracja Python
-
-```bash
-cd ~/homelab-gitops
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install requests
-```
+Ten katalog zawiera lokalne testy API i UI dla aplikacji Helpdesk uruchamianej w labie.
+Testy uruchamiaj na maszynie, która widzi `https://helpdesk.lab.local`, np. na Ubuntu Desktop.
 
 ## Zmienne środowiskowe
+
+Wymagane dla podstawowych testów:
 
 ```bash
 export HELPDESK_URL="https://helpdesk.lab.local"
@@ -28,88 +14,67 @@ export HELPDESK_ADMIN_PASSWORD="TU_WPISZ_HASLO_LOKALNIE"
 export HELPDESK_IGNORE_TLS=1
 ```
 
-## Smoke test API
-
-Podstawowy test API:
+Opcjonalne dla testu dynamicznego menu operatora:
 
 ```bash
+export HELPDESK_OPERATOR_EMAIL="operator-test@example.local"
+export HELPDESK_OPERATOR_PASSWORD="TU_WPISZ_HASLO_OPERATORA_LOKALNIE"
+```
+
+Hasła wpisuj tylko lokalnie. Nie commituj pliku `.env`.
+
+## Test API
+
+```bash
+source .venv/bin/activate
 python scripts/helpdesk_api_smoke.py --insecure
-```
-
-Test API z utworzeniem zgłoszenia:
-
-```bash
-python scripts/helpdesk_api_smoke.py --insecure --create-ticket
-```
-
-Test API z utworzeniem zgłoszenia, dodaniem komentarza, dodaniem załącznika i ponowną weryfikacją szczegółów:
-
-```bash
 python scripts/helpdesk_api_smoke.py --insecure --exercise-ticket
 ```
 
-## Testy UI Playwright
-
-Instalacja zależności:
+## Test UI
 
 ```bash
 npm install
 npx playwright install chromium
-```
-
-Uruchomienie testów UI:
-
-```bash
 npm run test:e2e
 ```
 
-Uruchomienie testów UI z widoczną przeglądarką:
+Tryb z widoczną przeglądarką:
 
 ```bash
 npm run test:e2e:headed
 ```
 
-Raport HTML:
+Raport:
 
 ```bash
 npm run report
 ```
 
-## Zakres testów UI
+## Zakres testów
 
-Testy UI sprawdzają obecnie:
+Testy UI sprawdzają:
 
-- logowanie i start aplikacji,
+- logowanie i stronę główną,
 - ładowanie listy zgłoszeń,
-- podstawowe moduły administracyjne bez błędów JavaScript i HTTP 5xx,
+- podstawowe moduły administracyjne bez błędów JS i HTTP 5xx,
 - utworzenie zgłoszenia przez UI,
-- dodanie komentarza do zgłoszenia przez UI,
-- dodanie załącznika do zgłoszenia przez UI.
+- dodanie komentarza przez UI,
+- dodanie załącznika przez UI,
+- proces workflow: blokada zmiany statusu bez nowego komentarza i załącznika operatora,
+- dynamiczne menu: ukrycie Kalendarza SLA po odebraniu uprawnienia operatorowi.
 
-## Gdy test się nie powiedzie
+Test dynamicznego menu jest pomijany, jeśli nie ustawisz `HELPDESK_OPERATOR_EMAIL` i `HELPDESK_OPERATOR_PASSWORD`.
 
-Zbierz wyniki Playwrighta:
+## Uwaga o testach modyfikujących dane
+
+Test workflow tworzy tymczasową regułę automatyzacji ograniczoną do zgłoszeń testowych o priorytecie `Niski` i usuwa ją w bloku `finally`.
+Test uprawnień tymczasowo odbiera operatorowi `sla.view`/`sla.manage`, sprawdza menu i przywraca oryginalne uprawnienia w bloku `finally`.
+
+## Zbieranie wyników po błędzie
 
 ```bash
 tar -czf helpdesk-ui-test-results.tar.gz playwright-report test-results
-```
-
-Zbierz logi aplikacji:
-
-```bash
 kubectl logs -n helpdesk deploy/helpdesk-app --tail=300 > helpdesk-app.log
 kubectl get pods -n helpdesk -o wide > helpdesk-pods.txt
 ```
-
-Prześlij do analizy:
-
-```text
-helpdesk-ui-test-results.tar.gz
-helpdesk-app.log
-helpdesk-pods.txt
-```
-
-
-## v5
-
-Poprawiono helpery UI `clickFirstVisible` i `fillFirstVisible`, żeby czekały na asynchroniczne wyrenderowanie widoków po logowaniu.
