@@ -11861,7 +11861,7 @@ data:
             return ticket_status, error_code
         event_type = "internal_note_added" if visibility == "internal" else "comment_added"
         event_message = (
-            f"Dodano notatkę wewnętrzną: {content[:120]}"
+            "Dodano notatkę wewnętrzną."
             if visibility == "internal"
             else f"Dodano komentarz publiczny: {content[:120]}"
         )
