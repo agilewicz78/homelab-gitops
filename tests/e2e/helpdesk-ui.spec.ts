@@ -504,6 +504,23 @@ function isoDateDaysAgo(daysAgo: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+function parseHelpdeskDate(value: string): Date {
+  // Daty z API PostgreSQL przychodzą zwykle jako "YYYY-MM-DD HH:mm:ss" bez strefy.
+  // Do porównań różnic godzinowych wystarczy konsekwentnie parsować oba pola tak samo.
+  const normalized = String(value || '').trim().replace(' ', 'T');
+  const parsed = new Date(normalized);
+  expect(Number.isNaN(parsed.getTime()), `Nie można sparsować daty helpdesku: ${value}`).toBeFalsy();
+  return parsed;
+}
+
+function hoursBetween(start: Date, end: Date): number {
+  return (end.getTime() - start.getTime()) / 1000 / 3600;
+}
+
+function escapeRegExp(value: string): string {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 async function openModule(page: Page, label: string, fallbackFunctionName?: string) {
   try {
     await clickFirstVisible(page, [
@@ -597,6 +614,116 @@ test.describe('Helpdesk E2E SLA, raporty i audyt', () => {
     expect(pageErrors, `Błędy JavaScript runtime: ${pageErrors.join('\n')}`).toHaveLength(0);
     expect(realConsoleErrors, `Błędy console.error: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
     expect(serverErrors, `Błędy HTTP 5xx: ${serverErrors.join('\n')}`).toHaveLength(0);
+  });
+
+  test('nowe zgłoszenie ma wyliczone terminy SLA zgodne z polityką priorytetu', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const priority = 'Niski';
+
+    const policiesResponse = await apiJson(request, 'GET', '/api/sla-policies', sid);
+    expect(policiesResponse.res.ok(), `GET /api/sla-policies -> HTTP ${policiesResponse.res.status()}: ${policiesResponse.text}`).toBeTruthy();
+    const policy = (policiesResponse.json.policies || []).find((p: any) => p.priority === priority);
+    expect(policy, `Nie znaleziono polityki SLA dla priorytetu ${priority}: ${policiesResponse.text}`).toBeTruthy();
+
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const create = await apiJson(request, 'POST', '/api/tickets', sid, {
+      data: {
+        title: `E2E SLA terminy ${stamp}`,
+        description: 'Zgłoszenie testowe do walidacji terminów SLA.',
+        category: 'Inne',
+        subcategory: 'Inne',
+        priority
+      }
+    });
+    expect(create.res.ok(), `Tworzenie zgłoszenia SLA -> HTTP ${create.res.status()}: ${create.text}`).toBeTruthy();
+    const ticketId = Number(create.json.id || create.json.ticket_id || create.json.ticket?.id);
+    expect(ticketId, `Brak ID zgłoszenia SLA: ${create.text}`).toBeTruthy();
+
+    const detail = await apiJson(request, 'GET', `/api/tickets/${ticketId}`, sid);
+    expect(detail.res.ok(), `Szczegóły zgłoszenia SLA -> HTTP ${detail.res.status()}: ${detail.text}`).toBeTruthy();
+    const ticket = ticketFromDetail(detail.json);
+
+    expect(ticket.first_response_due_at, `Brak terminu SLA reakcji w szczegółach zgłoszenia: ${detail.text}`).toBeTruthy();
+    expect(ticket.sla_due_at, `Brak terminu SLA rozwiązania w szczegółach zgłoszenia: ${detail.text}`).toBeTruthy();
+
+    const createdAt = parseHelpdeskDate(ticket.created_at);
+    const firstResponseDue = parseHelpdeskDate(ticket.first_response_due_at);
+    const resolutionDue = parseHelpdeskDate(ticket.sla_due_at);
+    const firstHours = hoursBetween(createdAt, firstResponseDue);
+    const resolutionHours = hoursBetween(createdAt, resolutionDue);
+
+    expect(firstHours, `Termin reakcji powinien wynikać z polityki ${priority}: oczekiwano około ${policy.first_response_hours}h, otrzymano ${firstHours}h`).toBeGreaterThanOrEqual(Number(policy.first_response_hours) - 0.25);
+    expect(firstHours, `Termin reakcji powinien wynikać z polityki ${priority}: oczekiwano około ${policy.first_response_hours}h, otrzymano ${firstHours}h`).toBeLessThanOrEqual(Number(policy.first_response_hours) + 0.25);
+    expect(resolutionHours, `Termin rozwiązania powinien wynikać z polityki ${priority}: oczekiwano około ${policy.resolution_hours}h, otrzymano ${resolutionHours}h`).toBeGreaterThanOrEqual(Number(policy.resolution_hours) - 0.25);
+    expect(resolutionHours, `Termin rozwiązania powinien wynikać z polityki ${priority}: oczekiwano około ${policy.resolution_hours}h, otrzymano ${resolutionHours}h`).toBeLessThanOrEqual(Number(policy.resolution_hours) + 0.25);
+  });
+
+  test('komentarz operatora rejestruje pierwszą reakcję SLA', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const created = await apiCreateTicket(request, 'E2E SLA pierwsza reakcja');
+
+    const before = await apiJson(request, 'GET', `/api/tickets/${created.id}`, sid);
+    expect(before.res.ok(), `Szczegóły przed pierwszą reakcją -> HTTP ${before.res.status()}: ${before.text}`).toBeTruthy();
+    const beforeTicket = ticketFromDetail(before.json);
+    expect(beforeTicket.first_response_due_at, `Zgłoszenie powinno mieć termin pierwszej reakcji: ${before.text}`).toBeTruthy();
+    expect(beforeTicket.first_response_at || '', 'Nowe zgłoszenie nie powinno mieć jeszcze zarejestrowanej pierwszej reakcji.').toBe('');
+
+    const comment = await apiJson(request, 'POST', `/api/tickets/${created.id}/comments`, sid, {
+      data: { content: `Pierwsza reakcja SLA E2E ${new Date().toISOString()}`, visibility: 'public' }
+    });
+    expect(comment.res.ok(), `Dodanie komentarza pierwszej reakcji -> HTTP ${comment.res.status()}: ${comment.text}`).toBeTruthy();
+    expect(comment.json.first_response_registered, `Dodanie komentarza operatora powinno zarejestrować pierwszą reakcję SLA: ${comment.text}`).toBeTruthy();
+
+    const after = await apiJson(request, 'GET', `/api/tickets/${created.id}`, sid);
+    expect(after.res.ok(), `Szczegóły po pierwszej reakcji -> HTTP ${after.res.status()}: ${after.text}`).toBeTruthy();
+    const afterTicket = ticketFromDetail(after.json);
+    expect(afterTicket.first_response_at, `Po komentarzu operatora first_response_at powinno być ustawione: ${after.text}`).toBeTruthy();
+    expect(JSON.stringify(after.json), 'Historia zgłoszenia powinna zawierać zdarzenie pierwszej reakcji SLA.').toMatch(/sla_first_response|pierwsz/i);
+  });
+
+  test('nowe zgłoszenie z terminem rozwiązania pojawia się w kalendarzu SLA', async ({ request }) => {
+    const sid = await apiLogin(request);
+    const created = await apiCreateTicket(request, 'E2E SLA kalendarz');
+
+    const calendar = await apiJson(request, 'GET', '/api/sla-calendar', sid);
+    expect(calendar.res.ok(), `GET /api/sla-calendar po utworzeniu zgłoszenia -> HTTP ${calendar.res.status()}: ${calendar.text}`).toBeTruthy();
+
+    const allCalendarTickets = [
+      ...(calendar.json.overdue || []),
+      ...(calendar.json.today || []),
+      ...(calendar.json.tomorrow || []),
+      ...(calendar.json.next_7_days || []),
+      ...(calendar.json.next_30_days || []),
+    ];
+    const ids = allCalendarTickets.map((ticket: any) => Number(ticket.id || ticket.ticket_id || ticket.ticket?.id));
+    expect(ids, `Kalendarz SLA powinien zawierać nowe otwarte zgłoszenie #${created.id}. Odpowiedź: ${calendar.text.slice(0, 1200)}`).toContain(created.id);
+  });
+
+  test('UI kalendarza SLA pokazuje strukturę kalendarza bez błędów krytycznych', async ({ page }) => {
+    const consoleErrors: string[] = [];
+    const pageErrors: string[] = [];
+    const serverErrors: string[] = [];
+
+    page.on('console', msg => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
+    page.on('pageerror', err => pageErrors.push(err.message));
+    page.on('response', response => {
+      if (response.status() >= 500) serverErrors.push(`${response.status()} ${response.url()}`);
+    });
+
+    await login(page);
+
+    // Widok UI kalendarza SLA jest testem renderowania ekranu. Konkretna obecność nowego
+    // zgłoszenia w grupach SLA jest sprawdzana osobnym testem API powyżej, bo UI może
+    // pokazywać tylko wycinek/paginowaną listę albo mieć otwarty panel powiadomień.
+    await openModule(page, 'Kalendarz SLA', 'renderSlaCalendar');
+    await expect(page.locator('body')).toContainText(/SLA|Kalendarz|Dzisiaj|Najbliższe|Polityki/i, { timeout: 15000 });
+
+    const realConsoleErrors = consoleErrors.filter(e => !isIgnorableConsoleError(e));
+    expect(pageErrors, `Błędy JavaScript runtime w kalendarzu SLA: ${pageErrors.join('\n')}`).toHaveLength(0);
+    expect(realConsoleErrors, `Błędy console.error w kalendarzu SLA: ${realConsoleErrors.join('\n')}`).toHaveLength(0);
+    expect(serverErrors, `Błędy HTTP 5xx w kalendarzu SLA: ${serverErrors.join('\n')}`).toHaveLength(0);
   });
 });
 

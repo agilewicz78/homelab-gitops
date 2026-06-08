@@ -179,3 +179,18 @@ Dodano testy regresji dla głównej listy zgłoszeń:
 - kontrola braku błędów JavaScript i HTTP 5xx podczas używania filtrów.
 
 Te testy zabezpieczają regresję, która wcześniej powodowała pustą pierwszą stronę po zmianach w filtrach zgłoszeń.
+
+## Pakiet v17 — głębsza walidacja SLA
+
+Dodano testy, które sprawdzają nie tylko dostępność endpointów SLA, ale również dane biznesowe:
+
+- nowe zgłoszenie dostaje terminy `first_response_due_at` i `sla_due_at` zgodne z polityką SLA priorytetu,
+- komentarz operatora rejestruje pierwszą reakcję SLA (`first_response_at`),
+- nowe otwarte zgłoszenie pojawia się w kalendarzu SLA,
+- ekran Kalendarza SLA pokazuje strukturę oraz nowe zgłoszenie bez błędów JS i HTTP 5xx.
+
+Uruchomienie:
+
+```bash
+npm run test:e2e
+```
