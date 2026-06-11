@@ -1355,6 +1355,36 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_audit_log_actor_created ON audit_log (lower(actor_email), created_at DESC)",
                 ]:
                     cur.execute(index_sql)
+                # Uzupełnia komentarze dla publicznych aktualizacji zapisanych
+                # przed wdrożeniem propagacji komunikatów do zgłoszeń.
+                cur.execute("""
+                    INSERT INTO comments (
+                      ticket_id, author, author_email, content,
+                      visibility, created_at
+                    )
+                    SELECT
+                      it.ticket_id,
+                      'Incident Command Center · ' ||
+                        COALESCE(iu.created_by_name, iu.created_by_email, 'System'),
+                      iu.created_by_email,
+                      'Incydent #' || i.id || ' (' || i.title || '): ' || iu.message,
+                      'public',
+                      iu.created_at
+                    FROM incident_updates iu
+                    JOIN incidents i ON i.id = iu.incident_id
+                    JOIN incident_tickets it ON it.incident_id = iu.incident_id
+                    WHERE COALESCE(iu.is_public, FALSE) = TRUE
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM comments c
+                        WHERE c.ticket_id = it.ticket_id
+                          AND COALESCE(c.visibility, 'public') = 'public'
+                          AND c.content = (
+                            'Incydent #' || i.id || ' (' || i.title || '): ' ||
+                            iu.message
+                          )
+                      )
+                """)
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for first_name, last_name, email, department, role in SEED_USERS:
                     cur.execute("""
@@ -6557,10 +6587,10 @@ data:
                   <label>Treść</label>
                   <textarea name="message" required placeholder="Co wiemy, co robimy i kiedy będzie kolejna aktualizacja?"></textarea>
                   <label class="switch-row">
-                    <span><strong>Komunikat publiczny</strong><small>Doda publiczny komentarz i powiadomi użytkowników w każdym powiązanym zgłoszeniu.</small></span>
-                    <span class="switch"><input type="checkbox" name="is_public"><span class="slider"></span></span>
+                    <span><strong>Opublikuj w powiązanych zgłoszeniach</strong><small>Domyślnie komunikat trafi jako publiczny komentarz do każdego ticketu. Wyłącz przełącznik tylko dla notatki wewnętrznej.</small></span>
+                    <span class="switch"><input type="checkbox" name="is_public" checked><span class="slider"></span></span>
                   </label>
-                  <button type="submit">Dodaj do osi czasu</button>
+                  <button id="incidentUpdateSubmit" type="submit">Opublikuj w ${{(data.tickets || []).length}} zgłoszeniach</button>
                 </form>
               </section>
             </div>
@@ -6589,7 +6619,21 @@ data:
             showToast("Zaktualizowano incydent #" + i.id);
             await renderIncident(i.id);
           }});
-          document.getElementById("incidentUpdateForm")?.addEventListener("submit", async (event) => {{
+          const incidentUpdateForm = document.getElementById("incidentUpdateForm");
+          const incidentPublicToggle = incidentUpdateForm?.querySelector('[name="is_public"]');
+          const incidentUpdateSubmit = document.getElementById("incidentUpdateSubmit");
+          const linkedTicketCount = (data.tickets || []).length;
+          const syncIncidentUpdateMode = () => {{
+            if (!incidentUpdateSubmit || !incidentPublicToggle) return;
+            incidentUpdateSubmit.textContent = incidentPublicToggle.checked
+              ? (linkedTicketCount > 0
+                ? `Opublikuj w ${{linkedTicketCount}} zgłoszeniach`
+                : "Zapisz publiczny komunikat (brak powiązanych zgłoszeń)")
+              : "Dodaj notatkę wewnętrzną";
+          }};
+          incidentPublicToggle?.addEventListener("change", syncIncidentUpdateMode);
+          syncIncidentUpdateMode();
+          incidentUpdateForm?.addEventListener("submit", async (event) => {{
             event.preventDefault();
             const form = event.target;
             const payload = Object.fromEntries(new FormData(form).entries());
@@ -6602,9 +6646,10 @@ data:
             }}
             const result = await updateRes.json().catch(() => ({{}}));
             const publicCommentCount = Number(result.public_comments_created || 0);
+            const reportedTicketCount = Number(result.linked_ticket_count || 0);
             const details = payload.is_public
               ? (publicCommentCount > 0
-                ? `Liczba zaktualizowanych zgłoszeń: ${{publicCommentCount}}.`
+                ? `Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}} powiązanych zgłoszeń.`
                 : "Komunikat zapisano, ale incydent nie ma powiązanych zgłoszeń.")
               : "Komunikat zapisano jako wewnętrzny.";
             showToast("Dodano komunikat do incydentu #" + i.id, details);

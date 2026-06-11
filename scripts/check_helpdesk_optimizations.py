@@ -111,6 +111,9 @@ def main() -> None:
 
     for table in ("incidents", "incident_tickets", "incident_updates"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in text
+    assert "Uzupełnia komentarze dla publicznych aktualizacji" in text
+    assert "JOIN incident_tickets it ON it.incident_id = iu.incident_id" in text
+    assert "COALESCE(iu.is_public, FALSE) = TRUE" in text
 
     required_incident_routes = [
         '@app.get("/api/incidents")',
@@ -165,8 +168,9 @@ def main() -> None:
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
     assert "Incident Command Center" in text
-    assert "Doda publiczny komentarz i powiadomi użytkowników" in text
-    assert "Liczba zaktualizowanych zgłoszeń" in text
+    assert 'name="is_public" checked' in text
+    assert "Opublikuj w powiązanych zgłoszeniach" in text
+    assert "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}" in text
     assert "Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego" in text
     assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
     assert '"incidents": incidents' in text
