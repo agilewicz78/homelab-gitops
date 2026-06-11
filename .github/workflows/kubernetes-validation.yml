@@ -1,0 +1,58 @@
+name: Kubernetes manifest validation
+
+on:
+  pull_request:
+    paths:
+      - 'applications/**'
+      - 'bootstrap/**'
+      - 'infrastructure/**'
+      - '.github/workflows/kubernetes-validation.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'applications/**'
+      - 'bootstrap/**'
+      - 'infrastructure/**'
+      - '.github/workflows/kubernetes-validation.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Check YAML syntax
+        shell: bash
+        run: |
+          set -euo pipefail
+          find applications bootstrap infrastructure \
+            -type f \( -name '*.yaml' -o -name '*.yml' \) \
+            -print0 \
+            | xargs -0 ruby -e '
+                require "yaml"
+                ARGV.each do |path|
+                  YAML.parse_stream(File.read(path))
+                  puts "YAML OK: #{path}"
+                end
+              '
+
+      - name: Validate Kubernetes schemas
+        uses: docker://ghcr.io/yannh/kubeconform:v0.8.0
+        with:
+          entrypoint: /kubeconform
+          args: >-
+            -strict
+            -summary
+            -verbose
+            -schema-location default
+            -schema-location https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+            -ignore-filename-pattern infrastructure/manual/portainer/portainer-values\.yaml$
+            applications
+            bootstrap
+            infrastructure
