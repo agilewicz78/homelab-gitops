@@ -1809,13 +1809,14 @@ data:
         return has_permission(user, "users.manage")
     
     # Publikuje zdarzenia live przez WebSocket do aktywnych klientów.
-    def publish_event(message, event_type="info", ticket_id=None, staff_only=False):
+    def publish_event(message, event_type="info", ticket_id=None, staff_only=False, ticket_ids=None):
         global last_live_event
         event = {
             "id": str(uuid.uuid4()),
             "type": event_type,
             "message": message,
             "ticket_id": ticket_id,
+            "ticket_ids": sorted({int(item) for item in (ticket_ids or []) if item}),
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "staff_only": staff_only,
         }
@@ -3305,6 +3306,7 @@ data:
             status_changed: "Zmiana statusu",
             comment_added: "Komentarz",
             incident_update: "Aktualizacja incydentu",
+            incident_linked: "Powiązanie z incydentem",
             internal_note_added: "Notatka wewnętrzna",
             assignment_changed: "Przypisanie",
             attachment_added: "Załącznik",
@@ -3535,10 +3537,19 @@ data:
           if (suppressNextLiveRefresh) {{
             suppressNextLiveRefresh = false;
           }}
+          const affectedTicketIds = Array.isArray(liveEvent.ticket_ids)
+            ? liveEvent.ticket_ids.map(Number)
+            : [];
           // Nawet gdy pomijamy popup po własnej akcji, odświeżamy aktywny widok,
           // żeby lista zgłoszeń, dashboard i kalendarz SLA dostały aktualny status.
-          if (currentView.name === "ticket" && Number(currentView.ticketId) === Number(liveEvent.ticket_id)) {{
-            await renderTicket(liveEvent.ticket_id, true);
+          if (
+            currentView.name === "ticket"
+            && (
+              Number(currentView.ticketId) === Number(liveEvent.ticket_id)
+              || affectedTicketIds.includes(Number(currentView.ticketId))
+            )
+          ) {{
+            await renderTicket(currentView.ticketId, true);
             return;
           }}
           if (currentView.name === "home") {{
@@ -6985,13 +6996,21 @@ data:
           const isClosed = t.status === "Zamknięte";
           const incidentBanners = (data.incidents || []).map(i => `
             <div class="incident-banner ${{incidentSeverityClass(i.severity)}}">
+              <div class="muted"><strong>Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego.</strong></div>
               <div class="ticket-section-title">
                 <strong>${{esc(i.severity)}} · Incydent #${{i.id}} · ${{esc(i.title)}}</strong>
                 <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
               </div>
               <p>${{esc(i.summary)}}</p>
               ${{i.impact ? `<p class="muted"><strong>Wpływ:</strong> ${{esc(i.impact)}}</p>` : ""}}
-              <p class="muted">Dowódca: ${{esc(i.commander_name || "Nieprzypisany")}} · aktualizacja: ${{esc(i.updated_at)}}</p>
+              ${{i.latest_public_update ? `
+                <div class="comment incident-update-public">
+                  <div class="muted"><strong>Ostatnia publiczna aktualizacja</strong> · ${{esc(i.latest_public_update_at)}}</div>
+                  <div>${{esc(i.latest_public_update)}}</div>
+                </div>
+              ` : `<p class="muted">Operator nie opublikował jeszcze publicznej aktualizacji.</p>`}}
+              <p class="muted">Powiązano: ${{esc(i.linked_at)}} · Dowódca: ${{esc(i.commander_name || "Nieprzypisany")}} · aktualizacja incydentu: ${{esc(i.updated_at)}}</p>
+              <p class="muted">Nie musisz tworzyć kolejnego zgłoszenia. Publiczne komunikaty incydentu pojawią się również w komentarzach poniżej.</p>
               ${{canWorkTickets(me) ? `<button class="btn-secondary btn-small" onclick="renderIncident(${{i.id}})">Otwórz centrum incydentu</button>` : ""}}
             </div>
           `).join("");
@@ -7610,8 +7629,22 @@ data:
                         live_state_condition.wait(timeout=WS_HEARTBEAT_SECONDS)
                     event = last_live_event
                     active_client_count = len(active_ws_clients)
-                if event and event.get("staff_only") and not is_staff(user):
-                    event = None
+                if event and not is_staff(user):
+                    if event.get("staff_only"):
+                        event = None
+                    elif event.get("ticket_id") and not can_view_ticket(user, event["ticket_id"]):
+                        event = None
+                    elif event.get("ticket_ids"):
+                        visible_ticket_ids = [
+                            ticket_id
+                            for ticket_id in event["ticket_ids"]
+                            if can_view_ticket(user, ticket_id)
+                        ]
+                        if not visible_ticket_ids:
+                            event = None
+                        else:
+                            event = dict(event)
+                            event["ticket_ids"] = visible_ticket_ids
                 ws.send(json.dumps({
                     "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
                     "active_clients": active_client_count,
@@ -9776,6 +9809,10 @@ data:
             WHERE incident_id = %s
         """, (incident_id,))
         ticket_ids = [ticket[0] for ticket in cur.fetchall()]
+        cur.execute(
+            "UPDATE incidents SET updated_at = NOW() WHERE id = %s",
+            (incident_id,),
+        )
         public_comments_created = 0
         for ticket_id in ticket_ids:
             if is_public:
@@ -9829,6 +9866,7 @@ data:
             "incident_update",
             None,
             staff_only=not is_public,
+            ticket_ids=ticket_ids if is_public else None,
         )
         return jsonify({
             "status": "ok",
@@ -9847,7 +9885,11 @@ data:
             return jsonify({"error": "Podaj poprawne ID zgłoszenia."}), 400
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT title FROM incidents WHERE id = %s", (incident_id,))
+        cur.execute("""
+            SELECT title, severity
+            FROM incidents
+            WHERE id = %s
+        """, (incident_id,))
         incident_row = cur.fetchone()
         cur.execute("SELECT title FROM tickets WHERE id = %s", (ticket_id,))
         ticket_row = cur.fetchone()
@@ -9864,6 +9906,43 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Zgłoszenie jest już powiązane z tym incydentem."}), 409
+        cur.execute("""
+            SELECT message, created_at
+            FROM incident_updates
+            WHERE incident_id = %s
+              AND COALESCE(is_public, FALSE) = TRUE
+            ORDER BY id DESC
+            LIMIT 1
+        """, (incident_id,))
+        latest_public_update = cur.fetchone()
+        public_comment = (
+            f"Twoje zgłoszenie zostało powiązane z incydentem "
+            f"{incident_row[1]} #{incident_id}: {incident_row[0]}. "
+            "Dalsze publiczne aktualizacje operatora będą automatycznie "
+            "dodawane do tego zgłoszenia."
+        )
+        if latest_public_update:
+            public_comment += (
+                f"\n\nOstatnia publiczna aktualizacja "
+                f"({latest_public_update[1]}): {latest_public_update[0]}"
+            )
+        cur.execute("""
+            INSERT INTO comments (
+              ticket_id, author, author_email, content, visibility
+            )
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            ticket_id,
+            f"Incident Command Center · {user['name']}",
+            user["email"],
+            public_comment,
+            "public",
+        ))
+        mark_first_response_if_needed(cur, ticket_id, user)
+        cur.execute(
+            "UPDATE tickets SET updated_at = NOW() WHERE id = %s",
+            (ticket_id,),
+        )
         cur.execute("""
             INSERT INTO incident_updates (
               incident_id, update_type, message, is_public,
@@ -9900,9 +9979,11 @@ data:
             f"Powiązano zgłoszenie #{ticket_id} z incydentem #{incident_id}",
             "incident_ticket_linked",
             ticket_id,
-            staff_only=True,
         )
-        return jsonify({"status": "ok"}), 201
+        return jsonify({
+            "status": "ok",
+            "public_comment_created": True,
+        }), 201
 
     @app.delete("/api/incidents/<int:incident_id>/tickets/<int:ticket_id>")
     @api_login_required
@@ -11375,9 +11456,20 @@ data:
               i.id, i.title, i.summary, COALESCE(i.impact, ''),
               i.severity, i.status,
               COALESCE(i.commander_name, i.commander_email, ''),
-              i.updated_at
+              i.updated_at,
+              it.linked_at,
+              COALESCE(latest_public.message, ''),
+              latest_public.created_at
             FROM incident_tickets it
             JOIN incidents i ON i.id = it.incident_id
+            LEFT JOIN LATERAL (
+              SELECT iu.message, iu.created_at
+              FROM incident_updates iu
+              WHERE iu.incident_id = i.id
+                AND COALESCE(iu.is_public, FALSE) = TRUE
+              ORDER BY iu.id DESC
+              LIMIT 1
+            ) latest_public ON TRUE
             WHERE it.ticket_id = %s
             ORDER BY
               CASE i.status WHEN 'resolved' THEN 2 ELSE 1 END,
@@ -11493,6 +11585,9 @@ data:
             "status": incident[5],
             "commander_name": incident[6],
             "updated_at": str(incident[7]),
+            "linked_at": str(incident[8]),
+            "latest_public_update": incident[9],
+            "latest_public_update_at": str(incident[10]) if incident[10] else "",
         } for incident in incident_rows]
         conn2 = get_conn()
         cur2 = conn2.cursor()

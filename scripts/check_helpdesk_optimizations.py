@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 APP_CONFIG = Path("applications/helpdesk/app-configmap.yaml")
+DEPLOYMENT = Path("applications/helpdesk/helpdesk-deployment.yaml")
 APP_MARKER = "  app.py: |\n"
 
 
@@ -16,6 +17,7 @@ def section(text: str, start: str, end: str) -> str:
 
 def main() -> None:
     text = APP_CONFIG.read_text(encoding="utf-8")
+    deployment_text = DEPLOYMENT.read_text(encoding="utf-8")
     _, app_block = text.split(APP_MARKER, 1)
     app_lines = app_block.splitlines(keepends=True)
     invalid_lines = [
@@ -138,13 +140,37 @@ def main() -> None:
     assert "mark_first_response_if_needed(cur, ticket_id, user)" in public_comment_branch
     assert "UPDATE tickets SET updated_at = NOW() WHERE id = %s" in public_comment_branch
     assert "public_comments_created" in incident_update_api
+    assert "UPDATE incidents SET updated_at = NOW()" in incident_update_api
+    assert "ticket_ids=ticket_ids if is_public else None" in incident_update_api
+
+    incident_link_api = section(
+        text,
+        "    def api_link_incident_ticket(user, incident_id):",
+        '    @app.delete("/api/incidents/<int:incident_id>/tickets/<int:ticket_id>")',
+    )
+    assert "INSERT INTO comments" in incident_link_api
+    assert "Dalsze publiczne aktualizacje operatora" in incident_link_api
+    assert "latest_public_update" in incident_link_api
+    assert '"public_comment_created": True' in incident_link_api
+
+    ticket_detail_api = section(
+        text,
+        "    def api_ticket_detail(user, ticket_id):",
+        '    @app.post("/api/tickets/<int:ticket_id>/close")',
+    )
+    assert "LEFT JOIN LATERAL" in ticket_detail_api
+    assert "latest_public_update" in ticket_detail_api
+    assert '"linked_at": str(incident[8])' in ticket_detail_api
 
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
     assert "Incident Command Center" in text
     assert "Doda publiczny komentarz i powiadomi użytkowników" in text
     assert "Liczba zaktualizowanych zgłoszeń" in text
+    assert "Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego" in text
+    assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
     assert '"incidents": incidents' in text
+    assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
