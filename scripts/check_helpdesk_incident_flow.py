@@ -135,6 +135,18 @@ def main():
     assert update_cursor.ticket_timestamp_updates == 2
     assert events[-1][1]["ticket_ids"] == [101, 102]
 
+    Request.payload = {
+        "message": "Internal hypothesis.",
+        "update_type": "investigation",
+        "is_public": False,
+    }
+    body, status = namespace["api_add_incident_update"](user, 7)
+    internal_cursor = connections[-1].cursor_value
+    assert status == 201
+    assert body["public_comments_created"] == 0
+    assert len(internal_cursor.comment_inserts) == 0
+    assert events[-1][1]["ticket_ids"] is None
+
     Request.payload = {"ticket_id": 103}
     body, status = namespace["api_link_incident_ticket"](user, 7)
     link_cursor = connections[-1].cursor_value
