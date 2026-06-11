@@ -56,5 +56,8 @@ jobs:
       - name: Check Helpdesk database optimizations
         run: python scripts/check_helpdesk_optimizations.py
 
+      - name: Check Helpdesk incident flow
+        run: python scripts/check_helpdesk_incident_flow.py
+
       - name: Check Helpdesk frontend syntax
         run: node scripts/check_helpdesk_frontend.js

@@ -25,6 +25,9 @@ spec:
     metadata:
       labels:
         app: helpdesk
+      annotations:
+        # Zmiana rewizji wymusza odtworzenie poda po aktualizacji kodu w ConfigMap.
+        helpdesk.incoprp.local/app-config-revision: "2026-06-11-incident-visibility-v2"
 
     spec:
       # Pod-level securityContext:
