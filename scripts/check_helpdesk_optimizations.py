@@ -53,6 +53,17 @@ def main() -> None:
         "idx_attachments_ticket_id_id",
         "idx_ticket_watchers_ticket_email_lower",
         "idx_notifications_user_created",
+        "idx_workflow_rule_executions_created",
+        "idx_workflow_rule_executions_workflow_id",
+        "idx_workflow_rule_executions_ticket_id",
+        "idx_workflow_rule_executions_automation_id",
+        "idx_workflow_rule_executions_event_type",
+        "idx_workflow_automations_event",
+        "idx_workflow_automation_actions_lookup",
+        "idx_ticket_status_history_resolution",
+        "idx_audit_log_created",
+        "idx_audit_log_action_created",
+        "idx_audit_log_actor_created",
     ]
     missing_indexes = [name for name in required_indexes if name not in text]
     assert not missing_indexes, f"Missing Helpdesk indexes: {missing_indexes}"
@@ -66,6 +77,31 @@ def main() -> None:
     assert "t.updated_at::date" not in ticket_list
     assert "t.created_at >= %s::date" in ticket_list
     assert "t.created_at < (%s::date + INTERVAL '1 day')" in ticket_list
+
+    workflow_log_api = section(
+        text,
+        "    def api_admin_workflow_rule_executions(user):",
+        "    @app.get(\"/api/workflow-rule-executions.csv\")",
+    )
+    workflow_log_csv_api = section(
+        text,
+        "    def api_admin_workflow_rule_executions_csv(user):",
+        "    @app.get(\"/api/tickets\")",
+    )
+    for endpoint in (workflow_log_api, workflow_log_csv_api):
+        assert "CREATE TABLE IF NOT EXISTS workflow_rule_executions" not in endpoint
+        assert "ALTER TABLE workflow_rule_executions" not in endpoint
+        assert "COALESCE(wre.event_type, '') = %s" not in endpoint
+        assert "wre.event_type = %s" in endpoint
+
+    websocket = section(
+        text,
+        "    def websocket(ws):",
+        "    @app.get(\"/healthz\")",
+    )
+    assert "live_state_condition.wait(timeout=WS_HEARTBEAT_SECONDS)" in websocket
+    assert "time.sleep(1)" not in websocket
+    assert "live_state_condition.notify_all()" in text
 
     print("Helpdesk database optimization checks passed")
 

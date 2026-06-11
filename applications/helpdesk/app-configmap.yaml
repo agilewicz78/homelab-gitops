@@ -30,6 +30,7 @@ data:
     app.secret_key = os.getenv("FLASK_SECRET_KEY", "change-me")
     sock = Sock(app)
     active_ws_clients = set()
+    live_state_condition = threading.Condition()
     last_live_event = {"id": str(uuid.uuid4()), "type": "system", "message": "System gotowy", "ticket_id": None}
     DB_HOST = os.getenv("DB_HOST", "helpdesk-postgres")
     DB_PORT = os.getenv("DB_PORT", "5432")
@@ -38,6 +39,7 @@ data:
     DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
     ATTACHMENTS_DIR = os.getenv("ATTACHMENTS_DIR", "/data/attachments")
     MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+    WS_HEARTBEAT_SECONDS = max(5, int(os.getenv("WS_HEARTBEAT_SECONDS", "30")))
     ROLE_PERMISSION_CACHE_TTL_SECONDS = max(
         1, int(os.getenv("ROLE_PERMISSION_CACHE_TTL_SECONDS", "30"))
     )
@@ -1296,6 +1298,17 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_ticket_links_ticket_id ON ticket_links (ticket_id)",
                     "CREATE INDEX IF NOT EXISTS idx_ticket_links_linked_ticket_id ON ticket_links (linked_ticket_id)",
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_created ON workflow_rule_executions (created_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_workflow_id ON workflow_rule_executions (workflow_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_ticket_id ON workflow_rule_executions (ticket_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_automation_id ON workflow_rule_executions (automation_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_event_type ON workflow_rule_executions (event_type, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_automations_event ON workflow_automations (workflow_id, event_type, priority, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_workflow_automation_actions_lookup ON workflow_automation_actions (automation_id, is_active, action_order)",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_status_history_resolution ON ticket_status_history (new_status, created_at, ticket_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at DESC, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_audit_log_action_created ON audit_log (action, created_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_audit_log_actor_created ON audit_log (lower(actor_email), created_at DESC)",
                 ]:
                     cur.execute(index_sql)
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
@@ -1754,7 +1767,7 @@ data:
     # Publikuje zdarzenia live przez WebSocket do aktywnych klientów.
     def publish_event(message, event_type="info", ticket_id=None, staff_only=False):
         global last_live_event
-        last_live_event = {
+        event = {
             "id": str(uuid.uuid4()),
             "type": event_type,
             "message": message,
@@ -1762,6 +1775,9 @@ data:
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
             "staff_only": staff_only,
         }
+        with live_state_condition:
+            last_live_event = event
+            live_state_condition.notify_all()
     def staff_notification_recipients(cur):
         cur.execute("""
             SELECT email
@@ -7253,15 +7269,21 @@ data:
             if not user:
                 ws.send(json.dumps({"error": "unauthorized"}))
                 return
-            active_ws_clients.add(client_id)
+            with live_state_condition:
+                active_ws_clients.add(client_id)
             publish_event(f"{user['name']} połączony z live helpdesk", "presence")
+            has_sent_payload = False
             while True:
-                event = last_live_event
+                with live_state_condition:
+                    if has_sent_payload:
+                        live_state_condition.wait(timeout=WS_HEARTBEAT_SECONDS)
+                    event = last_live_event
+                    active_client_count = len(active_ws_clients)
                 if event and event.get("staff_only") and not is_staff(user):
                     event = None
                 ws.send(json.dumps({
                     "server_time": time.strftime("%Y-%m-%d %H:%M:%S"),
-                    "active_clients": len(active_ws_clients),
+                    "active_clients": active_client_count,
                     "user": {
                         "name": user["name"],
                         "email": user["email"],
@@ -7270,11 +7292,13 @@ data:
                     },
                     "event": event,
                 }))
-                time.sleep(1)
+                has_sent_payload = True
         except Exception:
             pass
         finally:
-            active_ws_clients.discard(client_id)
+            with live_state_condition:
+                active_ws_clients.discard(client_id)
+                live_state_condition.notify_all()
     @app.get("/healthz")
     def healthz():
         return {"status": "ok"}
@@ -8742,7 +8766,7 @@ data:
         elif matched_filter in ("skipped", "false", "0"):
             clauses.append("COALESCE(wre.matched, TRUE) = FALSE")
         if event_type_filter and event_type_filter != "all":
-            clauses.append("COALESCE(wre.event_type, '') = %s")
+            clauses.append("wre.event_type = %s")
             params.append(event_type_filter)
         if actor_filter:
             like = f"%{actor_filter}%"
@@ -8772,41 +8796,6 @@ data:
             conn = get_conn()
             cur = conn.cursor()
             cur.execute("SET LOCAL statement_timeout = '5000ms'")
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS workflow_rule_executions (
-                    id SERIAL PRIMARY KEY,
-                    automation_id INTEGER,
-                    workflow_id INTEGER,
-                    workflow_key TEXT,
-                    ticket_id INTEGER,
-                    event_type TEXT,
-                    matched BOOLEAN DEFAULT TRUE,
-                    actions_executed TEXT,
-                    reason TEXT,
-                    actor_email TEXT,
-                    actor_name TEXT,
-                    current_status TEXT,
-                    event_new_status TEXT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            for ddl in [
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS automation_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS workflow_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS workflow_key TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS ticket_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS event_type TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS matched BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actions_executed TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS reason TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actor_email TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actor_name TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS current_status TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS event_new_status TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
-            ]:
-                cur.execute(ddl)
-            conn.commit()
             cur.execute(f"""
                 SELECT COUNT(*)
                 FROM workflow_rule_executions wre
@@ -8955,7 +8944,7 @@ data:
         elif matched_filter in ("skipped", "false", "0"):
             clauses.append("COALESCE(wre.matched, TRUE) = FALSE")
         if event_type_filter and event_type_filter != "all":
-            clauses.append("COALESCE(wre.event_type, '') = %s")
+            clauses.append("wre.event_type = %s")
             params.append(event_type_filter)
         if actor_filter:
             like = f"%{actor_filter}%"
@@ -9010,41 +8999,6 @@ data:
             conn = get_conn()
             cur = conn.cursor()
             cur.execute("SET LOCAL statement_timeout = '10000ms'")
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS workflow_rule_executions (
-                    id SERIAL PRIMARY KEY,
-                    automation_id INTEGER,
-                    workflow_id INTEGER,
-                    workflow_key TEXT,
-                    ticket_id INTEGER,
-                    event_type TEXT,
-                    matched BOOLEAN DEFAULT TRUE,
-                    actions_executed TEXT,
-                    reason TEXT,
-                    actor_email TEXT,
-                    actor_name TEXT,
-                    current_status TEXT,
-                    event_new_status TEXT,
-                    created_at TIMESTAMP DEFAULT NOW()
-                )
-            """)
-            for ddl in [
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS automation_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS workflow_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS workflow_key TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS ticket_id INTEGER",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS event_type TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS matched BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actions_executed TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS reason TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actor_email TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS actor_name TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS current_status TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS event_new_status TEXT",
-                "ALTER TABLE workflow_rule_executions ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()",
-            ]:
-                cur.execute(ddl)
-            conn.commit()
             cur.execute(f"""
                 SELECT
                     wre.id,
