@@ -172,6 +172,10 @@ def main() -> None:
     assert "Opublikuj w powiązanych zgłoszeniach" in text
     assert "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}" in text
     assert "Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego" in text
+    assert "const incidentRelations = (data.incidents || []).length" in text
+    assert "const directTicketRelations = (data.linked_tickets || []).length" in text
+    assert "const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length" in text
+    assert "incident-relation ${{incidentSeverityClass(i.severity)}}" in text
     assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
     assert '"incidents": incidents' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text

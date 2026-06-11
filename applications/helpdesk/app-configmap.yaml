@@ -2773,11 +2773,12 @@ data:
         .status-history-item { border-left: 3px solid #94a3b8; }
         .incident-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; }
         .incident-card { border-left: 5px solid #64748b; cursor: pointer; }
-        .incident-card.sev1, .incident-banner.sev1 { border-left-color: #ef4444; }
-        .incident-card.sev2, .incident-banner.sev2 { border-left-color: #f97316; }
-        .incident-card.sev3, .incident-banner.sev3 { border-left-color: #facc15; }
-        .incident-card.sev4, .incident-banner.sev4 { border-left-color: #38bdf8; }
+        .incident-card.sev1, .incident-banner.sev1, .incident-relation.sev1 { border-left-color: #ef4444; }
+        .incident-card.sev2, .incident-banner.sev2, .incident-relation.sev2 { border-left-color: #f97316; }
+        .incident-card.sev3, .incident-banner.sev3, .incident-relation.sev3 { border-left-color: #facc15; }
+        .incident-card.sev4, .incident-banner.sev4, .incident-relation.sev4 { border-left-color: #38bdf8; }
         .incident-banner { border-left: 5px solid #64748b; background: rgba(127,29,29,.18); padding: 14px; border-radius: 14px; margin: 14px 0; }
+        .incident-relation { border-left: 4px solid #64748b; }
         .incident-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
         .incident-update-public { border-left: 3px solid #22c55e; }
         .incident-update-internal { border-left: 3px solid #64748b; }
@@ -7123,8 +7124,26 @@ data:
             .filter(w => !watcherEmails.has(String(w.email || "").toLowerCase()) && String(w.email || "").toLowerCase() !== String(t.requester_email || "").toLowerCase())
             .map(w => `<option value="${{esc(w.email)}}">${{esc(w.name)}} · ${{esc(w.email)}} · ${{esc((w.roles || []).join(", "))}}</option>`)
             .join("");
-          const linkedTickets = (data.linked_tickets || []).length
-            ? `<div class="watcher-list">${{data.linked_tickets.map(l => `
+          const incidentRelations = (data.incidents || []).length
+            ? `
+              <div class="watcher-meta"><strong>Incydenty zbiorcze</strong></div>
+              <div class="watcher-list">${{data.incidents.map(i => `
+                <div class="watcher-item incident-relation ${{incidentSeverityClass(i.severity)}}">
+                  <div>
+                    <strong>Incydent #${{i.id}} · ${{esc(i.title)}}</strong>
+                    <div class="watcher-meta">
+                      <span class="pill">${{esc(i.severity)}}</span>
+                      · <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
+                      · powiązano: ${{esc(i.linked_at)}}
+                    </div>
+                  </div>
+                  ${{canWorkTickets(me) ? `<button class="btn-secondary btn-small" onclick="renderIncident(${{i.id}})">Otwórz incydent</button>` : ""}}
+                </div>`).join("")}}</div>`
+            : "";
+          const directTicketRelations = (data.linked_tickets || []).length
+            ? `
+              <div class="watcher-meta"><strong>Bezpośrednio powiązane zgłoszenia</strong></div>
+              <div class="watcher-list">${{data.linked_tickets.map(l => `
                 <div class="watcher-item">
                   <div>
                     <strong><a href="#" onclick="renderTicket(${{l.id}}); return false;">#${{l.id}} · ${{esc(l.title)}}</a></strong>
@@ -7136,11 +7155,18 @@ data:
                   </div>
                   ${{canWorkTickets(me) && !isClosed ? `<button class="btn-secondary btn-small" onclick="removeTicketLink(${{t.id}}, ${{l.id}})">Usuń</button>` : ""}}
                 </div>`).join("")}}</div>`
-            : `<p class="muted">Brak powiązanych zgłoszeń.</p>`;
+            : "";
+          const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length;
+          const linkedTickets = relationCount
+            ? `${{incidentRelations}}${{directTicketRelations}}`
+            : `<p class="muted">Brak powiązanych zgłoszeń ani incydentów.</p>`;
           const linkedTicketsPanel = `
             <section class="card">
-              <h3>Powiązane zgłoszenia</h3>
-              <p class="muted">Powiązania pomagają łączyć zgłoszenia dotyczące tego samego problemu, duplikatów albo wspólnego incydentu.</p>
+              <div class="ticket-section-title">
+                <h3>Powiązane zgłoszenia</h3>
+                <span class="counter">${{relationCount}}</span>
+              </div>
+              <p class="muted">Tutaj widać zarówno bezpośrednie powiązania między zgłoszeniami, jak i incydenty zbiorcze, w ramach których obsługiwany jest ten ticket.</p>
               ${{linkedTickets}}
               ${{canWorkTickets(me) && !isClosed ? `
                 <form id="ticketLinkForm">
