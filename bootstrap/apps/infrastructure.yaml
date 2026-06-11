@@ -12,6 +12,7 @@ spec:
     path: infrastructure
     directory:
       recurse: true
+      exclude: 'manual/portainer/portainer-values.yaml'
 
   destination:
     server: https://kubernetes.default.svc
