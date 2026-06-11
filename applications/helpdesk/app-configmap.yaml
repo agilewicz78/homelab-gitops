@@ -15,6 +15,7 @@ data:
     from datetime import datetime, timedelta
     import uuid
     import json
+    import threading
     import psycopg2
     from functools import wraps
     from flask import Flask, request, redirect, Response, jsonify, send_file
@@ -37,6 +38,11 @@ data:
     DB_PASSWORD = os.getenv("POSTGRES_PASSWORD")
     ATTACHMENTS_DIR = os.getenv("ATTACHMENTS_DIR", "/data/attachments")
     MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024
+    ROLE_PERMISSION_CACHE_TTL_SECONDS = max(
+        1, int(os.getenv("ROLE_PERMISSION_CACHE_TTL_SECONDS", "30"))
+    )
+    role_permission_cache = {"expires_at": 0.0, "codes": {}}
+    role_permission_cache_lock = threading.Lock()
     ALLOWED_ATTACHMENT_EXTENSIONS = {
         "png", "jpg", "jpeg", "gif", "pdf", "txt", "log", "csv", "xlsx", "docx"
     }
@@ -618,6 +624,61 @@ data:
                 """, (role_key, code))
     
     
+    def invalidate_role_permission_cache():
+        with role_permission_cache_lock:
+            role_permission_cache["expires_at"] = 0.0
+            role_permission_cache["codes"] = {}
+
+
+    def role_permission_codes_by_role():
+        now = time.monotonic()
+        with role_permission_cache_lock:
+            if now < role_permission_cache["expires_at"]:
+                return {
+                    key: set(codes)
+                    for key, codes in role_permission_cache["codes"].items()
+                }
+
+            conn = None
+            cur = None
+            try:
+                conn = get_conn()
+                cur = conn.cursor()
+                cur.execute("""
+                    SELECT role_key, permission_code
+                    FROM role_permissions
+                    WHERE enabled = TRUE
+                """)
+                codes_by_role = {role: set() for role in VALID_ROLES}
+                for role_key, permission_code in cur.fetchall():
+                    if role_key in codes_by_role:
+                        codes_by_role[role_key].add(permission_code)
+                for role_key, locked_codes in LOCKED_ROLE_PERMISSION_CODES.items():
+                    codes_by_role.setdefault(role_key, set()).update(locked_codes)
+                role_permission_cache["codes"] = {
+                    key: set(codes)
+                    for key, codes in codes_by_role.items()
+                }
+                role_permission_cache["expires_at"] = (
+                    now + ROLE_PERMISSION_CACHE_TTL_SECONDS
+                )
+                return codes_by_role
+            except Exception as exc:
+                print(f"role permissions fallback: {exc}", flush=True)
+                return {
+                    role: (
+                        set(ROLE_PERMISSION_CODES.get(role, set()))
+                        | LOCKED_ROLE_PERMISSION_CODES.get(role, set())
+                    )
+                    for role in VALID_ROLES
+                }
+            finally:
+                if cur:
+                    cur.close()
+                if conn:
+                    conn.close()
+
+
     def role_direct_permission_codes(role_key):
         """Zwraca aktywne bezpośrednie uprawnienia roli z bazy.
     
@@ -627,25 +688,7 @@ data:
         role_key = clean(role_key)
         if role_key not in VALID_ROLES:
             return set()
-        try:
-            conn = get_conn()
-            cur = conn.cursor()
-            ensure_role_permissions_schema(cur)
-            conn.commit()
-            cur.execute("""
-                SELECT permission_code
-                FROM role_permissions
-                WHERE role_key = %s AND enabled = TRUE
-            """, (role_key,))
-            rows = cur.fetchall()
-            cur.close()
-            conn.close()
-            codes = {r[0] for r in rows}
-            codes.update(LOCKED_ROLE_PERMISSION_CODES.get(role_key, set()))
-            return codes
-        except Exception as exc:
-            print(f"role permissions fallback for {role_key}: {exc}", flush=True)
-            return set(ROLE_PERMISSION_CODES.get(role_key, set())) | LOCKED_ROLE_PERMISSION_CODES.get(role_key, set())
+        return set(role_permission_codes_by_role().get(role_key, set()))
     
     
     PERMISSION_LABELS = {
@@ -1236,6 +1279,25 @@ data:
                         created_at TIMESTAMP DEFAULT NOW()
                     );
                 """)
+                for index_sql in [
+                    "CREATE INDEX IF NOT EXISTS idx_users_email_lower ON users (lower(email))",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_created_at ON tickets (created_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_updated_at ON tickets (updated_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets (priority)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_sla_due_at ON tickets (sla_due_at)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_assigned_email_lower ON tickets (lower(assigned_to_email))",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_requester_email_lower ON tickets (lower(requester_email))",
+                    "CREATE INDEX IF NOT EXISTS idx_comments_ticket_id_id ON comments (ticket_id, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_events_ticket_id_id ON ticket_events (ticket_id, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_status_history_ticket_id_id ON ticket_status_history (ticket_id, id)",
+                    "CREATE INDEX IF NOT EXISTS idx_attachments_ticket_id_id ON attachments (ticket_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_watchers_ticket_email_lower ON ticket_watchers (ticket_id, lower(user_email))",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_links_ticket_id ON ticket_links (ticket_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_ticket_links_linked_ticket_id ON ticket_links (linked_ticket_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
+                ]:
+                    cur.execute(index_sql)
                 password_hash = generate_password_hash(INITIAL_PASSWORD)
                 for first_name, last_name, email, department, role in SEED_USERS:
                     cur.execute("""
@@ -1520,8 +1582,14 @@ data:
         """, (sid,))
         row = cur.fetchone()
         if row:
-            cur.execute("UPDATE user_sessions SET last_seen = NOW() WHERE sid = %s", (sid,))
-            conn.commit()
+            cur.execute("""
+                UPDATE user_sessions
+                SET last_seen = NOW()
+                WHERE sid = %s
+                  AND last_seen < NOW() - INTERVAL '60 seconds'
+            """, (sid,))
+            if cur.rowcount:
+                conn.commit()
         cur.close()
         conn.close()
         if not row:
@@ -1595,15 +1663,23 @@ data:
         roles = user.get("roles") or [user.get("role") or "user"]
         if isinstance(roles, str):
             roles = [roles]
+        effective_roles = {
+            inherited_role
+            for role in roles
+            for inherited_role in ROLE_INHERITANCE.get(role, [role])
+        }
         permissions = set()
-        for role in roles:
-            for inherited_role in ROLE_INHERITANCE.get(role, [role]):
-                permissions.update(role_direct_permission_codes(inherited_role))
+        for role in VALID_ROLES:
+            if role in effective_roles:
+                permissions.update(role_direct_permission_codes(role))
         return sorted(permissions)
     
     def has_permission(user, permission_code):
         """Centralna kontrola pojedynczego uprawnienia po stronie backendu."""
-        return permission_code in user_permission_codes(user)
+        permissions = user.get("permissions") if user else None
+        if permissions is None:
+            permissions = user_permission_codes(user)
+        return permission_code in permissions
     
     def api_forbidden(message="Brak uprawnień do wykonania tej operacji.", permission=None):
         """Zwraca spójną odpowiedź 403 dla frontendu i narzędzi API."""
@@ -7514,6 +7590,7 @@ data:
                 "enabled_permission_codes": sorted(enabled_codes),
             })
             conn.commit()
+            invalidate_role_permission_cache()
             return jsonify(role_permissions_payload())
         except Exception as exc:
             if conn:
@@ -9161,16 +9238,16 @@ data:
             base_clauses.append("(t.requester_name ILIKE %s OR t.requester_email ILIKE %s)")
             base_params.extend([requester_like, requester_like])
         if created_from:
-            base_clauses.append("t.created_at::date >= %s::date")
+            base_clauses.append("t.created_at >= %s::date")
             base_params.append(created_from)
         if created_to:
-            base_clauses.append("t.created_at::date <= %s::date")
+            base_clauses.append("t.created_at < (%s::date + INTERVAL '1 day')")
             base_params.append(created_to)
         if updated_from:
-            base_clauses.append("t.updated_at::date >= %s::date")
+            base_clauses.append("t.updated_at >= %s::date")
             base_params.append(updated_from)
         if updated_to:
-            base_clauses.append("t.updated_at::date <= %s::date")
+            base_clauses.append("t.updated_at < (%s::date + INTERVAL '1 day')")
             base_params.append(updated_to)
         if sla_filter == "none":
             base_clauses.append("t.sla_due_at IS NULL")

@@ -52,3 +52,6 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Check Helpdesk database optimizations
+        run: python scripts/check_helpdesk_optimizations.py
