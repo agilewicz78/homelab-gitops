@@ -122,9 +122,28 @@ def main() -> None:
     missing_routes = [route for route in required_incident_routes if route not in text]
     assert not missing_routes, f"Missing incident routes: {missing_routes}"
 
+    incident_update_api = section(
+        text,
+        "    def api_add_incident_update(user, incident_id):",
+        '    @app.post("/api/incidents/<int:incident_id>/tickets")',
+    )
+    public_comment_branch = section(
+        incident_update_api,
+        "            if is_public:",
+        "            add_ticket_event(",
+    )
+    assert incident_update_api.count("INSERT INTO comments") == 1
+    assert "INSERT INTO comments" in public_comment_branch
+    assert '"public"' in public_comment_branch
+    assert "mark_first_response_if_needed(cur, ticket_id, user)" in public_comment_branch
+    assert "UPDATE tickets SET updated_at = NOW() WHERE id = %s" in public_comment_branch
+    assert "public_comments_created" in incident_update_api
+
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
     assert "Incident Command Center" in text
+    assert "Doda publiczny komentarz i powiadomi użytkowników" in text
+    assert "Liczba zaktualizowanych zgłoszeń" in text
     assert '"incidents": incidents' in text
 
     print("Helpdesk database optimization checks passed")
