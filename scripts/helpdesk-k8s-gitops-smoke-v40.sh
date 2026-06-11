@@ -229,7 +229,7 @@ if command -v curl >/dev/null 2>&1; then
   head -c 500 /tmp/helpdesk-v40-sla-policies.json 2>/dev/null || true
   echo
 
-  if [[ "${SLA_HTTP_CODE}" =~ ^2|401|403$ ]]; then
+  if [[ "${SLA_HTTP_CODE}" =~ ^(2[0-9]{2}|401|403)$ ]]; then
     ok "/api/sla-policies odpowiada kontrolowanym kodem HTTP ${SLA_HTTP_CODE}"
   else
     warn "/api/sla-policies zwróciło nietypowy HTTP ${SLA_HTTP_CODE}"
