@@ -64,6 +64,10 @@ def main() -> None:
         "idx_audit_log_created",
         "idx_audit_log_action_created",
         "idx_audit_log_actor_created",
+        "idx_incidents_status_updated",
+        "idx_incidents_severity_updated",
+        "idx_incident_tickets_ticket_id",
+        "idx_incident_updates_incident_id",
     ]
     missing_indexes = [name for name in required_indexes if name not in text]
     assert not missing_indexes, f"Missing Helpdesk indexes: {missing_indexes}"
@@ -102,6 +106,26 @@ def main() -> None:
     assert "live_state_condition.wait(timeout=WS_HEARTBEAT_SECONDS)" in websocket
     assert "time.sleep(1)" not in websocket
     assert "live_state_condition.notify_all()" in text
+
+    for table in ("incidents", "incident_tickets", "incident_updates"):
+        assert f"CREATE TABLE IF NOT EXISTS {table}" in text
+
+    required_incident_routes = [
+        '@app.get("/api/incidents")',
+        '@app.post("/api/incidents")',
+        '@app.get("/api/incidents/<int:incident_id>")',
+        '@app.put("/api/incidents/<int:incident_id>")',
+        '@app.post("/api/incidents/<int:incident_id>/updates")',
+        '@app.post("/api/incidents/<int:incident_id>/tickets")',
+        '@app.delete("/api/incidents/<int:incident_id>/tickets/<int:ticket_id>")',
+    ]
+    missing_routes = [route for route in required_incident_routes if route not in text]
+    assert not missing_routes, f"Missing incident routes: {missing_routes}"
+
+    assert "async function renderIncidents(" in text
+    assert "async function renderIncident(" in text
+    assert "Incident Command Center" in text
+    assert '"incidents": incidents' in text
 
     print("Helpdesk database optimization checks passed")
 

@@ -1,0 +1,27 @@
+#!/usr/bin/env node
+"use strict";
+
+const fs = require("fs");
+const vm = require("vm");
+
+const file = "applications/helpdesk/app-configmap.yaml";
+const text = fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n");
+const spaStart = text.indexOf("    SPA_HTML");
+if (spaStart < 0) {
+  throw new Error("SPA_HTML was not found");
+}
+
+const scriptMarker = "      <script>\n";
+const scriptStart = text.indexOf(scriptMarker, spaStart);
+const scriptEnd = text.indexOf("      </script>", scriptStart);
+if (scriptStart < 0 || scriptEnd < 0) {
+  throw new Error("Helpdesk SPA script block was not found");
+}
+
+const script = text
+  .slice(scriptStart + scriptMarker.length, scriptEnd)
+  .replaceAll("{{", "{")
+  .replaceAll("}}", "}");
+
+new vm.Script(script, { filename: "helpdesk-spa.js" });
+console.log("Helpdesk frontend syntax check passed");
