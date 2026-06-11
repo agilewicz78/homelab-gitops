@@ -3304,6 +3304,7 @@ data:
             ticket_created: "Nowe zgłoszenie",
             status_changed: "Zmiana statusu",
             comment_added: "Komentarz",
+            incident_update: "Aktualizacja incydentu",
             internal_note_added: "Notatka wewnętrzna",
             assignment_changed: "Przypisanie",
             attachment_added: "Załącznik",
@@ -6545,7 +6546,7 @@ data:
                   <label>Treść</label>
                   <textarea name="message" required placeholder="Co wiemy, co robimy i kiedy będzie kolejna aktualizacja?"></textarea>
                   <label class="switch-row">
-                    <span><strong>Komunikat publiczny</strong><small>Powiadomi użytkowników powiązanych zgłoszeń.</small></span>
+                    <span><strong>Komunikat publiczny</strong><small>Doda publiczny komentarz i powiadomi użytkowników w każdym powiązanym zgłoszeniu.</small></span>
                     <span class="switch"><input type="checkbox" name="is_public"><span class="slider"></span></span>
                   </label>
                   <button type="submit">Dodaj do osi czasu</button>
@@ -6588,7 +6589,14 @@ data:
               alert(err.error || "Nie udało się dodać komunikatu.");
               return;
             }}
-            showToast("Dodano komunikat do incydentu #" + i.id);
+            const result = await updateRes.json().catch(() => ({{}}));
+            const publicCommentCount = Number(result.public_comments_created || 0);
+            const details = payload.is_public
+              ? (publicCommentCount > 0
+                ? `Liczba zaktualizowanych zgłoszeń: ${{publicCommentCount}}.`
+                : "Komunikat zapisano, ale incydent nie ma powiązanych zgłoszeń.")
+              : "Komunikat zapisano jako wewnętrzny.";
+            showToast("Dodano komunikat do incydentu #" + i.id, details);
             await renderIncident(i.id);
           }});
           document.getElementById("incidentTicketForm")?.addEventListener("submit", async (event) => {{
@@ -9768,7 +9776,30 @@ data:
             WHERE incident_id = %s
         """, (incident_id,))
         ticket_ids = [ticket[0] for ticket in cur.fetchall()]
+        public_comments_created = 0
         for ticket_id in ticket_ids:
+            if is_public:
+                public_comment = (
+                    f"Incydent #{incident_id} ({incident_row[0]}): {message}"
+                )
+                cur.execute("""
+                    INSERT INTO comments (
+                      ticket_id, author, author_email, content, visibility
+                    )
+                    VALUES (%s, %s, %s, %s, %s)
+                """, (
+                    ticket_id,
+                    f"Incident Command Center · {user['name']}",
+                    user["email"],
+                    public_comment,
+                    "public",
+                ))
+                public_comments_created += 1
+                mark_first_response_if_needed(cur, ticket_id, user)
+                cur.execute(
+                    "UPDATE tickets SET updated_at = NOW() WHERE id = %s",
+                    (ticket_id,),
+                )
             add_ticket_event(
                 cur,
                 ticket_id,
@@ -9788,6 +9819,7 @@ data:
             "update_type": update_type,
             "is_public": is_public,
             "ticket_count": len(ticket_ids),
+            "public_comments_created": public_comments_created,
         })
         conn.commit()
         cur.close()
@@ -9798,7 +9830,11 @@ data:
             None,
             staff_only=not is_public,
         )
-        return jsonify({"status": "ok"}), 201
+        return jsonify({
+            "status": "ok",
+            "linked_ticket_count": len(ticket_ids),
+            "public_comments_created": public_comments_created,
+        }), 201
 
     @app.post("/api/incidents/<int:incident_id>/tickets")
     @api_login_required
