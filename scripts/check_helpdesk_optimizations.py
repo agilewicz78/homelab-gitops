@@ -156,6 +156,19 @@ def main() -> None:
     assert "latest_public_update" in incident_link_api
     assert '"public_comment_created": True' in incident_link_api
 
+    incident_create_api = section(
+        text,
+        "    def api_create_incident(user):",
+        '    @app.get("/api/incidents/<int:incident_id>")',
+    )
+    assert 'raw_ticket_ids = payload.get("ticket_ids") or []' in incident_create_api
+    assert "source_ticket_id not in ticket_ids" in incident_create_api
+    assert "FROM ticket_links" in incident_create_api
+    assert "INSERT INTO incident_tickets" in incident_create_api
+    assert "INSERT INTO comments" in incident_create_api
+    assert '"linked_ticket_count": len(ticket_ids)' in incident_create_api
+    assert "ticket_ids=ticket_ids or None" in incident_create_api
+
     ticket_detail_api = section(
         text,
         "    def api_ticket_detail(user, ticket_id):",
@@ -193,6 +206,11 @@ def main() -> None:
     assert "Sugestia nie tworzy powiązania automatycznie" in text
     assert "async function linkSuggestedTicket(" in text
     assert "async function linkSuggestedIncident(" in text
+    assert "Utwórz incydent z powiązanych zgłoszeń" in text
+    assert "function openIncidentFromTicketsModal()" in text
+    assert "const incidentFromTicketsForm" in text
+    assert "payload.source_ticket_id = incidentCreationContext.sourceTicketId" in text
+    assert "payload.ticket_ids = ticketIds" in text
     assert '"incidents": incidents' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
 

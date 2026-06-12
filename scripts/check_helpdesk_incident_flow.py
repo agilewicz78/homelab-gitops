@@ -22,6 +22,7 @@ class Cursor:
         self.last_query = ""
         self.rowcount = 1
         self.comment_inserts = []
+        self.incident_ticket_inserts = []
         self.incident_timestamp_updates = 0
         self.ticket_timestamp_updates = 0
 
@@ -31,12 +32,16 @@ class Cursor:
         params = params or ()
         if "INSERT INTO comments" in self.last_query:
             self.comment_inserts.append(params)
+        elif "INSERT INTO incident_tickets" in self.last_query:
+            self.incident_ticket_inserts.append(params)
         elif "UPDATE incidents SET updated_at = NOW()" in self.last_query:
             self.incident_timestamp_updates += 1
         elif "UPDATE tickets SET updated_at = NOW()" in self.last_query:
             self.ticket_timestamp_updates += 1
 
     def fetchone(self):
+        if "INSERT INTO incidents" in self.last_query:
+            return (7,)
         if "SELECT title FROM incidents" in self.last_query:
             return ("Mail outage",)
         if "SELECT title, severity" in self.last_query:
@@ -48,6 +53,13 @@ class Cursor:
         return None
 
     def fetchall(self):
+        if "SELECT id, title, status FROM tickets" in self.last_query:
+            return [
+                (101, "Cannot use mail", "Nowe"),
+                (102, "Outlook cannot send", "W toku"),
+            ]
+        if "FROM ticket_links" in self.last_query:
+            return [(102,)]
         if "SELECT ticket_id FROM incident_tickets" in self.last_query:
             return [(101,), (102,)]
         return []
@@ -113,12 +125,45 @@ def main():
         "mark_first_response_if_needed": lambda cur, ticket_id, user: first_responses.append(ticket_id),
         "log_audit": lambda *args, **kwargs: None,
         "publish_event": lambda *args, **kwargs: events.append((args, kwargs)),
+        "incident_commander": lambda cur, email: (None, None),
+        "INCIDENT_SEVERITIES": ["SEV1", "SEV2", "SEV3", "SEV4"],
     }
     exec(
-        load_functions("api_add_incident_update", "api_link_incident_ticket"),
+        load_functions(
+            "api_create_incident",
+            "api_add_incident_update",
+            "api_link_incident_ticket",
+        ),
         namespace,
     )
     user = {"email": "operator@example.local", "name": "Operator"}
+
+    Request.payload = {
+        "title": "Mail outage",
+        "summary": "Multiple users cannot send mail.",
+        "impact": "Customer communication is blocked.",
+        "severity": "SEV1",
+        "commander_email": "",
+        "source_ticket_id": 101,
+        "ticket_ids": [101, 102],
+    }
+    body, status = namespace["api_create_incident"](user)
+    create_connection = connections[-1]
+    create_cursor = create_connection.cursor_value
+    assert status == 201
+    assert body["id"] == 7
+    assert body["linked_ticket_count"] == 2
+    assert create_connection.committed is True
+    assert len(create_cursor.incident_ticket_inserts) == 2
+    assert len(create_cursor.comment_inserts) == 2
+    assert create_cursor.ticket_timestamp_updates == 2
+    assert first_responses[:2] == [101, 102]
+    assert notifications[:2] == [
+        (101, "incident_linked"),
+        (102, "incident_linked"),
+    ]
+    assert events[-1][1]["ticket_ids"] == [101, 102]
+    assert events[-1][1]["staff_only"] is False
 
     Request.payload = {
         "message": "Service is returning.",
