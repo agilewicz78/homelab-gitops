@@ -3379,6 +3379,8 @@ data:
         let reopenTicketId = null;
         let incidentCreationContext = null;
         let knowledgeArticleContext = null;
+        let knowledgeSuggestionTimer = null;
+        let knowledgeSuggestionRequest = 0;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
@@ -7313,9 +7315,9 @@ data:
               <h2>Nowe zgłoszenie</h2>
               <form id="ticketForm">
                 <label>Tytuł problemu</label>
-                <input name="title" required placeholder="Np. Outlook nie odbiera poczty">
+                <input id="new-ticket-title" name="title" required placeholder="Np. Outlook nie odbiera poczty">
                 <label>Opis</label>
-                <textarea name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
+                <textarea id="new-ticket-description" name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
                 <div class="grid">
                   <div><label>Zgłaszający</label><input value="${{esc(me.name)}}" disabled></div>
                   <div><label>E-mail</label><input value="${{esc(me.email)}}" disabled></div>
@@ -7337,6 +7339,7 @@ data:
                 </div>
                 <label>Priorytet</label>
                 <select name="priority">${{meta.priorities.map(x => `<option ${{x === "Normalny" ? "selected" : ""}}>${{esc(x)}}</option>`).join("")}}</select>
+                <div id="newTicketKnowledgeSuggestions" class="hidden"></div>
                 <label>Załączniki opcjonalne</label>
                 <input type="file" name="attachments" multiple accept=".png,.jpg,.jpeg,.gif,.pdf,.txt,.log,.csv,.xlsx,.docx">
                 <p class="muted">Możesz dodać screenshot, PDF, log lub dokument. Maksymalnie 10 MB na plik. Załączniki zostaną zapisane automatycznie po kliknięciu „Utwórz zgłoszenie”.</p>
@@ -7345,11 +7348,77 @@ data:
               </form>
             </section>`;
           updateSubcategorySelect(meta);
-          document.getElementById("new-ticket-category").addEventListener("change", () => updateSubcategorySelect(meta));
+          document.getElementById("new-ticket-title").addEventListener("input", scheduleNewTicketKnowledgeSuggestions);
+          document.getElementById("new-ticket-description").addEventListener("input", scheduleNewTicketKnowledgeSuggestions);
+          document.getElementById("new-ticket-category").addEventListener("change", () => {{
+            updateSubcategorySelect(meta);
+            scheduleNewTicketKnowledgeSuggestions();
+          }});
+          document.getElementById("new-ticket-subcategory").addEventListener("change", scheduleNewTicketKnowledgeSuggestions);
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
+        }}
+        function scheduleNewTicketKnowledgeSuggestions() {{
+          clearTimeout(knowledgeSuggestionTimer);
+          knowledgeSuggestionTimer = setTimeout(loadNewTicketKnowledgeSuggestions, 450);
+        }}
+        async function loadNewTicketKnowledgeSuggestions() {{
+          const form = document.getElementById("ticketForm");
+          const panel = document.getElementById("newTicketKnowledgeSuggestions");
+          if (!form || !panel) return;
+          const formData = new FormData(form);
+          const title = String(formData.get("title") || "").trim();
+          const description = String(formData.get("description") || "").trim();
+          if (`${{title}} ${{description}}`.trim().length < 12) {{
+            knowledgeSuggestionRequest += 1;
+            panel.classList.add("hidden");
+            panel.innerHTML = "";
+            return;
+          }}
+          const requestId = ++knowledgeSuggestionRequest;
+          const params = new URLSearchParams({{
+            title,
+            description,
+            category: String(formData.get("category") || ""),
+            subcategory: String(formData.get("subcategory") || "")
+          }});
+          const res = await api(`/api/knowledge-suggestions?${{params.toString()}}`);
+          if (!res || requestId !== knowledgeSuggestionRequest) return;
+          if (!res.ok) {{
+            panel.classList.add("hidden");
+            panel.innerHTML = "";
+            return;
+          }}
+          const data = await res.json();
+          const suggestions = data.suggestions || [];
+          if (!suggestions.length) {{
+            panel.classList.add("hidden");
+            panel.innerHTML = "";
+            return;
+          }}
+          panel.innerHTML = `
+            <section class="panel-soft knowledge-card">
+              <h3>Możliwe rozwiązania przed utworzeniem zgłoszenia</h3>
+              <p class="muted">Sprawdź poniższe instrukcje. Jeśli któraś pomoże, nie musisz wysyłać zgłoszenia.</p>
+              ${{suggestions.map(article => `
+                <details class="card">
+                  <summary><strong>#${{article.id}} · ${{esc(article.title)}}</strong> · ${{article.score}}% dopasowania</summary>
+                  <div class="incident-meta">
+                    <span class="chip">${{esc(article.category)}}</span>
+                    <span class="chip">${{esc(article.subcategory)}}</span>
+                    ${{(article.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}
+                  </div>
+                  <p><strong>Opis problemu:</strong> ${{esc(article.problem)}}</p>
+                  <div class="knowledge-solution"><strong>Rozwiązanie:</strong><br>${{esc(article.solution)}}</div>
+                </details>
+              `).join("")}}
+            </section>
+          `;
+          panel.classList.remove("hidden");
         }}
         async function createTicket(event) {{
           event.preventDefault();
+          clearTimeout(knowledgeSuggestionTimer);
+          knowledgeSuggestionRequest += 1;
           const form = event.target;
           const formData = new FormData(form);
           const files = formData.getAll("attachments").filter(file => file && file.name);
@@ -9858,6 +9927,56 @@ data:
                 "statuses": KNOWLEDGE_STATUSES,
             },
         })
+
+    @app.get("/api/knowledge-suggestions")
+    @api_login_required
+    def api_knowledge_suggestions(user):
+        title = clean(request.args.get("title"))
+        description = clean(request.args.get("description"))
+        category = clean(request.args.get("category"))
+        subcategory = clean(request.args.get("subcategory"))
+        if len(f"{title} {description}".strip()) < 12:
+            return jsonify({"suggestions": []})
+        source_tokens = similarity_tokens(title, description)
+        if not source_tokens:
+            return jsonify({"suggestions": []})
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, title, problem, solution, category, subcategory, updated_at
+            FROM knowledge_articles
+            WHERE status = 'published'
+            ORDER BY updated_at DESC
+            LIMIT 100
+        """)
+        suggestions = []
+        for article in cur.fetchall():
+            score, reasons = similarity_score(
+                source_tokens,
+                similarity_tokens(article[1], article[2], article[3]),
+                same_category=bool(category) and clean(article[4]).lower() == category.lower(),
+                same_subcategory=bool(subcategory) and clean(article[5]).lower() == subcategory.lower(),
+            )
+            if score < 40:
+                continue
+            suggestions.append({
+                "id": article[0],
+                "title": article[1],
+                "problem": article[2],
+                "solution": article[3],
+                "category": article[4],
+                "subcategory": article[5],
+                "updated_at": str(article[6]),
+                "score": score,
+                "reasons": reasons,
+            })
+        suggestions.sort(
+            key=lambda item: (item["score"], item["updated_at"]),
+            reverse=True,
+        )
+        cur.close()
+        conn.close()
+        return jsonify({"suggestions": suggestions[:3]})
 
     @app.post("/api/knowledge-articles")
     @api_login_required

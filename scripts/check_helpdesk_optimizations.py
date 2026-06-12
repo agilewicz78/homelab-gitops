@@ -133,6 +133,7 @@ def main() -> None:
     required_knowledge_routes = [
         '@app.get("/api/knowledge-articles")',
         '@app.get("/api/knowledge-articles/<int:article_id>")',
+        '@app.get("/api/knowledge-suggestions")',
         '@app.post("/api/knowledge-articles")',
         '@app.put("/api/knowledge-articles/<int:article_id>")',
     ]
@@ -232,9 +233,12 @@ def main() -> None:
     assert "async function renderKnowledgeArticle(articleId)" in text
     assert "const knowledgeArticleForm" in text
     assert "Utwórz artykuł z rozwiązania" in text
+    assert "Możliwe rozwiązania przed utworzeniem zgłoszenia" in text
+    assert "scheduleNewTicketKnowledgeSuggestions" in text
+    assert "loadNewTicketKnowledgeSuggestions" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-12-knowledge-base-v8" in deployment_text
+    assert "2026-06-12-self-service-suggestions-v9" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

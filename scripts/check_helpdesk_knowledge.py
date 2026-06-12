@@ -11,6 +11,7 @@ APP_MARKER = "  app.py: |\n"
 
 class Request:
     payload = {}
+    args = {}
 
     @classmethod
     def get_json(cls, silent=True):
@@ -41,6 +42,30 @@ class Cursor:
         if "INSERT INTO knowledge_articles" in self.last_query:
             return (42,)
         return None
+
+    def fetchall(self):
+        if "WHERE status = 'published'" in self.last_query:
+            return [
+                (
+                    7,
+                    "Naprawa wysyłania poczty w Outlooku",
+                    "Outlook nie wysyła wiadomości.",
+                    "Wyczyść profil Outlooka i uruchom aplikację ponownie.",
+                    "Oprogramowanie",
+                    "Poczta",
+                    "2026-06-12 20:00:00",
+                ),
+                (
+                    8,
+                    "Wymiana rolki drukarki",
+                    "Drukarka zacina papier.",
+                    "Wymień rolkę podajnika.",
+                    "Sprzęt",
+                    "Drukarki",
+                    "2026-06-11 20:00:00",
+                ),
+            ]
+        return []
 
     def close(self):
         pass
@@ -102,8 +127,20 @@ def main():
         "add_ticket_event": lambda *args, **kwargs: ticket_events.append((args, kwargs)),
         "log_audit": lambda *args, **kwargs: audit_events.append((args, kwargs)),
         "publish_event": lambda *args, **kwargs: live_events.append((args, kwargs)),
+        "similarity_tokens": lambda *values: {
+            token.lower().strip(".,")
+            for value in values
+            for token in str(value or "").split()
+            if len(token.strip(".,")) >= 4
+        },
+        "similarity_score": lambda source, candidate, same_category=False, same_subcategory=False: (
+            (80, ["Wspólne słowa", "Ta sama kategoria", "Ta sama podkategoria"])
+            if source & candidate and same_category and same_subcategory
+            else (0, [])
+        ),
     }
     exec(load_function("api_create_knowledge_article"), namespace)
+    exec(load_function("api_knowledge_suggestions"), namespace)
 
     Request.payload = {
         "source_ticket_id": 101,
@@ -125,6 +162,23 @@ def main():
     assert audit_events[-1][0][2] == "knowledge_article_created"
     assert live_events[-1][0][1] == "knowledge_article_changed"
     assert live_events[-1][1]["staff_only"] is False
+
+    Request.args = {
+        "title": "Outlook nie wysyła poczty",
+        "description": "Wiadomości pozostają w skrzynce nadawczej.",
+        "category": "Oprogramowanie",
+        "subcategory": "Poczta",
+    }
+    suggestion_body = namespace["api_knowledge_suggestions"](user)
+    assert len(suggestion_body["suggestions"]) == 1
+    assert suggestion_body["suggestions"][0]["id"] == 7
+    assert suggestion_body["suggestions"][0]["score"] == 80
+    assert suggestion_body["suggestions"][0]["solution"].startswith("Wyczyść profil")
+
+    connection_count = len(connections)
+    Request.args = {"title": "Błąd", "description": ""}
+    assert namespace["api_knowledge_suggestions"](user) == {"suggestions": []}
+    assert len(connections) == connection_count
 
     print("Helpdesk knowledge base checks passed")
 
