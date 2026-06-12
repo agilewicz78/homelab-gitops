@@ -21,13 +21,22 @@ class Request:
 class Cursor:
     def __init__(self):
         self.last_query = ""
+        self.last_params = ()
         self.ticket_events = []
         self.audit_events = []
+        self.feedback_upserts = []
 
     def execute(self, query, params=None):
         self.last_query = " ".join(query.split())
+        self.last_params = params or ()
+        if "INSERT INTO knowledge_article_feedback" in self.last_query:
+            self.feedback_upserts.append(self.last_params)
 
     def fetchone(self):
+        if "SELECT status, source_ticket_id FROM knowledge_articles" in self.last_query:
+            return ("published", 101)
+        if "COUNT(*) FILTER (WHERE helpful = TRUE)" in self.last_query:
+            return (3, 1)
         if "FROM tickets" in self.last_query:
             return (
                 "Poczta nie działa",
@@ -141,6 +150,7 @@ def main():
     }
     exec(load_function("api_create_knowledge_article"), namespace)
     exec(load_function("api_knowledge_suggestions"), namespace)
+    exec(load_function("api_knowledge_article_feedback"), namespace)
 
     Request.payload = {
         "source_ticket_id": 101,
@@ -179,6 +189,24 @@ def main():
     Request.args = {"title": "Błąd", "description": ""}
     assert namespace["api_knowledge_suggestions"](user) == {"suggestions": []}
     assert len(connections) == connection_count
+
+    Request.payload = {"helpful": True}
+    feedback_body = namespace["api_knowledge_article_feedback"](
+        {"email": "user@example.local", "name": "User"},
+        7,
+    )
+    feedback_connection = connections[-1]
+    assert feedback_body == {
+        "helpful": 3,
+        "not_helpful": 1,
+        "my_feedback": True,
+    }
+    assert feedback_connection.committed is True
+    assert feedback_connection.cursor_value.feedback_upserts == [
+        (7, "user@example.local", True),
+    ]
+    assert audit_events[-1][0][2] == "knowledge_article_feedback"
+    assert live_events[-1][0][1] == "knowledge_article_changed"
 
     print("Helpdesk knowledge base checks passed")
 

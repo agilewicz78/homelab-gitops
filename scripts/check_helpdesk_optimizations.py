@@ -72,6 +72,7 @@ def main() -> None:
         "idx_incident_updates_incident_id",
         "idx_knowledge_articles_status_updated",
         "idx_knowledge_articles_category",
+        "idx_knowledge_feedback_article_helpful",
     ]
     missing_indexes = [name for name in required_indexes if name not in text]
     assert not missing_indexes, f"Missing Helpdesk indexes: {missing_indexes}"
@@ -114,6 +115,7 @@ def main() -> None:
     for table in ("incidents", "incident_tickets", "incident_updates"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in text
     assert "CREATE TABLE IF NOT EXISTS knowledge_articles" in text
+    assert "CREATE TABLE IF NOT EXISTS knowledge_article_feedback" in text
     assert "Uzupełnia komentarze dla publicznych aktualizacji" in text
     assert "JOIN incident_tickets it ON it.incident_id = iu.incident_id" in text
     assert "COALESCE(iu.is_public, FALSE) = TRUE" in text
@@ -134,6 +136,7 @@ def main() -> None:
         '@app.get("/api/knowledge-articles")',
         '@app.get("/api/knowledge-articles/<int:article_id>")',
         '@app.get("/api/knowledge-suggestions")',
+        '@app.post("/api/knowledge-articles/<int:article_id>/feedback")',
         '@app.post("/api/knowledge-articles")',
         '@app.put("/api/knowledge-articles/<int:article_id>")',
     ]
@@ -239,9 +242,13 @@ def main() -> None:
     assert "Możliwe rozwiązania przed utworzeniem zgłoszenia" in text
     assert "scheduleNewTicketKnowledgeSuggestions" in text
     assert "loadNewTicketKnowledgeSuggestions" in text
+    assert "Czy ten artykuł pomógł?" in text
+    assert "submitKnowledgeFeedback" in text
+    assert "knowledge_article_feedback" in text
+    assert "BOOL_OR(helpful) FILTER" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-12-knowledge-closed-ticket-fix-v10" in deployment_text
+    assert "2026-06-12-knowledge-feedback-v11" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
