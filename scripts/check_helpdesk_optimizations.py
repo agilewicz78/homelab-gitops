@@ -166,6 +166,13 @@ def main() -> None:
     assert '"linked_at": str(incident[8])' in ticket_detail_api
     assert "AS affected_ticket_count" in ticket_detail_api
     assert '"affected_ticket_count": int(incident[11] or 0)' in ticket_detail_api
+    assert "def similarity_tokens(" in text
+    assert "def similarity_score(" in text
+    assert "LIMIT 150" in ticket_detail_api
+    assert "LIMIT 75" in ticket_detail_api
+    assert "tl.ticket_id = LEAST(t.id, %s)" in ticket_detail_api
+    assert "linked.ticket_id = %s" in ticket_detail_api
+    assert '"suggestions": suggestions' in ticket_detail_api
 
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
@@ -182,6 +189,10 @@ def main() -> None:
     assert "incidentTicketCountLabel(i.affected_ticket_count)" in text
     assert "Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem" in text
     assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
+    assert "Sugestie podobnych spraw" in text
+    assert "Sugestia nie tworzy powiązania automatycznie" in text
+    assert "async function linkSuggestedTicket(" in text
+    assert "async function linkSuggestedIncident(" in text
     assert '"incidents": incidents' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
 

@@ -59,5 +59,8 @@ jobs:
       - name: Check Helpdesk incident flow
         run: python scripts/check_helpdesk_incident_flow.py
 
+      - name: Check Helpdesk similar-item suggestions
+        run: python scripts/check_helpdesk_similarity.py
+
       - name: Check Helpdesk frontend syntax
         run: node scripts/check_helpdesk_frontend.js

@@ -16,6 +16,8 @@ data:
     import uuid
     import json
     import threading
+    import re
+    import unicodedata
     import psycopg2
     from functools import wraps
     from flask import Flask, request, redirect, Response, jsonify, send_file
@@ -1443,6 +1445,45 @@ data:
         return html.escape(str(value or ""))
     def clean(value):
         return str(value or "").strip()
+
+    SIMILARITY_STOP_WORDS = {
+        "aby", "ale", "bez", "blad", "brak", "byc", "czy", "dla", "dziala",
+        "jest", "ktore", "ktory", "mam", "mozna", "nie", "oraz", "problem",
+        "prosze", "przy", "sie", "ten", "tego", "tym", "witam", "zgloszenie",
+    }
+
+    def similarity_tokens(*values):
+        text = " ".join(clean(value) for value in values)
+        normalized = unicodedata.normalize("NFKD", text)
+        ascii_text = "".join(
+            character
+            for character in normalized
+            if not unicodedata.combining(character)
+        ).lower()
+        return {
+            token
+            for token in re.findall(r"[a-z0-9]+", ascii_text)
+            if len(token) >= 3 and token not in SIMILARITY_STOP_WORDS
+        }
+
+    def similarity_score(
+        source_tokens,
+        candidate_tokens,
+        same_category=False,
+        same_subcategory=False,
+    ):
+        common_tokens = sorted(source_tokens & candidate_tokens)
+        if not common_tokens:
+            return 0, []
+        score = min(60, len(common_tokens) * 24)
+        reasons = [f"Wspólne słowa: {', '.join(common_tokens[:3])}"]
+        if same_category:
+            score += 20
+            reasons.append("Ta sama kategoria")
+        if same_subcategory:
+            score += 20
+            reasons.append("Ta sama podkategoria")
+        return min(100, score), reasons
     
     # Waliduje rozszerzenie przesyłanego załącznika.
     def allowed_attachment(filename):
@@ -7189,6 +7230,50 @@ data:
                 </form>
               ` : ""}}
             </section>`;
+          const suggestedTickets = data.suggestions?.tickets || [];
+          const suggestedIncidents = data.suggestions?.incidents || [];
+          const suggestionCount = suggestedTickets.length + suggestedIncidents.length;
+          const similarItemsPanel = canWorkTickets(me) && !isClosed && suggestionCount ? `
+            <section class="card">
+              <div class="ticket-section-title">
+                <h3>Sugestie podobnych spraw</h3>
+                <span class="counter">${{suggestionCount}}</span>
+              </div>
+              <p class="muted">Helpdesk porównuje słowa z opisu i kategorię. Sugestia nie tworzy powiązania automatycznie.</p>
+              ${{suggestedIncidents.length ? `
+                <div class="watcher-meta"><strong>Aktywne incydenty</strong></div>
+                <div class="watcher-list">${{suggestedIncidents.map(s => `
+                  <div class="watcher-item incident-relation ${{incidentSeverityClass(s.severity)}}">
+                    <div>
+                      <strong>Incydent #${{s.id}} · ${{esc(s.title)}}</strong>
+                      <div class="watcher-meta">
+                        <span class="pill">${{esc(s.severity)}}</span>
+                        · <span class="pill">${{esc(incidentStatusLabel(s.status))}}</span>
+                        · ${{incidentTicketCountLabel(s.affected_ticket_count)}}
+                        · <span class="chip">${{s.score}}% dopasowania</span>
+                      </div>
+                      <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="linkSuggestedIncident(${{t.id}}, ${{s.id}})">Powiąż z incydentem</button>
+                  </div>`).join("")}}</div>
+              ` : ""}}
+              ${{suggestedTickets.length ? `
+                <div class="watcher-meta"><strong>Podobne zgłoszenia</strong></div>
+                <div class="watcher-list">${{suggestedTickets.map(s => `
+                  <div class="watcher-item">
+                    <div>
+                      <strong><a href="#" onclick="renderTicket(${{s.id}}); return false;">#${{s.id}} · ${{esc(s.title)}}</a></strong>
+                      <div class="watcher-meta">
+                        <span class="pill ${{statusClass(s.status)}}">${{esc(s.status)}}</span>
+                        · ${{esc(s.category)}} / ${{esc(s.subcategory)}}
+                        · <span class="chip">${{s.score}}% dopasowania</span>
+                      </div>
+                      <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="linkSuggestedTicket(${{t.id}}, ${{s.id}})">Powiąż</button>
+                  </div>`).join("")}}</div>
+              ` : ""}}
+            </section>` : "";
           const watcherPanel = `
             <section class="card">
               <h3>Obserwatorzy</h3>
@@ -7342,6 +7427,7 @@ data:
                 ${{statusPanel}}
                 ${{assignmentPanel}}
                 ${{reopenPanel}}
+                ${{similarItemsPanel}}
                 ${{linkedTicketsPanel}}
                 ${{watcherPanel}}
               </aside>
@@ -7558,6 +7644,36 @@ data:
             return;
           }}
           showToast("Usunięto powiązanie ze zgłoszenia #" + ticketId);
+          await renderTicket(ticketId);
+        }}
+        async function linkSuggestedTicket(ticketId, linkedTicketId) {{
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${{ticketId}}/links`, {{
+            method: "POST",
+            body: JSON.stringify({{ linked_ticket_id: linkedTicketId }})
+          }});
+          if (!res || !res.ok) {{
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(err.error || "Nie udało się powiązać sugerowanego zgłoszenia.");
+            return;
+          }}
+          showToast(`Powiązano zgłoszenie #${{ticketId}} ze zgłoszeniem #${{linkedTicketId}}`);
+          await renderTicket(ticketId);
+        }}
+        async function linkSuggestedIncident(ticketId, incidentId) {{
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/incidents/${{incidentId}}/tickets`, {{
+            method: "POST",
+            body: JSON.stringify({{ ticket_id: ticketId }})
+          }});
+          if (!res || !res.ok) {{
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(err.error || "Nie udało się powiązać zgłoszenia z sugerowanym incydentem.");
+            return;
+          }}
+          showToast(`Powiązano zgłoszenie #${{ticketId}} z incydentem #${{incidentId}}`);
           await renderTicket(ticketId);
         }}
         async function removeWatcher(ticketId, email) {{
@@ -11566,6 +11682,97 @@ data:
               i.updated_at DESC
         """, (ticket_id,))
         incident_rows = cur.fetchall()
+        suggestions = {"tickets": [], "incidents": []}
+        if is_staff(user) and row[9] != "Zamknięte":
+            source_tokens = similarity_tokens(row[1], row[2])
+            cur.execute("""
+                SELECT
+                  t.id, t.title, t.description, t.category,
+                  COALESCE(t.subcategory, 'Inne'), t.priority, t.status, t.updated_at
+                FROM tickets t
+                WHERE t.id <> %s
+                  AND t.status <> 'Zamknięte'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM ticket_links tl
+                    WHERE tl.ticket_id = LEAST(t.id, %s)
+                      AND tl.linked_ticket_id = GREATEST(t.id, %s)
+                  )
+                ORDER BY t.updated_at DESC
+                LIMIT 150
+            """, (ticket_id, ticket_id, ticket_id))
+            ticket_suggestions = []
+            for candidate in cur.fetchall():
+                score, reasons = similarity_score(
+                    source_tokens,
+                    similarity_tokens(candidate[1], candidate[2]),
+                    same_category=clean(candidate[3]).lower() == clean(row[6]).lower(),
+                    same_subcategory=clean(candidate[4]).lower() == clean(row[7]).lower(),
+                )
+                if score < 40:
+                    continue
+                ticket_suggestions.append({
+                    "id": candidate[0],
+                    "title": candidate[1],
+                    "category": candidate[3] or "",
+                    "subcategory": candidate[4] or "",
+                    "priority": candidate[5],
+                    "status": candidate[6],
+                    "updated_at": str(candidate[7]),
+                    "score": score,
+                    "reasons": reasons,
+                })
+            ticket_suggestions.sort(
+                key=lambda item: (item["score"], item["updated_at"]),
+                reverse=True,
+            )
+            suggestions["tickets"] = ticket_suggestions[:5]
+
+            cur.execute("""
+                SELECT
+                  i.id, i.title, i.summary, COALESCE(i.impact, ''),
+                  i.severity, i.status, i.updated_at,
+                  (
+                    SELECT COUNT(*)
+                    FROM incident_tickets affected
+                    WHERE affected.incident_id = i.id
+                  ) AS affected_ticket_count
+                FROM incidents i
+                WHERE i.status <> 'resolved'
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM incident_tickets linked
+                    WHERE linked.incident_id = i.id
+                      AND linked.ticket_id = %s
+                  )
+                ORDER BY i.updated_at DESC
+                LIMIT 75
+            """, (ticket_id,))
+            incident_suggestions = []
+            for candidate in cur.fetchall():
+                score, reasons = similarity_score(
+                    source_tokens,
+                    similarity_tokens(candidate[1], candidate[2], candidate[3]),
+                )
+                if score < 40:
+                    continue
+                incident_suggestions.append({
+                    "id": candidate[0],
+                    "title": candidate[1],
+                    "summary": candidate[2],
+                    "impact": candidate[3],
+                    "severity": candidate[4],
+                    "status": candidate[5],
+                    "updated_at": str(candidate[6]),
+                    "affected_ticket_count": int(candidate[7] or 0),
+                    "score": score,
+                    "reasons": reasons,
+                })
+            incident_suggestions.sort(
+                key=lambda item: (item["score"], item["updated_at"]),
+                reverse=True,
+            )
+            suggestions["incidents"] = incident_suggestions[:3]
         cur.close()
         conn.close()
         ticket = {
@@ -11702,6 +11909,7 @@ data:
             "watchers": watchers,
             "linked_tickets": linked_tickets,
             "incidents": incidents,
+            "suggestions": suggestions,
             "meta": {"statuses": workflow_statuses(ticket.get("workflow_key")), "operators": operators, "watcher_candidates": watcher_candidates},
         })
     @app.post("/api/tickets/<int:ticket_id>/close")
