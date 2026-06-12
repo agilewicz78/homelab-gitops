@@ -3110,6 +3110,8 @@ data:
       .modal-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
       .modal-header h2 { margin: 0; }
       .modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      .incident-ticket-choice { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+      .incident-ticket-choice input[type="checkbox"] { width: auto; margin-top: 4px; }
       .resolution-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
       .resolution-box { margin: 14px 0; padding: 14px; border: 1px solid rgba(34,197,94,.35); border-radius: 16px; background: rgba(34,197,94,.08); }
       .readonly-box { margin-top: 16px; padding: 14px; border: 1px solid rgba(148,163,184,.35); border-radius: 16px; background: rgba(148,163,184,.10); color: var(--text); }
@@ -3257,6 +3259,42 @@ data:
           </form>
         </div>
       </div>
+      <div id="incidentFromTicketsModal" class="modal-backdrop hidden">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div>
+              <h2>Utwórz incydent z powiązanych zgłoszeń</h2>
+              <p class="muted">Sprawdź listę ticketów. Incydent i wszystkie wybrane powiązania zostaną zapisane razem.</p>
+            </div>
+            <button class="btn-secondary btn-small" onclick="closeIncidentFromTicketsModal(); return false;">✕</button>
+          </div>
+          <form id="incidentFromTicketsForm">
+            <div class="grid">
+              <div>
+                <label>Tytuł</label>
+                <input name="title" required>
+              </div>
+              <div>
+                <label>Poziom</label>
+                <select name="severity" id="incidentFromTicketsSeverity"></select>
+              </div>
+            </div>
+            <label>Dowódca incydentu</label>
+            <select name="commander_email" id="incidentFromTicketsCommander"></select>
+            <label>Opis sytuacji</label>
+            <textarea name="summary" rows="4" required></textarea>
+            <label>Wpływ na organizację</label>
+            <textarea name="impact" rows="3" placeholder="Kogo dotyczy problem i jakie procesy są zablokowane?"></textarea>
+            <label>Dołączone zgłoszenia</label>
+            <div id="incidentFromTicketsList" class="watcher-list"></div>
+            <div class="attachment-upload-hint">Zgłoszenie źródłowe jest wymagane. Zamknięte tickety nie mogą zostać dołączone.</div>
+            <div class="modal-actions">
+              <button type="button" class="btn-secondary" onclick="closeIncidentFromTicketsModal(); return false;">Anuluj</button>
+              <button type="submit">Utwórz incydent i powiąż zgłoszenia</button>
+            </div>
+          </form>
+        </div>
+      </div>
       <script>
         const appEl = document.getElementById("app");
         const userBadge = document.getElementById("userBadge");
@@ -3276,6 +3314,7 @@ data:
         let suppressNextLiveRefresh = false;
         let closeTicketId = null;
         let reopenTicketId = null;
+        let incidentCreationContext = null;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
@@ -3336,6 +3375,42 @@ data:
         function closeReopenTicketModal() {{
           reopenTicketId = null;
           const modal = document.getElementById("reopenTicketModal");
+          if (modal) modal.classList.add("hidden");
+        }}
+        function openIncidentFromTicketsModal() {{
+          const context = incidentCreationContext;
+          if (!context || !Array.isArray(context.tickets) || context.tickets.length < 2) {{
+            alert("Najpierw powiąż co najmniej dwa otwarte zgłoszenia.");
+            return;
+          }}
+          const modal = document.getElementById("incidentFromTicketsModal");
+          const form = document.getElementById("incidentFromTicketsForm");
+          const list = document.getElementById("incidentFromTicketsList");
+          const severity = document.getElementById("incidentFromTicketsSeverity");
+          const commander = document.getElementById("incidentFromTicketsCommander");
+          if (!modal || !form || !list || !severity || !commander) return;
+          form.reset();
+          form.elements.title.value = `Incydent: ${{context.sourceTitle}}`;
+          form.elements.summary.value = `Problem został zgłoszony w ${{context.tickets.length}} powiązanych zgłoszeniach. Zgłoszenie źródłowe #${{context.sourceTicketId}}: ${{context.sourceTitle}}`;
+          severity.innerHTML = (context.severities || ["SEV1", "SEV2", "SEV3", "SEV4"])
+            .map(value => `<option ${{value === "SEV2" ? "selected" : ""}}>${{esc(value)}}</option>`)
+            .join("");
+          commander.innerHTML = `<option value="">Ja</option>${{(context.commanders || []).map(item =>
+            `<option value="${{esc(item.email)}}">${{esc(item.name)}} · ${{esc(item.email)}}</option>`
+          ).join("")}}`;
+          list.innerHTML = context.tickets.map(ticket => `
+            <label class="watcher-item incident-ticket-choice">
+              <input type="checkbox" data-ticket-id="${{ticket.id}}" checked ${{ticket.id === context.sourceTicketId ? "disabled" : ""}}>
+              <span>
+                <strong>#${{ticket.id}} · ${{esc(ticket.title)}}</strong>
+                <span class="watcher-meta"><span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status)}}</span></span>
+              </span>
+            </label>
+          `).join("");
+          modal.classList.remove("hidden");
+        }}
+        function closeIncidentFromTicketsModal() {{
+          const modal = document.getElementById("incidentFromTicketsModal");
           if (modal) modal.classList.add("hidden");
         }}
         async function downloadAttachment(id, filename) {{
@@ -7209,6 +7284,24 @@ data:
                   ${{canWorkTickets(me) && !isClosed ? `<button class="btn-secondary btn-small" onclick="removeTicketLink(${{t.id}}, ${{l.id}})">Usuń</button>` : ""}}
                 </div>`).join("")}}</div>`
             : "";
+          const incidentCandidateTickets = [
+            {{ id: t.id, title: t.title, status: t.status }},
+            ...(data.linked_tickets || []).map(linked => ({{
+              id: linked.id,
+              title: linked.title,
+              status: linked.status
+            }}))
+          ].filter(ticket => ticket.status !== "Zamknięte");
+          const hasActiveIncident = (data.incidents || []).some(incident => incident.status !== "resolved");
+          incidentCreationContext = canWorkTickets(me) && !isClosed && incidentCandidateTickets.length >= 2
+            ? {{
+                sourceTicketId: t.id,
+                sourceTitle: t.title,
+                tickets: incidentCandidateTickets,
+                severities: data.meta.incident_severities || [],
+                commanders: data.meta.operators || []
+              }}
+            : null;
           const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length;
           const linkedTickets = relationCount
             ? `${{incidentRelations}}${{directTicketRelations}}`
@@ -7222,6 +7315,11 @@ data:
               <p class="muted">Tutaj widać zarówno bezpośrednie powiązania między zgłoszeniami, jak i incydenty zbiorcze, w ramach których obsługiwany jest ten ticket.</p>
               ${{!canWorkTickets(me) && (data.incidents || []).length ? `<p class="muted">Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem, ale nie dane ticketów utworzonych przez inne osoby.</p>` : ""}}
               ${{linkedTickets}}
+              ${{incidentCreationContext && !hasActiveIncident ? `
+                <div class="form-actions">
+                  <button type="button" onclick="openIncidentFromTicketsModal()">Utwórz incydent z powiązanych zgłoszeń</button>
+                </div>
+              ` : ""}}
               ${{canWorkTickets(me) && !isClosed ? `
                 <form id="ticketLinkForm">
                   <label>Dodaj powiązanie po ID zgłoszenia</label>
@@ -7688,6 +7786,40 @@ data:
           }}
           showToast("Usunięto obserwatora ze zgłoszenia #" + ticketId);
           await renderTicket(ticketId);
+        }}
+        const incidentFromTicketsForm = document.getElementById("incidentFromTicketsForm");
+        if (incidentFromTicketsForm) {{
+          incidentFromTicketsForm.addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            if (!incidentCreationContext) return;
+            const ticketIds = Array.from(
+              document.querySelectorAll('#incidentFromTicketsList input[type="checkbox"]:checked')
+            ).map(input => Number(input.dataset.ticketId)).filter(Boolean);
+            if (ticketIds.length < 2) {{
+              alert("Wybierz co najmniej dwa zgłoszenia.");
+              return;
+            }}
+            if (!confirm(`Utworzyć incydent i powiązać ${{ticketIds.length}} zgłoszenia?`)) return;
+            const payload = Object.fromEntries(new FormData(incidentFromTicketsForm).entries());
+            payload.ticket_ids = ticketIds;
+            payload.source_ticket_id = incidentCreationContext.sourceTicketId;
+            suppressNextLiveRefresh = true;
+            const res = await api("/api/incidents", {{
+              method: "POST",
+              body: JSON.stringify(payload)
+            }});
+            if (!res || !res.ok) {{
+              suppressNextLiveRefresh = false;
+              const err = res ? await res.json().catch(() => ({{}})) : {{}};
+              alert(err.error || "Nie udało się utworzyć incydentu z powiązanych zgłoszeń.");
+              return;
+            }}
+            const created = await res.json();
+            closeIncidentFromTicketsModal();
+            incidentCreationContext = null;
+            showToast(`Utworzono incydent #${{created.id}}`, `Powiązano zgłoszenia: ${{created.linked_ticket_count}}`);
+            await renderIncident(created.id);
+          }});
         }}
         const closeTicketForm = document.getElementById("closeTicketForm");
         if (closeTicketForm) {{
@@ -9742,10 +9874,33 @@ data:
         impact = clean(payload.get("impact"))
         severity = clean(payload.get("severity")) or "SEV3"
         commander_email = clean(payload.get("commander_email")).lower()
+        raw_ticket_ids = payload.get("ticket_ids") or []
+        source_ticket_id_raw = payload.get("source_ticket_id")
         if not title or not summary:
             return jsonify({"error": "Tytuł i opis incydentu są wymagane."}), 400
         if severity not in INCIDENT_SEVERITIES:
             return jsonify({"error": "Nieprawidłowy poziom SEV."}), 400
+        if not isinstance(raw_ticket_ids, list):
+            return jsonify({"error": "Lista zgłoszeń ma nieprawidłowy format."}), 400
+        try:
+            ticket_ids = sorted({
+                int(ticket_id)
+                for ticket_id in raw_ticket_ids
+                if int(ticket_id) > 0
+            })
+            source_ticket_id = (
+                int(source_ticket_id_raw)
+                if source_ticket_id_raw not in (None, "")
+                else None
+            )
+        except Exception:
+            return jsonify({"error": "Lista zawiera nieprawidłowe ID zgłoszenia."}), 400
+        if len(ticket_ids) > 50:
+            return jsonify({"error": "Do jednego incydentu można dołączyć maksymalnie 50 zgłoszeń."}), 400
+        if ticket_ids and (len(ticket_ids) < 2 or source_ticket_id not in ticket_ids):
+            return jsonify({
+                "error": "Wybierz zgłoszenie źródłowe i co najmniej jedno powiązane zgłoszenie.",
+            }), 400
         conn = get_conn()
         cur = conn.cursor()
         resolved_commander_email, commander_name = incident_commander(cur, commander_email)
@@ -9756,6 +9911,57 @@ data:
         if not resolved_commander_email:
             resolved_commander_email = user["email"]
             commander_name = user["name"]
+        ticket_rows = {}
+        if ticket_ids:
+            cur.execute("""
+                SELECT id, title, status
+                FROM tickets
+                WHERE id = ANY(%s)
+            """, (ticket_ids,))
+            ticket_rows = {
+                ticket_row[0]: {
+                    "title": ticket_row[1],
+                    "status": ticket_row[2],
+                }
+                for ticket_row in cur.fetchall()
+            }
+            missing_ticket_ids = sorted(set(ticket_ids) - set(ticket_rows))
+            if missing_ticket_ids:
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": f"Nie znaleziono zgłoszeń: {', '.join(str(item) for item in missing_ticket_ids)}.",
+                }), 404
+            closed_ticket_ids = sorted(
+                ticket_id
+                for ticket_id, ticket_data in ticket_rows.items()
+                if ticket_data["status"] == "Zamknięte"
+            )
+            if closed_ticket_ids:
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": f"Zamknięte zgłoszenia nie mogą zostać dołączone: {', '.join(str(item) for item in closed_ticket_ids)}.",
+                }), 400
+            cur.execute("""
+                SELECT
+                  CASE
+                    WHEN ticket_id = %s THEN linked_ticket_id
+                    ELSE ticket_id
+                  END AS linked_id
+                FROM ticket_links
+                WHERE ticket_id = %s OR linked_ticket_id = %s
+            """, (source_ticket_id, source_ticket_id, source_ticket_id))
+            related_ticket_ids = {related[0] for related in cur.fetchall()}
+            unrelated_ticket_ids = sorted(
+                set(ticket_ids) - {source_ticket_id} - related_ticket_ids
+            )
+            if unrelated_ticket_ids:
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": f"Zgłoszenia nie są bezpośrednio powiązane ze zgłoszeniem źródłowym: {', '.join(str(item) for item in unrelated_ticket_ids)}.",
+                }), 400
         cur.execute("""
             INSERT INTO incidents (
               title, summary, impact, severity, status,
@@ -9781,10 +9987,53 @@ data:
             user["email"],
             user["name"],
         ))
+        for ticket_id in ticket_ids:
+            cur.execute("""
+                INSERT INTO incident_tickets (incident_id, ticket_id, linked_by_email)
+                VALUES (%s, %s, %s)
+            """, (incident_id, ticket_id, user["email"]))
+            public_comment = (
+                f"Twoje zgłoszenie zostało powiązane z incydentem "
+                f"{severity} #{incident_id}: {title}. "
+                "Dalsze publiczne aktualizacje operatora będą automatycznie "
+                "dodawane do tego zgłoszenia."
+            )
+            cur.execute("""
+                INSERT INTO comments (
+                  ticket_id, author, author_email, content, visibility
+                )
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                ticket_id,
+                f"Incident Command Center · {user['name']}",
+                user["email"],
+                public_comment,
+                "public",
+            ))
+            mark_first_response_if_needed(cur, ticket_id, user)
+            cur.execute(
+                "UPDATE tickets SET updated_at = NOW() WHERE id = %s",
+                (ticket_id,),
+            )
+            add_ticket_event(
+                cur,
+                ticket_id,
+                user,
+                "incident_linked",
+                f"Zgłoszenie powiązano z incydentem #{incident_id}: {title}",
+            )
+            create_ticket_notifications(
+                cur,
+                ticket_id,
+                "incident_linked",
+                f"Zgłoszenie #{ticket_id} powiązano z incydentem #{incident_id}: {title}",
+                actor_email=user["email"],
+            )
         log_audit(cur, user, "incident_created", "incident", incident_id, {
             "title": title,
             "severity": severity,
             "commander_email": resolved_commander_email,
+            "ticket_ids": ticket_ids,
         })
         conn.commit()
         cur.close()
@@ -9793,9 +10042,13 @@ data:
             f"{user['name']} utworzył incydent #{incident_id}: {title}",
             "incident_created",
             None,
-            staff_only=True,
+            staff_only=not bool(ticket_ids),
+            ticket_ids=ticket_ids or None,
         )
-        return jsonify({"id": incident_id}), 201
+        return jsonify({
+            "id": incident_id,
+            "linked_ticket_count": len(ticket_ids),
+        }), 201
 
     @app.get("/api/incidents/<int:incident_id>")
     @api_login_required
@@ -11910,7 +12163,12 @@ data:
             "linked_tickets": linked_tickets,
             "incidents": incidents,
             "suggestions": suggestions,
-            "meta": {"statuses": workflow_statuses(ticket.get("workflow_key")), "operators": operators, "watcher_candidates": watcher_candidates},
+            "meta": {
+                "statuses": workflow_statuses(ticket.get("workflow_key")),
+                "operators": operators,
+                "watcher_candidates": watcher_candidates,
+                "incident_severities": INCIDENT_SEVERITIES,
+            },
         })
     @app.post("/api/tickets/<int:ticket_id>/close")
     @api_login_required
