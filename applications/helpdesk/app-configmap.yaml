@@ -155,6 +155,7 @@ data:
     PRIORITIES = ["Niski", "Normalny", "Wysoki", "Krytyczny"]
     INCIDENT_SEVERITIES = ["SEV1", "SEV2", "SEV3", "SEV4"]
     INCIDENT_STATUSES = ["investigating", "identified", "monitoring", "resolved"]
+    KNOWLEDGE_STATUSES = ["draft", "published", "archived"]
     STANDARD_STATUSES = [
         "Nowe",
         "Otwarte",
@@ -1312,6 +1313,25 @@ data:
                     );
                 """)
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS knowledge_articles (
+                        id SERIAL PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        problem TEXT NOT NULL,
+                        solution TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        subcategory TEXT NOT NULL DEFAULT 'Inne',
+                        status TEXT NOT NULL DEFAULT 'draft',
+                        source_ticket_id INTEGER UNIQUE REFERENCES tickets(id) ON DELETE SET NULL,
+                        created_by_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        created_by_name TEXT,
+                        updated_by_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        updated_by_name TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        published_at TIMESTAMP
+                    );
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
                         actor_email TEXT,
@@ -1343,6 +1363,8 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_incidents_severity_updated ON incidents (severity, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_incident_tickets_ticket_id ON incident_tickets (ticket_id, incident_id)",
                     "CREATE INDEX IF NOT EXISTS idx_incident_updates_incident_id ON incident_updates (incident_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_status_updated ON knowledge_articles (status, updated_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_category ON knowledge_articles (category, subcategory, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_created ON workflow_rule_executions (created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_workflow_id ON workflow_rule_executions (workflow_id, id DESC)",
@@ -2823,6 +2845,8 @@ data:
         .incident-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
         .incident-update-public { border-left: 3px solid #22c55e; }
         .incident-update-internal { border-left: 3px solid #64748b; }
+        .knowledge-card { border-left: 5px solid #38bdf8; }
+        .knowledge-solution { white-space: pre-wrap; line-height: 1.65; }
     </style>
         </head>
         <body>
@@ -3295,6 +3319,45 @@ data:
           </form>
         </div>
       </div>
+      <div id="knowledgeArticleModal" class="modal-backdrop hidden">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div>
+              <h2 id="knowledgeArticleModalTitle">Artykuł bazy wiedzy</h2>
+              <p class="muted">Sprawdź treść przed publikacją. Dane innych użytkowników nie powinny trafiać do rozwiązania.</p>
+            </div>
+            <button class="btn-secondary btn-small" onclick="closeKnowledgeArticleModal(); return false;">✕</button>
+          </div>
+          <form id="knowledgeArticleForm">
+            <label>Tytuł artykułu</label>
+            <input name="title" required>
+            <label>Opis problemu</label>
+            <textarea name="problem" rows="4" required></textarea>
+            <label>Rozwiązanie krok po kroku</label>
+            <textarea name="solution" rows="7" required></textarea>
+            <div class="grid">
+              <div>
+                <label>Kategoria</label>
+                <select name="category" id="knowledgeArticleCategory"></select>
+              </div>
+              <div>
+                <label>Podkategoria</label>
+                <select name="subcategory" id="knowledgeArticleSubcategory"></select>
+              </div>
+            </div>
+            <label>Status</label>
+            <select name="status">
+              <option value="published">Opublikowany</option>
+              <option value="draft">Szkic</option>
+              <option value="archived">Archiwalny</option>
+            </select>
+            <div class="modal-actions">
+              <button type="button" class="btn-secondary" onclick="closeKnowledgeArticleModal(); return false;">Anuluj</button>
+              <button type="submit">Zapisz artykuł</button>
+            </div>
+          </form>
+        </div>
+      </div>
       <script>
         const appEl = document.getElementById("app");
         const userBadge = document.getElementById("userBadge");
@@ -3315,6 +3378,7 @@ data:
         let closeTicketId = null;
         let reopenTicketId = null;
         let incidentCreationContext = null;
+        let knowledgeArticleContext = null;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
@@ -3411,6 +3475,41 @@ data:
         }}
         function closeIncidentFromTicketsModal() {{
           const modal = document.getElementById("incidentFromTicketsModal");
+          if (modal) modal.classList.add("hidden");
+        }}
+        function updateKnowledgeSubcategories(selected = "") {{
+          const categorySelect = document.getElementById("knowledgeArticleCategory");
+          const subcategorySelect = document.getElementById("knowledgeArticleSubcategory");
+          if (!categorySelect || !subcategorySelect || !knowledgeArticleContext) return;
+          const values = knowledgeArticleContext.subcategories?.[categorySelect.value] || ["Inne"];
+          subcategorySelect.innerHTML = values.map(value =>
+            `<option value="${{esc(value)}}" ${{value === selected ? "selected" : ""}}>${{esc(value)}}</option>`
+          ).join("");
+        }}
+        function openKnowledgeArticleModal() {{
+          const context = knowledgeArticleContext;
+          if (!context) return;
+          const modal = document.getElementById("knowledgeArticleModal");
+          const form = document.getElementById("knowledgeArticleForm");
+          const heading = document.getElementById("knowledgeArticleModalTitle");
+          const categorySelect = document.getElementById("knowledgeArticleCategory");
+          if (!modal || !form || !heading || !categorySelect) return;
+          form.reset();
+          const article = context.article || {{}};
+          heading.textContent = context.mode === "edit" ? `Edytuj artykuł #${{article.id}}` : "Utwórz artykuł z rozwiązania";
+          form.elements.title.value = article.title || context.title || "";
+          form.elements.problem.value = article.problem || context.problem || "";
+          form.elements.solution.value = article.solution || context.solution || "";
+          form.elements.status.value = article.status || "published";
+          categorySelect.innerHTML = (context.categories || []).map(value =>
+            `<option value="${{esc(value)}}" ${{value === (article.category || context.category) ? "selected" : ""}}>${{esc(value)}}</option>`
+          ).join("");
+          updateKnowledgeSubcategories(article.subcategory || context.subcategory || "Inne");
+          categorySelect.onchange = () => updateKnowledgeSubcategories("Inne");
+          modal.classList.remove("hidden");
+        }}
+        function closeKnowledgeArticleModal() {{
+          const modal = document.getElementById("knowledgeArticleModal");
           if (modal) modal.classList.add("hidden");
         }}
         async function downloadAttachment(id, filename) {{
@@ -3665,7 +3764,8 @@ data:
             "incident_updated",
             "incident_update",
             "incident_ticket_linked",
-            "incident_ticket_unlinked"
+            "incident_ticket_unlinked",
+            "knowledge_article_changed"
           ];
           if (!refreshEvents.includes(liveEvent.type)) return;
           if (["status_changed", "auto_status_changed", "workflow_rule_status_changed", "ticket_closed", "ticket_reopened"].includes(liveEvent.type) && !suppressNextLiveRefresh) {{
@@ -3713,6 +3813,12 @@ data:
           }}
           if (currentView.name === "incident" && currentView.incidentId) {{
             await renderIncident(currentView.incidentId);
+          }}
+          if (currentView.name === "knowledge") {{
+            await renderKnowledgeArticles();
+          }}
+          if (currentView.name === "knowledge-article" && currentView.articleId) {{
+            await renderKnowledgeArticle(currentView.articleId);
           }}
         }}
         function disconnectLive() {{
@@ -3976,6 +4082,7 @@ data:
           // Po odebraniu uprawnienia w ekranie Uprawnienia pozycja znika z menu,
           // a po ponownym nadaniu pojawia się po odświeżeniu danych użytkownika.
           const moduleLinks = [];
+          moduleLinks.push(`<a href="#" onclick="renderKnowledgeArticles();return false;">Baza wiedzy</a>`);
           if (canViewDashboard(data)) moduleLinks.push(`<a href="#" onclick="renderDashboard();return false;">Dashboard</a>`);
           if (canViewReports(data)) moduleLinks.push(`<a href="#" onclick="renderReports();return false;">Raporty</a>`);
           if (canViewSlaCalendar(data)) moduleLinks.push(`<a href="#" onclick="renderSlaCalendar();return false;">Kalendarz SLA</a>`);
@@ -6532,6 +6639,126 @@ data:
           if (actor && actor !== "all") params.set("actor", actor);
           window.location.href = `/api/audit.csv?${{params.toString()}}`;
         }}
+        function knowledgeStatusLabel(status) {{
+          return ({{
+            draft: "Szkic",
+            published: "Opublikowany",
+            archived: "Archiwalny"
+          }})[status] || status;
+        }}
+        async function renderKnowledgeArticles() {{
+          currentView = {{ name: "knowledge", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          const query = sessionStorage.getItem("helpdesk_knowledge_q") || "";
+          const status = sessionStorage.getItem("helpdesk_knowledge_status") || "all";
+          const params = new URLSearchParams();
+          if (query) params.set("q", query);
+          if (canWorkTickets(me) && status !== "all") params.set("status", status);
+          const res = await api(`/api/knowledge-articles?${{params.toString()}}`);
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać bazy wiedzy</h2></section>`;
+            return;
+          }}
+          const data = await res.json();
+          const articles = data.articles || [];
+          const statusFilter = canWorkTickets(me) ? `
+            <div class="filter-field">
+              <label>Status</label>
+              <select id="knowledgeStatusFilter">
+                <option value="all" ${{status === "all" ? "selected" : ""}}>Wszystkie</option>
+                ${{(data.meta?.statuses || []).map(value =>
+                  `<option value="${{esc(value)}}" ${{status === value ? "selected" : ""}}>${{esc(knowledgeStatusLabel(value))}}</option>`
+                ).join("")}}
+              </select>
+            </div>` : "";
+          const cards = articles.length ? articles.map(article => `
+            <section class="card knowledge-card" onclick="renderKnowledgeArticle(${{article.id}})">
+              <div class="ticket-section-title">
+                <h3>#${{article.id}} · ${{esc(article.title)}}</h3>
+                <span class="pill">${{esc(knowledgeStatusLabel(article.status))}}</span>
+              </div>
+              <div class="incident-meta">
+                <span class="chip">${{esc(article.category)}}</span>
+                <span class="chip">${{esc(article.subcategory)}}</span>
+                ${{article.source_ticket_id ? `<span class="chip">Źródło: #${{article.source_ticket_id}}</span>` : ""}}
+              </div>
+              <p>${{esc(article.problem)}}</p>
+              <p class="muted">Aktualizacja: ${{esc(article.updated_at)}}${{article.updated_by_name ? " · " + esc(article.updated_by_name) : ""}}</p>
+            </section>
+          `).join("") : `<section class="card"><p class="muted">Brak artykułów dla wybranych filtrów.</p></section>`;
+          appEl.innerHTML = `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Baza wiedzy</h2>
+                  <p class="muted">Sprawdzone rozwiązania utworzone na podstawie zakończonych zgłoszeń.</p>
+                </div>
+                <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              </div>
+              <div class="filter-grid">
+                <div class="filter-field" style="grid-column: span 2">
+                  <label>Szukaj</label>
+                  <form id="knowledgeSearchForm" style="display:flex;gap:8px">
+                    <input id="knowledgeSearchInput" value="${{esc(query)}}" placeholder="Problem, rozwiązanie, kategoria..." style="margin-top:0">
+                    <button type="submit" style="margin-top:0">Szukaj</button>
+                  </form>
+                </div>
+                ${{statusFilter}}
+              </div>
+            </section>
+            <div class="incident-grid">${{cards}}</div>
+          `;
+          document.getElementById("knowledgeSearchForm")?.addEventListener("submit", event => {{
+            event.preventDefault();
+            sessionStorage.setItem("helpdesk_knowledge_q", document.getElementById("knowledgeSearchInput")?.value.trim() || "");
+            renderKnowledgeArticles();
+          }});
+          document.getElementById("knowledgeStatusFilter")?.addEventListener("change", event => {{
+            sessionStorage.setItem("helpdesk_knowledge_status", event.target.value || "all");
+            renderKnowledgeArticles();
+          }});
+        }}
+        async function renderKnowledgeArticle(articleId) {{
+          currentView = {{ name: "knowledge-article", articleId: Number(articleId), ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          const res = await api(`/api/knowledge-articles/${{articleId}}`);
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie znaleziono artykułu</h2></section>`;
+            return;
+          }}
+          const data = await res.json();
+          const article = data.article;
+          knowledgeArticleContext = canWorkTickets(me) ? {{
+            mode: "edit",
+            article,
+            categories: data.meta?.categories || [],
+            subcategories: data.meta?.subcategories || {{}}
+          }} : null;
+          appEl.innerHTML = `
+            <section class="card knowledge-card">
+              <div class="ticket-section-title">
+                <div>
+                  <button class="btn-secondary" onclick="renderKnowledgeArticles()">← Baza wiedzy</button>
+                  <h2>#${{article.id}} · ${{esc(article.title)}}</h2>
+                </div>
+                <span class="pill">${{esc(knowledgeStatusLabel(article.status))}}</span>
+              </div>
+              <div class="incident-meta">
+                <span class="chip">${{esc(article.category)}}</span>
+                <span class="chip">${{esc(article.subcategory)}}</span>
+                ${{article.source_ticket_id ? `<button class="btn-secondary btn-small" onclick="renderTicket(${{article.source_ticket_id}})">Zgłoszenie źródłowe #${{article.source_ticket_id}}</button>` : ""}}
+              </div>
+              <h3>Objawy i problem</h3>
+              <div class="panel-soft knowledge-solution">${{esc(article.problem)}}</div>
+              <h3>Rozwiązanie</h3>
+              <div class="panel-soft knowledge-solution">${{esc(article.solution)}}</div>
+              <p class="muted">Utworzono: ${{esc(article.created_at)}} · aktualizacja: ${{esc(article.updated_at)}} · ${{esc(article.updated_by_name || article.created_by_name)}}</p>
+              ${{canWorkTickets(me) ? `<button onclick="openKnowledgeArticleModal()">Edytuj artykuł</button>` : ""}}
+            </section>
+          `;
+        }}
         function incidentStatusLabel(status) {{
           return ({{
             investigating: "Badanie",
@@ -7028,6 +7255,7 @@ data:
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
+              <button class="btn-secondary" onclick="renderKnowledgeArticles()">Baza wiedzy</button>
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderIncidents()">Incident Command Center</button>` : ""}}
               ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAdminWorkflows()">Workflow</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
@@ -7166,6 +7394,21 @@ data:
           const data = await res.json();
           const t = data.ticket;
           const isClosed = t.status === "Zamknięte";
+          const canCreateKnowledgeArticle = canWorkTickets(me)
+            && isClosed
+            && Boolean(t.resolution_summary)
+            && !data.knowledge_article;
+          knowledgeArticleContext = canCreateKnowledgeArticle ? {{
+            mode: "create",
+            sourceTicketId: t.id,
+            title: `Rozwiązanie: ${{t.title}}`,
+            problem: t.description,
+            solution: t.resolution_summary,
+            category: t.category,
+            subcategory: t.subcategory,
+            categories: data.meta.categories || [],
+            subcategories: data.meta.subcategories || {{}}
+          }} : null;
           const incidentBanners = (data.incidents || []).map(i => `
             <div class="incident-banner ${{incidentSeverityClass(i.severity)}}">
               <div class="muted"><strong>Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego.</strong></div>
@@ -7328,6 +7571,44 @@ data:
                 </form>
               ` : ""}}
             </section>`;
+          const knowledgeSuggestions = data.suggestions?.articles || [];
+          const ticketKnowledgePanel = (
+            knowledgeSuggestions.length
+            || data.knowledge_article
+            || canCreateKnowledgeArticle
+          ) ? `
+            <section class="card knowledge-card">
+              <div class="ticket-section-title">
+                <h3>Baza wiedzy</h3>
+                <span class="counter">${{knowledgeSuggestions.length}}</span>
+              </div>
+              ${{data.knowledge_article ? `
+                <p class="muted">Na podstawie tego zgłoszenia utworzono artykuł.</p>
+                <button class="btn-secondary btn-small" onclick="renderKnowledgeArticle(${{data.knowledge_article.id}})">
+                  Otwórz #${{data.knowledge_article.id}} · ${{esc(data.knowledge_article.title)}}
+                </button>
+              ` : ""}}
+              ${{canCreateKnowledgeArticle ? `
+                <p class="muted">Opis rozwiązania może zostać ponownie wykorzystany przez innych użytkowników i operatorów.</p>
+                <button onclick="openKnowledgeArticleModal()">Utwórz artykuł z rozwiązania</button>
+              ` : ""}}
+              ${{knowledgeSuggestions.length ? `
+                <p class="muted">Pasujące, opublikowane rozwiązania:</p>
+                <div class="watcher-list">${{knowledgeSuggestions.map(article => `
+                  <div class="watcher-item">
+                    <div>
+                      <strong><a href="#" onclick="renderKnowledgeArticle(${{article.id}}); return false;">#${{article.id}} · ${{esc(article.title)}}</a></strong>
+                      <div class="watcher-meta">
+                        ${{esc(article.category)}} / ${{esc(article.subcategory)}}
+                        · <span class="chip">${{article.score}}% dopasowania</span>
+                      </div>
+                      <div class="incident-meta">${{(article.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                    </div>
+                    <button class="btn-secondary btn-small" onclick="renderKnowledgeArticle(${{article.id}})">Otwórz</button>
+                  </div>
+                `).join("")}}</div>
+              ` : ""}}
+            </section>` : "";
           const suggestedTickets = data.suggestions?.tickets || [];
           const suggestedIncidents = data.suggestions?.incidents || [];
           const suggestionCount = suggestedTickets.length + suggestedIncidents.length;
@@ -7525,6 +7806,7 @@ data:
                 ${{statusPanel}}
                 ${{assignmentPanel}}
                 ${{reopenPanel}}
+                ${{ticketKnowledgePanel}}
                 ${{similarItemsPanel}}
                 ${{linkedTicketsPanel}}
                 ${{watcherPanel}}
@@ -7819,6 +8101,47 @@ data:
             incidentCreationContext = null;
             showToast(`Utworzono incydent #${{created.id}}`, `Powiązano zgłoszenia: ${{created.linked_ticket_count}}`);
             await renderIncident(created.id);
+          }});
+        }}
+        const knowledgeArticleForm = document.getElementById("knowledgeArticleForm");
+        if (knowledgeArticleForm) {{
+          knowledgeArticleForm.addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            const context = knowledgeArticleContext;
+            if (!context) return;
+            const payload = Object.fromEntries(new FormData(knowledgeArticleForm).entries());
+            if (context.mode === "create" && context.sourceTicketId) {{
+              payload.source_ticket_id = context.sourceTicketId;
+            }}
+            const isEdit = context.mode === "edit" && context.article?.id;
+            const endpoint = isEdit
+              ? `/api/knowledge-articles/${{context.article.id}}`
+              : "/api/knowledge-articles";
+            suppressNextLiveRefresh = true;
+            const res = await api(endpoint, {{
+              method: isEdit ? "PUT" : "POST",
+              body: JSON.stringify(payload)
+            }});
+            if (!res || !res.ok) {{
+              suppressNextLiveRefresh = false;
+              const err = res ? await res.json().catch(() => ({{}})) : {{}};
+              if (res?.status === 409 && err.article_id) {{
+                closeKnowledgeArticleModal();
+                showToast("Artykuł już istnieje", `Otwieram artykuł #${{err.article_id}}.`);
+                await renderKnowledgeArticle(err.article_id);
+                return;
+              }}
+              alert(err.error || "Nie udało się zapisać artykułu bazy wiedzy.");
+              return;
+            }}
+            const result = await res.json();
+            const articleId = isEdit ? context.article.id : result.id;
+            closeKnowledgeArticleModal();
+            showToast(
+              isEdit ? `Zaktualizowano artykuł #${{articleId}}` : `Utworzono artykuł #${{articleId}}`,
+              knowledgeStatusLabel(payload.status)
+            );
+            await renderKnowledgeArticle(articleId);
           }});
         }}
         const closeTicketForm = document.getElementById("closeTicketForm");
@@ -9422,6 +9745,294 @@ data:
             "roles": VALID_ROLES,
             "operators": operators,
         })
+
+    @app.get("/api/knowledge-articles")
+    @api_login_required
+    def api_knowledge_articles(user):
+        query = clean(request.args.get("q"))
+        requested_status = clean(request.args.get("status"))
+        clauses = []
+        params = []
+        if is_staff(user):
+            if requested_status in KNOWLEDGE_STATUSES:
+                clauses.append("ka.status = %s")
+                params.append(requested_status)
+        else:
+            clauses.append("ka.status = 'published'")
+        if query:
+            pattern = f"%{query}%"
+            clauses.append("""
+                (
+                  ka.title ILIKE %s OR ka.problem ILIKE %s OR
+                  ka.solution ILIKE %s OR ka.category ILIKE %s OR
+                  ka.subcategory ILIKE %s
+                )
+            """)
+            params.extend([pattern] * 5)
+        where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute(f"""
+            SELECT
+              ka.id, ka.title, ka.problem, ka.solution,
+              ka.category, ka.subcategory, ka.status,
+              ka.source_ticket_id,
+              COALESCE(ka.updated_by_name, ka.created_by_name, ''),
+              ka.updated_at, ka.published_at
+            FROM knowledge_articles ka
+            {where_sql}
+            ORDER BY
+              CASE ka.status WHEN 'published' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
+              ka.updated_at DESC,
+              ka.id DESC
+            LIMIT 250
+        """, tuple(params))
+        articles = [{
+            "id": row[0],
+            "title": row[1],
+            "problem": row[2],
+            "solution": row[3],
+            "category": row[4],
+            "subcategory": row[5],
+            "status": row[6],
+            "source_ticket_id": row[7] if is_staff(user) else None,
+            "updated_by_name": row[8],
+            "updated_at": str(row[9]),
+            "published_at": str(row[10]) if row[10] else "",
+        } for row in cur.fetchall()]
+        cur.close()
+        conn.close()
+        return jsonify({
+            "articles": articles,
+            "filter": {"q": query, "status": requested_status},
+            "meta": {
+                "statuses": KNOWLEDGE_STATUSES,
+                "categories": CATEGORIES,
+                "subcategories": SUBCATEGORIES,
+            },
+        })
+
+    @app.get("/api/knowledge-articles/<int:article_id>")
+    @api_login_required
+    def api_knowledge_article_detail(user, article_id):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT
+              ka.id, ka.title, ka.problem, ka.solution,
+              ka.category, ka.subcategory, ka.status,
+              ka.source_ticket_id,
+              COALESCE(ka.created_by_name, ''),
+              COALESCE(ka.updated_by_name, ka.created_by_name, ''),
+              ka.created_at, ka.updated_at, ka.published_at
+            FROM knowledge_articles ka
+            WHERE ka.id = %s
+        """, (article_id,))
+        row = cur.fetchone()
+        if not row or (not is_staff(user) and row[6] != "published"):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        article = {
+            "id": row[0],
+            "title": row[1],
+            "problem": row[2],
+            "solution": row[3],
+            "category": row[4],
+            "subcategory": row[5],
+            "status": row[6],
+            "source_ticket_id": row[7] if is_staff(user) else None,
+            "created_by_name": row[8],
+            "updated_by_name": row[9],
+            "created_at": str(row[10]),
+            "updated_at": str(row[11]),
+            "published_at": str(row[12]) if row[12] else "",
+        }
+        cur.close()
+        conn.close()
+        return jsonify({
+            "article": article,
+            "meta": {
+                "categories": CATEGORIES,
+                "subcategories": SUBCATEGORIES,
+                "statuses": KNOWLEDGE_STATUSES,
+            },
+        })
+
+    @app.post("/api/knowledge-articles")
+    @api_login_required
+    @api_staff_required
+    def api_create_knowledge_article(user):
+        payload = request.get_json(silent=True) or {}
+        source_ticket_id_raw = payload.get("source_ticket_id")
+        try:
+            source_ticket_id = int(source_ticket_id_raw) if source_ticket_id_raw else None
+        except Exception:
+            return jsonify({"error": "Nieprawidłowe ID zgłoszenia źródłowego."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        source_ticket = None
+        if source_ticket_id:
+            cur.execute("""
+                SELECT title, description, category, COALESCE(subcategory, 'Inne'),
+                       status, COALESCE(resolution_summary, '')
+                FROM tickets
+                WHERE id = %s
+            """, (source_ticket_id,))
+            source_ticket = cur.fetchone()
+            if not source_ticket:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Nie znaleziono zgłoszenia źródłowego."}), 404
+            if source_ticket[4] != "Zamknięte" or not clean(source_ticket[5]):
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": "Artykuł można utworzyć z zamkniętego zgłoszenia zawierającego opis rozwiązania.",
+                }), 400
+            cur.execute(
+                "SELECT id FROM knowledge_articles WHERE source_ticket_id = %s",
+                (source_ticket_id,),
+            )
+            existing = cur.fetchone()
+            if existing:
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": "Dla tego zgłoszenia istnieje już artykuł.",
+                    "article_id": existing[0],
+                }), 409
+        title = clean(payload.get("title")) or (
+            f"Rozwiązanie: {source_ticket[0]}" if source_ticket else ""
+        )
+        problem = clean(payload.get("problem")) or (
+            source_ticket[1] if source_ticket else ""
+        )
+        solution = clean(payload.get("solution")) or (
+            source_ticket[5] if source_ticket else ""
+        )
+        category = clean(payload.get("category")) or (
+            source_ticket[2] if source_ticket else ""
+        )
+        subcategory = clean(payload.get("subcategory")) or (
+            source_ticket[3] if source_ticket else "Inne"
+        )
+        status = clean(payload.get("status")) or "draft"
+        if not title or not problem or not solution:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Tytuł, opis problemu i rozwiązanie są wymagane."}), 400
+        if category not in CATEGORIES or subcategory not in SUBCATEGORIES.get(category, []):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nieprawidłowa kategoria lub podkategoria."}), 400
+        if status not in KNOWLEDGE_STATUSES:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nieprawidłowy status artykułu."}), 400
+        cur.execute("""
+            INSERT INTO knowledge_articles (
+              title, problem, solution, category, subcategory, status,
+              source_ticket_id, created_by_email, created_by_name,
+              updated_by_email, updated_by_name, published_at
+            )
+            VALUES (
+              %s, %s, %s, %s, %s, %s,
+              %s, %s, %s, %s, %s,
+              CASE WHEN %s = 'published' THEN NOW() ELSE NULL END
+            )
+            RETURNING id
+        """, (
+            title, problem, solution, category, subcategory, status,
+            source_ticket_id, user["email"], user["name"],
+            user["email"], user["name"], status,
+        ))
+        article_id = cur.fetchone()[0]
+        if source_ticket_id:
+            add_ticket_event(
+                cur,
+                source_ticket_id,
+                user,
+                "knowledge_article_created",
+                f"Utworzono artykuł bazy wiedzy #{article_id}: {title}",
+            )
+        log_audit(cur, user, "knowledge_article_created", "knowledge_article", article_id, {
+            "title": title,
+            "status": status,
+            "source_ticket_id": source_ticket_id,
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} utworzył artykuł bazy wiedzy #{article_id}: {title}",
+            "knowledge_article_changed",
+            source_ticket_id,
+            staff_only=status != "published",
+        )
+        return jsonify({"id": article_id, "status": status}), 201
+
+    @app.put("/api/knowledge-articles/<int:article_id>")
+    @api_login_required
+    @api_staff_required
+    def api_update_knowledge_article(user, article_id):
+        payload = request.get_json(silent=True) or {}
+        title = clean(payload.get("title"))
+        problem = clean(payload.get("problem"))
+        solution = clean(payload.get("solution"))
+        category = clean(payload.get("category"))
+        subcategory = clean(payload.get("subcategory"))
+        status = clean(payload.get("status"))
+        if not title or not problem or not solution:
+            return jsonify({"error": "Tytuł, opis problemu i rozwiązanie są wymagane."}), 400
+        if category not in CATEGORIES or subcategory not in SUBCATEGORIES.get(category, []):
+            return jsonify({"error": "Nieprawidłowa kategoria lub podkategoria."}), 400
+        if status not in KNOWLEDGE_STATUSES:
+            return jsonify({"error": "Nieprawidłowy status artykułu."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT status, source_ticket_id FROM knowledge_articles WHERE id = %s", (article_id,))
+        existing = cur.fetchone()
+        if not existing:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        cur.execute("""
+            UPDATE knowledge_articles
+            SET title = %s,
+                problem = %s,
+                solution = %s,
+                category = %s,
+                subcategory = %s,
+                status = %s,
+                updated_by_email = %s,
+                updated_by_name = %s,
+                updated_at = NOW(),
+                published_at = CASE
+                  WHEN %s = 'published' AND published_at IS NULL THEN NOW()
+                  ELSE published_at
+                END
+            WHERE id = %s
+        """, (
+            title, problem, solution, category, subcategory, status,
+            user["email"], user["name"], status, article_id,
+        ))
+        log_audit(cur, user, "knowledge_article_updated", "knowledge_article", article_id, {
+            "old_status": existing[0],
+            "status": status,
+            "source_ticket_id": existing[1],
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} zaktualizował artykuł bazy wiedzy #{article_id}: {title}",
+            "knowledge_article_changed",
+            existing[1],
+            staff_only=status != "published",
+        )
+        return jsonify({"status": "ok"})
+
     @app.get("/api/workflow-rule-executions")
     @app.get("/api/admin/workflow-rule-executions")
     @api_login_required
@@ -11935,7 +12546,15 @@ data:
               i.updated_at DESC
         """, (ticket_id,))
         incident_rows = cur.fetchall()
-        suggestions = {"tickets": [], "incidents": []}
+        cur.execute("""
+            SELECT id, title, status
+            FROM knowledge_articles
+            WHERE source_ticket_id = %s
+        """, (ticket_id,))
+        knowledge_article_row = cur.fetchone()
+        if knowledge_article_row and not is_staff(user) and knowledge_article_row[2] != "published":
+            knowledge_article_row = None
+        suggestions = {"tickets": [], "incidents": [], "articles": []}
         if is_staff(user) and row[9] != "Zamknięte":
             source_tokens = similarity_tokens(row[1], row[2])
             cur.execute("""
@@ -12026,6 +12645,41 @@ data:
                 reverse=True,
             )
             suggestions["incidents"] = incident_suggestions[:3]
+        source_tokens = similarity_tokens(row[1], row[2])
+        cur.execute("""
+            SELECT
+              id, title, problem, solution, category, subcategory, updated_at
+            FROM knowledge_articles
+            WHERE status = 'published'
+              AND (source_ticket_id IS NULL OR source_ticket_id <> %s)
+            ORDER BY updated_at DESC
+            LIMIT 100
+        """, (ticket_id,))
+        article_suggestions = []
+        for article in cur.fetchall():
+            score, reasons = similarity_score(
+                source_tokens,
+                similarity_tokens(article[1], article[2], article[3]),
+                same_category=clean(article[4]).lower() == clean(row[6]).lower(),
+                same_subcategory=clean(article[5]).lower() == clean(row[7]).lower(),
+            )
+            if score < 40:
+                continue
+            article_suggestions.append({
+                "id": article[0],
+                "title": article[1],
+                "problem": article[2],
+                "category": article[4],
+                "subcategory": article[5],
+                "updated_at": str(article[6]),
+                "score": score,
+                "reasons": reasons,
+            })
+        article_suggestions.sort(
+            key=lambda item: (item["score"], item["updated_at"]),
+            reverse=True,
+        )
+        suggestions["articles"] = article_suggestions[:3]
         cur.close()
         conn.close()
         ticket = {
@@ -12139,6 +12793,13 @@ data:
             "latest_public_update_at": str(incident[10]) if incident[10] else "",
             "affected_ticket_count": int(incident[11] or 0),
         } for incident in incident_rows]
+        knowledge_article = None
+        if knowledge_article_row:
+            knowledge_article = {
+                "id": knowledge_article_row[0],
+                "title": knowledge_article_row[1],
+                "status": knowledge_article_row[2],
+            }
         conn2 = get_conn()
         cur2 = conn2.cursor()
         cur2.execute("""
@@ -12163,11 +12824,14 @@ data:
             "linked_tickets": linked_tickets,
             "incidents": incidents,
             "suggestions": suggestions,
+            "knowledge_article": knowledge_article,
             "meta": {
                 "statuses": workflow_statuses(ticket.get("workflow_key")),
                 "operators": operators,
                 "watcher_candidates": watcher_candidates,
                 "incident_severities": INCIDENT_SEVERITIES,
+                "categories": CATEGORIES,
+                "subcategories": SUBCATEGORIES,
             },
         })
     @app.post("/api/tickets/<int:ticket_id>/close")

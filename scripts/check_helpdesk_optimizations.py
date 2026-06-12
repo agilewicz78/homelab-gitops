@@ -70,6 +70,8 @@ def main() -> None:
         "idx_incidents_severity_updated",
         "idx_incident_tickets_ticket_id",
         "idx_incident_updates_incident_id",
+        "idx_knowledge_articles_status_updated",
+        "idx_knowledge_articles_category",
     ]
     missing_indexes = [name for name in required_indexes if name not in text]
     assert not missing_indexes, f"Missing Helpdesk indexes: {missing_indexes}"
@@ -111,6 +113,7 @@ def main() -> None:
 
     for table in ("incidents", "incident_tickets", "incident_updates"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in text
+    assert "CREATE TABLE IF NOT EXISTS knowledge_articles" in text
     assert "Uzupełnia komentarze dla publicznych aktualizacji" in text
     assert "JOIN incident_tickets it ON it.incident_id = iu.incident_id" in text
     assert "COALESCE(iu.is_public, FALSE) = TRUE" in text
@@ -126,6 +129,15 @@ def main() -> None:
     ]
     missing_routes = [route for route in required_incident_routes if route not in text]
     assert not missing_routes, f"Missing incident routes: {missing_routes}"
+
+    required_knowledge_routes = [
+        '@app.get("/api/knowledge-articles")',
+        '@app.get("/api/knowledge-articles/<int:article_id>")',
+        '@app.post("/api/knowledge-articles")',
+        '@app.put("/api/knowledge-articles/<int:article_id>")',
+    ]
+    missing_routes = [route for route in required_knowledge_routes if route not in text]
+    assert not missing_routes, f"Missing knowledge base routes: {missing_routes}"
 
     incident_update_api = section(
         text,
@@ -186,6 +198,10 @@ def main() -> None:
     assert "tl.ticket_id = LEAST(t.id, %s)" in ticket_detail_api
     assert "linked.ticket_id = %s" in ticket_detail_api
     assert '"suggestions": suggestions' in ticket_detail_api
+    assert '"knowledge_article": knowledge_article' in ticket_detail_api
+    assert '"articles": []' in ticket_detail_api
+    assert "knowledge_article_row[2] != \"published\"" in ticket_detail_api
+    assert "FROM knowledge_articles" in ticket_detail_api
 
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
@@ -212,7 +228,13 @@ def main() -> None:
     assert "payload.source_ticket_id = incidentCreationContext.sourceTicketId" in text
     assert "payload.ticket_ids = ticketIds" in text
     assert '"incidents": incidents' in text
+    assert "async function renderKnowledgeArticles()" in text
+    assert "async function renderKnowledgeArticle(articleId)" in text
+    assert "const knowledgeArticleForm" in text
+    assert "Utwórz artykuł z rozwiązania" in text
+    assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
+    assert "2026-06-12-knowledge-base-v8" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

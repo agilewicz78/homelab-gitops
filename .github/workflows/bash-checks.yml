@@ -62,5 +62,8 @@ jobs:
       - name: Check Helpdesk similar-item suggestions
         run: python scripts/check_helpdesk_similarity.py
 
+      - name: Check Helpdesk knowledge base
+        run: python scripts/check_helpdesk_knowledge.py
+
       - name: Check Helpdesk frontend syntax
         run: node scripts/check_helpdesk_frontend.js
