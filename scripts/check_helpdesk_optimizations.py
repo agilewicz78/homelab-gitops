@@ -233,12 +233,15 @@ def main() -> None:
     assert "async function renderKnowledgeArticle(articleId)" in text
     assert "const knowledgeArticleForm" in text
     assert "Utwórz artykuł z rozwiązania" in text
+    assert "To starsze zgłoszenie nie ma opisu rozwiązania" in text
+    assert 'source_ticket[4] != "Zamknięte"' in text
+    assert 'source_ticket[4] != "Zamknięte" or not clean(source_ticket[5])' not in text
     assert "Możliwe rozwiązania przed utworzeniem zgłoszenia" in text
     assert "scheduleNewTicketKnowledgeSuggestions" in text
     assert "loadNewTicketKnowledgeSuggestions" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-12-self-service-suggestions-v9" in deployment_text
+    assert "2026-06-12-knowledge-closed-ticket-fix-v10" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

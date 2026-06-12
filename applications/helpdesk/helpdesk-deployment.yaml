@@ -27,7 +27,7 @@ spec:
         app: helpdesk
       annotations:
         # Zmiana rewizji wymusza odtworzenie poda po aktualizacji kodu w ConfigMap.
-        helpdesk.incoprp.local/app-config-revision: "2026-06-12-self-service-suggestions-v9"
+        helpdesk.incoprp.local/app-config-revision: "2026-06-12-knowledge-closed-ticket-fix-v10"
 
     spec:
       # Pod-level securityContext:

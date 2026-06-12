@@ -35,7 +35,7 @@ class Cursor:
                 "Oprogramowanie",
                 "Poczta",
                 "Zamknięte",
-                "Wyczyść profil Outlooka i uruchom aplikację ponownie.",
+                "",
             )
         if "SELECT id FROM knowledge_articles" in self.last_query:
             return None
