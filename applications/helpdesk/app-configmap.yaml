@@ -7465,7 +7465,6 @@ data:
           const isClosed = t.status === "Zamknięte";
           const canCreateKnowledgeArticle = canWorkTickets(me)
             && isClosed
-            && Boolean(t.resolution_summary)
             && !data.knowledge_article;
           knowledgeArticleContext = canCreateKnowledgeArticle ? {{
             mode: "create",
@@ -7658,7 +7657,9 @@ data:
                 </button>
               ` : ""}}
               ${{canCreateKnowledgeArticle ? `
-                <p class="muted">Opis rozwiązania może zostać ponownie wykorzystany przez innych użytkowników i operatorów.</p>
+                <p class="muted">${{t.resolution_summary
+                  ? "Opis rozwiązania może zostać ponownie wykorzystany przez innych użytkowników i operatorów."
+                  : "To starsze zgłoszenie nie ma opisu rozwiązania. Możesz wpisać rozwiązanie ręcznie podczas tworzenia artykułu."}}</p>
                 <button onclick="openKnowledgeArticleModal()">Utwórz artykuł z rozwiązania</button>
               ` : ""}}
               ${{knowledgeSuggestions.length ? `
@@ -10003,11 +10004,11 @@ data:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Nie znaleziono zgłoszenia źródłowego."}), 404
-            if source_ticket[4] != "Zamknięte" or not clean(source_ticket[5]):
+            if source_ticket[4] != "Zamknięte":
                 cur.close()
                 conn.close()
                 return jsonify({
-                    "error": "Artykuł można utworzyć z zamkniętego zgłoszenia zawierającego opis rozwiązania.",
+                    "error": "Artykuł można utworzyć tylko z zamkniętego zgłoszenia.",
                 }), 400
             cur.execute(
                 "SELECT id FROM knowledge_articles WHERE source_ticket_id = %s",
