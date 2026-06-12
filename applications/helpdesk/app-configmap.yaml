@@ -6427,6 +6427,16 @@ data:
         function incidentSeverityClass(severity) {{
           return String(severity || "SEV4").toLowerCase();
         }}
+        function incidentTicketCountLabel(count) {{
+          const value = Math.max(0, Number(count) || 0);
+          if (value === 1) return "1 powiązane zgłoszenie";
+          const lastTwo = value % 100;
+          const lastOne = value % 10;
+          if (lastOne >= 2 && lastOne <= 4 && (lastTwo < 12 || lastTwo > 14)) {{
+            return `${{value}} powiązane zgłoszenia`;
+          }}
+          return `${{value}} powiązanych zgłoszeń`;
+        }}
         async function renderIncidents(filter = incidentListFilter) {{
           incidentListFilter = filter || "active";
           currentView = {{ name: "incidents", ticketId: null }};
@@ -7055,6 +7065,7 @@ data:
                   <div>${{esc(i.latest_public_update)}}</div>
                 </div>
               ` : `<p class="muted">Operator nie opublikował jeszcze publicznej aktualizacji.</p>`}}
+              <p class="muted"><strong>Zasięg incydentu:</strong> ${{incidentTicketCountLabel(i.affected_ticket_count)}}.</p>
               <p class="muted">Powiązano: ${{esc(i.linked_at)}} · Dowódca: ${{esc(i.commander_name || "Nieprzypisany")}} · aktualizacja incydentu: ${{esc(i.updated_at)}}</p>
               <p class="muted">Nie musisz tworzyć kolejnego zgłoszenia. Publiczne komunikaty incydentu pojawią się również w komentarzach poniżej.</p>
               ${{canWorkTickets(me) ? `<button class="btn-secondary btn-small" onclick="renderIncident(${{i.id}})">Otwórz centrum incydentu</button>` : ""}}
@@ -7134,6 +7145,7 @@ data:
                     <div class="watcher-meta">
                       <span class="pill">${{esc(i.severity)}}</span>
                       · <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
+                      · ${{incidentTicketCountLabel(i.affected_ticket_count)}}
                       · powiązano: ${{esc(i.linked_at)}}
                     </div>
                   </div>
@@ -7167,6 +7179,7 @@ data:
                 <span class="counter">${{relationCount}}</span>
               </div>
               <p class="muted">Tutaj widać zarówno bezpośrednie powiązania między zgłoszeniami, jak i incydenty zbiorcze, w ramach których obsługiwany jest ten ticket.</p>
+              ${{!canWorkTickets(me) && (data.incidents || []).length ? `<p class="muted">Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem, ale nie dane ticketów utworzonych przez inne osoby.</p>` : ""}}
               ${{linkedTickets}}
               ${{canWorkTickets(me) && !isClosed ? `
                 <form id="ticketLinkForm">
@@ -11530,7 +11543,12 @@ data:
               i.updated_at,
               it.linked_at,
               COALESCE(latest_public.message, ''),
-              latest_public.created_at
+              latest_public.created_at,
+              (
+                SELECT COUNT(*)
+                FROM incident_tickets affected
+                WHERE affected.incident_id = i.id
+              ) AS affected_ticket_count
             FROM incident_tickets it
             JOIN incidents i ON i.id = it.incident_id
             LEFT JOIN LATERAL (
@@ -11659,6 +11677,7 @@ data:
             "linked_at": str(incident[8]),
             "latest_public_update": incident[9],
             "latest_public_update_at": str(incident[10]) if incident[10] else "",
+            "affected_ticket_count": int(incident[11] or 0),
         } for incident in incident_rows]
         conn2 = get_conn()
         cur2 = conn2.cursor()

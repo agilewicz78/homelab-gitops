@@ -164,6 +164,8 @@ def main() -> None:
     assert "LEFT JOIN LATERAL" in ticket_detail_api
     assert "latest_public_update" in ticket_detail_api
     assert '"linked_at": str(incident[8])' in ticket_detail_api
+    assert "AS affected_ticket_count" in ticket_detail_api
+    assert '"affected_ticket_count": int(incident[11] or 0)' in ticket_detail_api
 
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
@@ -176,6 +178,9 @@ def main() -> None:
     assert "const directTicketRelations = (data.linked_tickets || []).length" in text
     assert "const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length" in text
     assert "incident-relation ${{incidentSeverityClass(i.severity)}}" in text
+    assert "function incidentTicketCountLabel(count)" in text
+    assert "incidentTicketCountLabel(i.affected_ticket_count)" in text
+    assert "Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem" in text
     assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
     assert '"incidents": incidents' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
