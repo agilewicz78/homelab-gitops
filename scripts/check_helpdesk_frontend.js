@@ -49,7 +49,7 @@ const requiredWorkflowDiagram = [
   "workflowAutomationListViewButton",
   "workflowAutomationDiagramViewButton",
   "Warunki: ORAZ",
-  "Szablony automatyzacji",
+  "Dodaj z szablonu",
   "preview.innerHTML = workflowAutomationRuleDiagram",
 ];
 for (const fragment of requiredWorkflowDiagram) {
@@ -87,6 +87,33 @@ const requiredWorkflowSafety = [
 for (const fragment of requiredWorkflowSafety) {
   if (!text.includes(fragment)) {
     throw new Error(`Missing workflow safety fragment: ${fragment}`);
+  }
+}
+
+const requiredWorkflowWizard = [
+  "workflow-wizard-steps",
+  "workflowFormStageButton(1",
+  "setWorkflowFormStage(stage, skipValidation = false)",
+  "workflowFormInvalidField(stage)",
+  "invalidField.reportValidity()",
+  'id="workflowForm" novalidate',
+  'data-workflow-stage="1"',
+  'data-workflow-stage="2"',
+  'data-workflow-stage="3"',
+  'data-workflow-stage="4"',
+  "Podstawowe informacje",
+  "Statusy i kolejność obsługi",
+  "Zespół odpowiedzialny za workflow",
+  "Ustawienia zaawansowane",
+  "Prosta lista",
+  "Diagram techniczny",
+  'id="workflowStageBack"',
+  'id="workflowStageNext"',
+  'id="workflowSaveButton"',
+];
+for (const fragment of requiredWorkflowWizard) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing workflow wizard fragment: ${fragment}`);
   }
 }
 

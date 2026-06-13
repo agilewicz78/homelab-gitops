@@ -266,8 +266,8 @@ def main() -> None:
     assert "function workflowAutomationRuleDiagram(rule)" in text
     assert "function workflowAutomationDiagramConditions(rule)" in text
     assert "helpdesk_workflow_automation_view" in text
-    assert "Widok diagramu" in text
-    assert "Szablony automatyzacji" in text
+    assert "Diagram techniczny" in text
+    assert "Dodaj z szablonu" in text
     assert "Warunki: ORAZ" in text
     assert "preview.innerHTML = workflowAutomationRuleDiagram" in text
     assert "const automationExecutions = canWorkTickets(me)" in text
@@ -282,9 +282,19 @@ def main() -> None:
     assert "function duplicateWorkflowAutomationRule(idx)" in text
     assert "copy.is_active = false" in text
     assert "Wyłączona reguła jest wersją roboczą" in text
+    assert "function setWorkflowFormStage(stage, skipValidation = false)" in text
+    assert "function workflowFormInvalidField(stage)" in text
+    assert "invalidField.reportValidity()" in text
+    assert "workflow-wizard-steps" in text
+    assert 'data-workflow-stage="1"' in text
+    assert 'data-workflow-stage="4"' in text
+    assert "Podstawowe informacje" in text
+    assert "Statusy i kolejność obsługi" in text
+    assert "Zespół odpowiedzialny za workflow" in text
+    assert "Diagram techniczny" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-workflow-safety-v16" in deployment_text
+    assert "2026-06-13-workflow-wizard-v17" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
