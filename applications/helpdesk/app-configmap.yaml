@@ -3159,6 +3159,20 @@ data:
       .workflow-view-switch { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
       .workflow-view-switch button { margin-top: 0; }
       .workflow-view-switch button[aria-pressed="true"] { border-color: rgba(56,189,248,.8); background: rgba(2,132,199,.28); }
+      .workflow-wizard-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 18px 0; }
+      .workflow-wizard-step { margin: 0; padding: 12px; text-align: left; border: 1px solid var(--border); background: rgba(15,23,42,.7); }
+      .workflow-wizard-step strong { display: block; }
+      .workflow-wizard-step small { display: block; margin-top: 4px; color: var(--muted); }
+      .workflow-wizard-step[aria-current="step"] { border-color: rgba(56,189,248,.9); background: rgba(2,132,199,.24); }
+      .workflow-form-stage { margin: 0; }
+      .workflow-form-stage-header { margin-bottom: 16px; }
+      .workflow-form-stage-header h3 { margin: 0 0 6px; }
+      .workflow-wizard-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      .workflow-wizard-actions .actions { margin-left: auto; }
+      .workflow-advanced-settings summary { cursor: pointer; font-weight: 700; }
+      @media (max-width: 760px) {
+        .workflow-wizard-steps { grid-template-columns: 1fr 1fr; }
+      }
       .workflow-diagram-card { padding: 16px; margin: 12px 0; }
       .workflow-diagram-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
       .workflow-diagram-lane { display: flex; gap: 10px; align-items: stretch; overflow-x: auto; padding: 6px 2px 12px; }
@@ -6579,6 +6593,49 @@ data:
             </option>
           `).join("");
         }}
+        let workflowFormStage = 1;
+        function workflowFormInvalidField(stage) {{
+          const section = document.querySelector(`[data-workflow-stage="${{stage}}"]`);
+          if (!section) return null;
+          return Array.from(section.querySelectorAll("input, select, textarea"))
+            .find(field => typeof field.checkValidity === "function" && !field.checkValidity()) || null;
+        }}
+        function setWorkflowFormStage(stage, skipValidation = false) {{
+          const targetStage = Math.max(1, Math.min(Number(stage) || 1, 4));
+          if (!skipValidation && targetStage > workflowFormStage) {{
+            for (let currentStage = workflowFormStage; currentStage < targetStage; currentStage += 1) {{
+              const invalidField = workflowFormInvalidField(currentStage);
+              if (invalidField) {{
+                setWorkflowFormStage(currentStage, true);
+                invalidField.reportValidity();
+                return;
+              }}
+            }}
+          }}
+          workflowFormStage = targetStage;
+          document.querySelectorAll("[data-workflow-stage]").forEach(section => {{
+            section.classList.toggle("hidden", Number(section.dataset.workflowStage) !== workflowFormStage);
+          }});
+          document.querySelectorAll("[data-workflow-step]").forEach(button => {{
+            const active = Number(button.dataset.workflowStep) === workflowFormStage;
+            button.setAttribute("aria-current", active ? "step" : "false");
+          }});
+          const back = document.getElementById("workflowStageBack");
+          const next = document.getElementById("workflowStageNext");
+          const save = document.getElementById("workflowSaveButton");
+          if (back) back.classList.toggle("hidden", workflowFormStage === 1);
+          if (next) next.classList.toggle("hidden", workflowFormStage === 4);
+          if (save) save.classList.toggle("hidden", workflowFormStage !== 4);
+          document.getElementById("workflowFormTop")?.scrollIntoView({{ behavior: "smooth", block: "start" }});
+        }}
+        function workflowFormStageButton(stage, title, description) {{
+          return `
+            <button type="button" class="workflow-wizard-step" data-workflow-step="${{stage}}" onclick="setWorkflowFormStage(${{stage}}); return false;">
+              <strong>${{stage}}. ${{esc(title)}}</strong>
+              <small>${{esc(description)}}</small>
+            </button>
+          `;
+        }}
         async function renderAdminWorkflowForm(workflowId = null) {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) return;
@@ -6634,66 +6691,112 @@ data:
               </label>
             `;
           }}).join("") || `<p class="muted">Brak operatorów/adminów do wyboru.</p>`;
+          workflowFormStage = 1;
           appEl.innerHTML = `
-            <section class="card">
+            <section id="workflowFormTop" class="card">
               <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
               ${{editing ? `<button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{workflow.id}})">Log automatyzacji</button>` : ""}}
               <h2>${{editing ? "Edytuj workflow" : "Dodaj workflow"}}</h2>
-              <p class="muted">Podaj dopasowanie kategorii/podkategorii oraz kroki procesu. Każdy krok wpisz w osobnej linii.</p>
+              <p class="muted">Skonfiguruj proces w czterech krótkich krokach. Ustawienia techniczne są dostępne, ale nie przeszkadzają w podstawowej konfiguracji.</p>
+              <div class="workflow-wizard-steps">
+                ${{workflowFormStageButton(1, "Podstawy", "Nazwa i dopasowanie")}}
+                ${{workflowFormStageButton(2, "Statusy", "Kolejność obsługi")}}
+                ${{workflowFormStageButton(3, "Zespół", "Operatorzy workflow")}}
+                ${{workflowFormStageButton(4, "Automatyzacje", "Reguły i testy")}}
+              </div>
               <p id="workflowMessage" class="success hidden">Zapisano workflow.</p>
               <p id="workflowError" class="error hidden">Nie udało się zapisać workflow.</p>
-              <form id="workflowForm">
-                <label>Nazwa workflow</label>
-                <input name="name" value="${{esc(workflow.name)}}" required placeholder="np. Naprawa sprzętu komputerowego">
-                <label>Klucz workflow</label>
-                <input name="workflow_key" value="${{esc(workflow.workflow_key)}}" ${{editing ? "disabled" : ""}} placeholder="automatycznie z nazwy, jeśli zostawisz puste">
-                <div class="attachment-upload-hint">Klucz jest technicznym identyfikatorem. Po utworzeniu workflow nie zmieniamy go, żeby istniejące zgłoszenia zachowały powiązanie.</div>
-                <div class="grid">
-                  <div>
-                    <label>Kategoria</label>
-                    <select id="workflowCategorySelect" name="category">${{categoryOptions}}</select>
+              <form id="workflowForm" novalidate>
+                <section class="workflow-form-stage" data-workflow-stage="1">
+                  <div class="workflow-form-stage-header">
+                    <h3>Podstawowe informacje</h3>
+                    <p class="muted">Określ nazwę procesu i zgłoszenia, dla których ma być używany.</p>
                   </div>
-                  <div>
-                    <label>Podkategoria</label>
-                    <select id="workflowSubcategorySelect" name="subcategory"></select>
+                  <label>Nazwa workflow</label>
+                  <input name="name" value="${{esc(workflow.name)}}" required placeholder="np. Naprawa sprzętu komputerowego">
+                  <div class="grid">
+                    <div>
+                      <label>Kategoria</label>
+                      <select id="workflowCategorySelect" name="category">${{categoryOptions}}</select>
+                    </div>
+                    <div>
+                      <label>Podkategoria</label>
+                      <select id="workflowSubcategorySelect" name="subcategory"></select>
+                    </div>
                   </div>
-                </div>
-                <div class="card" style="padding:12px;margin-bottom:12px">
-                  <label><input type="checkbox" name="is_active" ${{workflow.is_active ? "checked" : ""}}> Aktywny</label>
-                  <label><input type="checkbox" name="is_default" ${{workflow.is_default ? "checked" : ""}}> Workflow domyślny</label>
-                  <div class="attachment-upload-hint">Workflow domyślny jest używany, gdy nie ma dopasowania do kategorii lub podkategorii.</div>
-                </div>
-                <label>Operatorzy workflow / domyślni obserwatorzy</label>
-                <div class="card" style="padding:12px;margin-bottom:12px">
-                  <div class="attachment-upload-hint">Wybrane osoby zostaną automatycznie dodane jako obserwatorzy nowych zgłoszeń utworzonych w tym workflow. Pole „Przypisane do” nadal pozostaje osobną decyzją.</div>
-                  ${{operatorOptions}}
-                </div>
-                <label>Kroki / statusy workflow</label>
-                <textarea name="steps" rows="10" required>${{esc(workflowStepsText(workflow))}}</textarea>
-                <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3>Reguły automatyzacji workflow</h3>
-                  <p class="muted">Najprościej zacząć od szablonu. Widok diagramu pokazuje tę samą regułę jako klocki: zdarzenie → warunki → wymagania → akcje.</p>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Ustawienia zaawansowane</summary>
+                    <div style="margin-top:12px">
+                      <label>Klucz techniczny workflow</label>
+                      <input name="workflow_key" value="${{esc(workflow.workflow_key)}}" ${{editing ? "disabled" : ""}} placeholder="automatycznie z nazwy, jeśli zostawisz puste">
+                      <div class="attachment-upload-hint">Po utworzeniu klucz pozostaje stały, aby istniejące zgłoszenia zachowały powiązanie.</div>
+                      <label><input type="checkbox" name="is_active" ${{workflow.is_active ? "checked" : ""}}> Workflow aktywny</label>
+                      <label><input type="checkbox" name="is_default" ${{workflow.is_default ? "checked" : ""}}> Workflow domyślny</label>
+                      <div class="attachment-upload-hint">Workflow domyślny jest używany, gdy żadna kategoria ani podkategoria nie pasuje.</div>
+                    </div>
+                  </details>
+                </section>
+
+                <section class="workflow-form-stage hidden" data-workflow-stage="2">
+                  <div class="workflow-form-stage-header">
+                    <h3>Statusy i kolejność obsługi</h3>
+                    <p class="muted">Każdy status wpisz w osobnej linii, w kolejności widocznej dla operatora.</p>
+                  </div>
+                  <textarea name="steps" rows="10" required>${{esc(workflowStepsText(workflow))}}</textarea>
+                  <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał statusy „Nowe” i „Zamknięte”.</div>
+                  ${{editing && workflow.ticket_count > 0 ? `
+                    <div class="readonly-box">
+                      Ten workflow jest używany przez <strong>${{workflow.ticket_count}}</strong> zgłoszeń.
+                      Zmiana nazw lub usunięcie statusów wpłynie na ich dalszą obsługę.
+                    </div>
+                  ` : ""}}
+                </section>
+
+                <section class="workflow-form-stage hidden" data-workflow-stage="3">
+                  <div class="workflow-form-stage-header">
+                    <h3>Zespół odpowiedzialny za workflow</h3>
+                    <p class="muted">Wybierz osoby, które mają obserwować nowe zgłoszenia należące do tego procesu.</p>
+                  </div>
+                  <div class="card" style="padding:12px;margin-bottom:12px">
+                    <div class="attachment-upload-hint">Operatorzy workflow zostaną dodani jako obserwatorzy. Przypisanie konkretnego wykonawcy nadal jest osobną decyzją.</div>
+                    ${{operatorOptions}}
+                  </div>
+                </section>
+
+                <section class="workflow-form-stage hidden" data-workflow-stage="4">
+                  <div class="workflow-form-stage-header">
+                    <h3>Automatyzacje</h3>
+                    <p class="muted">Zacznij od szablonu lub dodaj własną regułę. Nowe reguły są wersjami roboczymi, dopóki ich nie przetestujesz i nie aktywujesz.</p>
+                  </div>
+                  ${{!editing ? `
+                    <div class="readonly-box">
+                      Najpierw utwórz workflow przyciskiem „Zapisz workflow”. Po zapisaniu wrócisz do tego etapu i przetestujesz reguły na serwerze.
+                    </div>
+                  ` : ""}}
                   <div class="workflow-view-switch">
-                    <button id="workflowAutomationListViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('list'); return false;">Widok listy</button>
-                    <button id="workflowAutomationDiagramViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('diagram'); return false;">Widok diagramu</button>
+                    <button id="workflowAutomationListViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('list'); return false;">Prosta lista</button>
+                    <button id="workflowAutomationDiagramViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('diagram'); return false;">Diagram techniczny</button>
                   </div>
                   <div id="workflowAutomationSafety"></div>
                   <div id="workflowAutomationRules"></div>
-                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(); return false;">Dodaj regułę automatyzacji</button>
-                  <button type="button" onclick="openWorkflowAutomationTemplatePicker(); return false;">Szablony automatyzacji</button>
-                  <div class="attachment-upload-hint">
-                    Diagram nie jest osobnym workflow. Edycja klocków aktualizuje warunki i akcje tej samej reguły. W pierwszej wersji wszystkie warunki są łączone przez ORAZ. Do zmiany aktywnej reguły najlepiej użyć kopii roboczej, przetestować ją, a dopiero potem aktywować.
-                  </div>
+                  <button type="button" onclick="openWorkflowAutomationTemplatePicker(); return false;">Dodaj z szablonu</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(); return false;">Dodaj własną regułę</button>
+                  <details class="card workflow-advanced-settings" style="margin-top:12px">
+                    <summary>Jak działają diagramy i priorytety?</summary>
+                    <div class="attachment-upload-hint" style="margin-top:10px">
+                      Lista i diagram pokazują te same reguły. Warunki są łączone przez ORAZ, a niższy numer priorytetu oznacza wcześniejsze wykonanie. Do zmiany aktywnej reguły najlepiej użyć kopii roboczej.
+                    </div>
+                  </details>
                 </section>
-                ${{editing && workflow.ticket_count > 0 ? `
-                  <div class="readonly-box">
-                    Ten workflow jest używany przez <strong>${{workflow.ticket_count}}</strong> zgłoszeń.
-                    Edycja kroków wpłynie na dostępne statusy tych zgłoszeń.
+
+                <div class="workflow-wizard-actions">
+                  <button id="workflowStageBack" type="button" class="btn-secondary hidden" onclick="setWorkflowFormStage(workflowFormStage - 1); return false;">← Wstecz</button>
+                  <div class="actions">
+                    <button id="workflowStageNext" type="button" onclick="setWorkflowFormStage(workflowFormStage + 1); return false;">Dalej →</button>
+                    <button id="workflowSaveButton" type="submit" class="hidden">Zapisz workflow</button>
+                    <button type="button" class="btn-secondary" onclick="renderAdminWorkflows()">Anuluj</button>
                   </div>
-                ` : ""}}
-                <button type="submit">Zapisz workflow</button>
-                <button type="button" class="btn-secondary" onclick="renderAdminWorkflows()">Anuluj</button>
+                </div>
               </form>
               <div id="workflowAutomationRuleModal" class="modal-backdrop hidden"></div>
             </section>
@@ -6703,11 +6806,20 @@ data:
           workflowAutomationEditorWorkflow = workflow;
           workflowAutomationEditor = workflowDefaultAutomationRules(workflow);
           renderWorkflowAutomationRules();
+          setWorkflowFormStage(1);
           document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
             updateWorkflowSubcategoryOptions(meta, e.target.value, "*");
           }});
           document.getElementById("workflowForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
+            for (let stage = 1; stage <= 4; stage += 1) {{
+              const invalidField = workflowFormInvalidField(stage);
+              if (invalidField) {{
+                setWorkflowFormStage(stage, true);
+                invalidField.reportValidity();
+                return;
+              }}
+            }}
             const formData = new FormData(e.target);
             const payload = Object.fromEntries(formData.entries());
             payload.is_active = formData.get("is_active") === "on";
