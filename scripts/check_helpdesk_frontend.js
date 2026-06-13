@@ -82,7 +82,7 @@ const requiredWorkflowSafety = [
   "Utwórz kopię roboczą",
   "duplicateWorkflowAutomationRule(idx)",
   "copy.is_active = false",
-  "Wyłączona reguła jest wersją roboczą",
+  "Pozostaw wyłączone, aby zapisać bezpieczną wersję roboczą",
 ];
 for (const fragment of requiredWorkflowSafety) {
   if (!text.includes(fragment)) {
@@ -114,6 +114,32 @@ const requiredWorkflowWizard = [
 for (const fragment of requiredWorkflowWizard) {
   if (!text.includes(fragment)) {
     throw new Error(`Missing workflow wizard fragment: ${fragment}`);
+  }
+}
+
+const requiredAutomationRuleWizard = [
+  "workflowAutomationRuleFormStage",
+  "workflowAutomationRuleInvalidField(stage)",
+  "setWorkflowAutomationRuleFormStage(stage, skipValidation = false)",
+  "setWorkflowAutomationRuleFormStage(3, true)",
+  "workflowAutomationRuleStageButton(1",
+  'data-rule-stage="1"',
+  'data-rule-stage="2"',
+  'data-rule-stage="3"',
+  'data-rule-stage="4"',
+  "Nazwa i zdarzenie",
+  "Warunki dopasowania",
+  "Dodatkowe warunki",
+  "Zaawansowane operatory porównań",
+  "Test i aktywacja",
+  "Aktywuj regułę po zapisaniu",
+  'id="workflowRuleStageBack"',
+  'id="workflowRuleStageNext"',
+  'id="workflowRuleSaveButton"',
+];
+for (const fragment of requiredAutomationRuleWizard) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing automation rule wizard fragment: ${fragment}`);
   }
 }
 

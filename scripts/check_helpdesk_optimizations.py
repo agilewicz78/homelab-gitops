@@ -281,7 +281,7 @@ def main() -> None:
     assert "Sprzeczna zmiana statusu" in text
     assert "function duplicateWorkflowAutomationRule(idx)" in text
     assert "copy.is_active = false" in text
-    assert "Wyłączona reguła jest wersją roboczą" in text
+    assert "Pozostaw wyłączone, aby zapisać bezpieczną wersję roboczą" in text
     assert "function setWorkflowFormStage(stage, skipValidation = false)" in text
     assert "function workflowFormInvalidField(stage)" in text
     assert "invalidField.reportValidity()" in text
@@ -292,9 +292,16 @@ def main() -> None:
     assert "Statusy i kolejność obsługi" in text
     assert "Zespół odpowiedzialny za workflow" in text
     assert "Diagram techniczny" in text
+    assert "function setWorkflowAutomationRuleFormStage(stage, skipValidation = false)" in text
+    assert "function workflowAutomationRuleInvalidField(stage)" in text
+    assert 'data-rule-stage="1"' in text
+    assert 'data-rule-stage="4"' in text
+    assert "Zaawansowane operatory porównań" in text
+    assert "Test i aktywacja" in text
+    assert "Aktywuj regułę po zapisaniu" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-workflow-wizard-v17" in deployment_text
+    assert "2026-06-13-automation-rule-wizard-v18" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
