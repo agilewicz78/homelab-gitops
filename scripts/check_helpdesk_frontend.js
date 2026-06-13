@@ -156,6 +156,15 @@ const requiredFriendlyConditionBuilder = [
   "Dodaj kolejny warunek",
   "Reguła zadziała, jeżeli jednocześnie:",
   "Lista dostępnych warunków dopasowuje się automatycznie",
+  "workflowAutomationScope()",
+  "workflowAutomationScopeText()",
+  "workflowAutomationSubcategoryValues(rule, workflow, scope)",
+  "resetWorkflowAutomationInheritedCondition(form, definition)",
+  "syncWorkflowAutomationSubcategoryOptions(form, opts)",
+  "testCategoryOptions:",
+  "testSubcategoryOptions:",
+  "Zakres odziedziczony z workflow:",
+  "Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie.",
 ];
 for (const fragment of requiredFriendlyConditionBuilder) {
   if (!text.includes(fragment)) {

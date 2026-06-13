@@ -1099,6 +1099,22 @@ data:
                     cur.execute(f"UPDATE workflow_automations SET {op_col} = 'eq' WHERE {op_col} IS NULL OR {op_col} = ''")
                 cur.execute("UPDATE workflow_automations SET stop_processing = TRUE WHERE stop_processing IS NULL")
                 cur.execute("""
+                    UPDATE workflow_automations wa
+                    SET condition_category = '*',
+                        condition_category_operator = 'eq'
+                    FROM workflow_definitions wd
+                    WHERE wa.workflow_id = wd.id
+                      AND wd.category <> '*'
+                """)
+                cur.execute("""
+                    UPDATE workflow_automations wa
+                    SET condition_subcategory = '*',
+                        condition_subcategory_operator = 'eq'
+                    FROM workflow_definitions wd
+                    WHERE wa.workflow_id = wd.id
+                      AND wd.subcategory <> '*'
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS workflow_automation_actions (
                         id SERIAL PRIMARY KEY,
                         automation_id INTEGER REFERENCES workflow_automations(id) ON DELETE CASCADE,
@@ -2134,7 +2150,7 @@ data:
                 "action_order": max(1, min(action_order, 9999)),
             })
         return actions
-    def normalize_workflow_automations(payload, steps):
+    def normalize_workflow_automations(payload, steps, workflow_category="*", workflow_subcategory="*"):
         raw = payload.get("automations") or []
         if isinstance(raw, str):
             try:
@@ -2154,6 +2170,8 @@ data:
         valid_visibility = {"public", "internal", "*", "any", ""}
         valid_assigned_states = {"*", "any", "assigned", "unassigned", ""}
         valid_sla_states = {"*", "any", "ok", "warning", "overdue", "done", "none", ""}
+        workflow_category = clean(workflow_category) or "*"
+        workflow_subcategory = clean(workflow_subcategory) or "*"
         for item in raw:
             if not isinstance(item, dict):
                 continue
@@ -2224,6 +2242,18 @@ data:
                 condition_subcategory = "*"
             if condition_subcategory == "any":
                 condition_subcategory = "*"
+            # Zakres workflow jest już gwarantowany podczas przypisywania zgłoszenia.
+            # Usuwamy jego duplikaty z reguły, aby nie mogła stać się sprzeczna.
+            if workflow_category != "*":
+                condition_category = "*"
+                condition_category_operator = "eq"
+                allowed_subcategories = set(SUBCATEGORIES.get(workflow_category, ["Inne"]))
+                if workflow_subcategory == "*" and condition_subcategory not in ("*", "") and condition_subcategory not in allowed_subcategories:
+                    condition_subcategory = "*"
+                    condition_subcategory_operator = "eq"
+            if workflow_subcategory != "*":
+                condition_subcategory = "*"
+                condition_subcategory_operator = "eq"
             if condition_sla_state not in valid_sla_states:
                 condition_sla_state = "*"
             if condition_sla_state == "any":
@@ -2333,8 +2363,13 @@ data:
             ORDER BY step_order ASC, id ASC
         """, (workflow_id,))
         return [r[0] for r in cur.fetchall()]
-    def normalize_single_workflow_automation_payload(payload, steps):
-        normalized = normalize_workflow_automations({"automations": [payload or {}]}, steps)
+    def normalize_single_workflow_automation_payload(payload, steps, workflow_category="*", workflow_subcategory="*"):
+        normalized = normalize_workflow_automations(
+            {"automations": [payload or {}]},
+            steps,
+            workflow_category=workflow_category,
+            workflow_subcategory=workflow_subcategory,
+        )
         if not normalized:
             return None, "Nieprawidłowa reguła automatyzacji workflow albo brak poprawnych akcji."
         return normalized[0], None
@@ -3181,6 +3216,7 @@ data:
       .workflow-condition-sentence { margin-top: 14px; padding: 13px 14px; border-left: 4px solid #38bdf8; border-radius: 10px; background: rgba(56,189,248,.10); line-height: 1.5; }
       .workflow-condition-event-hint { margin-top: 10px; }
       .workflow-condition-warning { margin-top: 10px; padding: 11px 13px; border: 1px solid rgba(251,191,36,.45); border-radius: 12px; background: rgba(245,158,11,.12); color: #fde68a; }
+      .workflow-condition-scope { margin: 12px 0; padding: 13px 14px; border: 1px solid rgba(34,197,94,.34); border-radius: 14px; background: rgba(34,197,94,.08); line-height: 1.5; }
       @media (max-width: 760px) {
         .workflow-wizard-steps { grid-template-columns: 1fr 1fr; }
         .workflow-condition-row { grid-template-columns: 1fr; }
@@ -5748,9 +5784,38 @@ data:
             priority: ((workflowAutomationEditor.length + 1) * 10),
           }};
         }}
+        function workflowAutomationScope() {{
+          const workflow = workflowAutomationEditorWorkflow || {{}};
+          const category = String(workflow.category || "*");
+          const subcategory = category === "*" ? "*" : String(workflow.subcategory || "*");
+          return {{ category, subcategory }};
+        }}
+        function workflowAutomationScopeText() {{
+          const scope = workflowAutomationScope();
+          const category = scope.category === "*" ? "dowolna kategoria" : scope.category;
+          const subcategory = scope.subcategory === "*" ? "dowolna podkategoria" : scope.subcategory;
+          return `${{category}} → ${{subcategory}}`;
+        }}
+        function workflowAutomationSubcategoryValues(rule, workflow, scope) {{
+          const all = (workflow.meta && workflow.meta.subcategories) || {{}};
+          const conditionCategory = rule.condition_category_operator === "eq"
+            && !["", "*", "any"].includes(String(rule.condition_category || ""))
+            ? rule.condition_category
+            : "*";
+          const category = scope.category !== "*" ? scope.category : conditionCategory;
+          const values = category !== "*"
+            ? (all[category] || ["Inne"])
+            : Object.values(all).flat();
+          return values.filter((value, index, items) => value && items.indexOf(value) === index).sort();
+        }}
         function workflowAutomationFormOptions(rule) {{
           const workflow = workflowAutomationEditorWorkflow || {{}};
+          const scope = workflowAutomationScope();
+          const subcategoryValues = workflowAutomationSubcategoryValues(rule, workflow, scope);
+          const categoryConditionOptions = automationSelectOptions([{{ value: "*", label: "dowolna" }}, ...((workflow.meta && workflow.meta.categories) || []).map(c => ({{ value: c, label: c }}))], rule.condition_category || "*");
+          const subcategoryConditionOptions = automationSelectOptions([{{ value: "*", label: "dowolna" }}, ...subcategoryValues.map(s => ({{ value: s, label: s }}))], rule.condition_subcategory || "*");
           return {{
+            scope,
             statusOptions: workflowStatusOptions(workflow, rule.condition_status || "", true),
             toStatusOptions: workflowStatusOptions(workflow, rule.condition_to_status || "", true),
             targetOptions: workflowStatusOptions(workflow, rule.action_status || "", true),
@@ -5778,8 +5843,14 @@ data:
               {{ value: "unassigned", label: "zgłoszenie nieprzypisane" }},
             ], rule.assigned_state || "*"),
             priorityConditionOptions: automationSelectOptions([{{ value: "*", label: "dowolny" }}, ...((workflow.meta && workflow.meta.priorities) || ["Niski", "Normalny", "Wysoki", "Krytyczny"]).map(p => ({{ value: p, label: p }}))], rule.condition_priority || "*"),
-            categoryConditionOptions: automationSelectOptions([{{ value: "*", label: "dowolna" }}, ...((workflow.meta && workflow.meta.categories) || []).map(c => ({{ value: c, label: c }}))], rule.condition_category || "*"),
-            subcategoryConditionOptions: automationSelectOptions([{{ value: "*", label: "dowolna" }}, ...Object.values((workflow.meta && workflow.meta.subcategories) || {{}}).flat().filter((v, i, a) => v && a.indexOf(v) === i).sort().map(s => ({{ value: s, label: s }}))], rule.condition_subcategory || "*"),
+            categoryConditionOptions,
+            subcategoryConditionOptions,
+            testCategoryOptions: scope.category !== "*"
+              ? automationSelectOptions([{{ value: scope.category, label: scope.category }}], scope.category)
+              : categoryConditionOptions,
+            testSubcategoryOptions: scope.subcategory !== "*"
+              ? automationSelectOptions([{{ value: scope.subcategory, label: scope.subcategory }}], scope.subcategory)
+              : subcategoryConditionOptions,
             slaConditionOptions: automationSelectOptions([
               {{ value: "*", label: "dowolny" }},
               {{ value: "ok", label: "SLA OK" }},
@@ -5935,8 +6006,8 @@ data:
             {{ key: "visibility", label: "Rodzaj komentarza", operator: "condition_comment_visibility_operator", value: "condition_comment_visibility", options: opts.visibilityOptions, events: ["comment_added", "user_comment_added", "staff_comment_added"] }},
             {{ key: "assigned", label: "Przypisanie zgłoszenia", operator: "assigned_state_operator", value: "assigned_state", options: opts.assignedOptions }},
             {{ key: "priority", label: "Priorytet zgłoszenia", operator: "condition_priority_operator", value: "condition_priority", options: opts.priorityConditionOptions }},
-            {{ key: "category", label: "Kategoria zgłoszenia", operator: "condition_category_operator", value: "condition_category", options: opts.categoryConditionOptions }},
-            {{ key: "subcategory", label: "Podkategoria zgłoszenia", operator: "condition_subcategory_operator", value: "condition_subcategory", options: opts.subcategoryConditionOptions }},
+            {{ key: "category", label: "Kategoria zgłoszenia", operator: "condition_category_operator", value: "condition_category", options: opts.categoryConditionOptions, scopeLocked: opts.scope.category !== "*" }},
+            {{ key: "subcategory", label: "Podkategoria zgłoszenia", operator: "condition_subcategory_operator", value: "condition_subcategory", options: opts.subcategoryConditionOptions, scopeLocked: opts.scope.subcategory !== "*" }},
             {{ key: "sla", label: "Stan SLA", operator: "condition_sla_state_operator", value: "condition_sla_state", options: opts.slaConditionOptions }},
           ];
         }}
@@ -5951,7 +6022,7 @@ data:
         function workflowAutomationInitialConditionKeys(rule, opts) {{
           return new Set(
             workflowAutomationConditionDefinitions(opts)
-              .filter(definition => workflowAutomationConditionHasValue(rule, definition))
+              .filter(definition => !definition.scopeLocked && workflowAutomationConditionHasValue(rule, definition))
               .map(definition => definition.key)
           );
         }}
@@ -5966,6 +6037,12 @@ data:
           ], selected || "eq");
         }}
         function workflowAutomationConditionRow(definition, rule) {{
+          const operatorChange = definition.key === "category"
+            ? `syncWorkflowAutomationConditionRow('${{esc(definition.key)}}'); handleWorkflowAutomationCategoryConditionChange();`
+            : `syncWorkflowAutomationConditionRow('${{esc(definition.key)}}'); updateWorkflowAutomationConditionSentence();`;
+          const valueChange = definition.key === "category"
+            ? "handleWorkflowAutomationCategoryConditionChange();"
+            : "updateWorkflowAutomationConditionSentence();";
           return `
             <div class="workflow-condition-row hidden" data-condition-key="${{esc(definition.key)}}">
               <div>
@@ -5974,13 +6051,13 @@ data:
               </div>
               <div>
                 <label>Sposób dopasowania</label>
-                <select name="${{esc(definition.operator)}}" onchange="syncWorkflowAutomationConditionRow('${{esc(definition.key)}}'); updateWorkflowAutomationConditionSentence();">
+                <select name="${{esc(definition.operator)}}" onchange="${{operatorChange}}">
                   ${{workflowAutomationFriendlyOperatorOptions(rule[definition.operator] || "eq")}}
                 </select>
               </div>
               <div>
                 <label>Wartość</label>
-                <select name="${{esc(definition.value)}}" onchange="updateWorkflowAutomationConditionSentence();">
+                <select name="${{esc(definition.value)}}" onchange="${{valueChange}}">
                   ${{definition.options}}
                 </select>
               </div>
@@ -6031,14 +6108,49 @@ data:
           const valueSelect = form.elements[definition.value];
           if (valueSelect) valueSelect.disabled = ["empty", "not_empty"].includes(operator);
         }}
+        function resetWorkflowAutomationInheritedCondition(form, definition) {{
+          if (!definition.scopeLocked) return;
+          const operatorSelect = form.elements[definition.operator];
+          const valueSelect = form.elements[definition.value];
+          if (operatorSelect) operatorSelect.value = "eq";
+          if (valueSelect) {{
+            const wildcard = Array.from(valueSelect.options || []).find(option => ["", "*", "any"].includes(option.value));
+            valueSelect.value = wildcard ? wildcard.value : "";
+            valueSelect.disabled = true;
+          }}
+          workflowAutomationActiveConditionKeys.delete(definition.key);
+        }}
+        function syncWorkflowAutomationSubcategoryOptions(form, opts) {{
+          const select = form.elements.condition_subcategory;
+          if (!select || opts.scope.subcategory !== "*") return;
+          const previous = select.value || "*";
+          select.innerHTML = opts.subcategoryConditionOptions;
+          const values = Array.from(select.options || []).map(option => option.value);
+          if (values.includes(previous)) {{
+            select.value = previous;
+            return;
+          }}
+          select.value = "*";
+          if (workflowAutomationActiveConditionKeys.delete("subcategory")) {{
+            showToast("Dostosowano warunki", "Usunięto podkategorię, która nie należy do wybranej kategorii.");
+          }}
+        }}
+        function handleWorkflowAutomationCategoryConditionChange() {{
+          renderWorkflowAutomationConditionBuilder();
+        }}
         function renderWorkflowAutomationConditionBuilder() {{
           const form = document.getElementById("workflowAutomationRuleForm");
           const addSelect = document.getElementById("workflowConditionAddSelect");
           const emptyState = document.getElementById("workflowConditionEmpty");
           if (!form || !addSelect) return;
           const eventType = form.elements.event_type?.value || "comment_added";
-          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
-          const definitions = workflowAutomationConditionDefinitions(opts);
+          let opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          let definitions = workflowAutomationConditionDefinitions(opts);
+          definitions.forEach(definition => resetWorkflowAutomationInheritedCondition(form, definition));
+          opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          syncWorkflowAutomationSubcategoryOptions(form, opts);
+          opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          definitions = workflowAutomationConditionDefinitions(opts);
           let visibleCount = 0;
           const incompatible = [];
           definitions.forEach(definition => {{
@@ -6053,6 +6165,7 @@ data:
           }});
           const available = definitions.filter(definition =>
             workflowAutomationConditionAllowed(definition, eventType)
+            && !definition.scopeLocked
             && !workflowAutomationActiveConditionKeys.has(definition.key)
           );
           addSelect.innerHTML = `<option value="">Wybierz warunek...</option>` + available
@@ -6225,6 +6338,10 @@ data:
                     <h3>Kiedy dokładnie reguła ma zadziałać?</h3>
                     <p class="muted">Dodawaj tylko potrzebne warunki. Wszystkie dodane warunki muszą być spełnione jednocześnie.</p>
                   </div>
+                  <div class="workflow-condition-scope">
+                    <strong>Zakres odziedziczony z workflow:</strong> ${{esc(workflowAutomationScopeText())}}.<br>
+                    <span class="muted">Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie. Warunek jest dostępny tylko wtedy, gdy workflow dopuszcza wartość dowolną.</span>
+                  </div>
                   <div id="workflowConditionEmpty" class="workflow-condition-empty">Brak dodatkowych warunków. Reguła sprawdzi każde wystąpienie wybranego zdarzenia.</div>
                   <div id="workflowConditionBuilder" class="workflow-condition-builder">
                     ${{workflowAutomationConditionDefinitions(opts).map(definition => workflowAutomationConditionRow(definition, sourceRule)).join("")}}
@@ -6314,11 +6431,11 @@ data:
                     </div>
                     <div>
                       <label>Kategoria zgłoszenia</label>
-                      <select name="test_category">${{opts.categoryConditionOptions}}</select>
+                      <select name="test_category" ${{opts.scope.category !== "*" ? "disabled" : ""}}>${{opts.testCategoryOptions}}</select>
                     </div>
                     <div>
                       <label>Podkategoria zgłoszenia</label>
-                      <select name="test_subcategory">${{opts.subcategoryConditionOptions}}</select>
+                      <select name="test_subcategory" ${{opts.scope.subcategory !== "*" ? "disabled" : ""}}>${{opts.testSubcategoryOptions}}</select>
                     </div>
                     <div>
                       <label>Stan SLA</label>
@@ -6376,9 +6493,9 @@ data:
           const testPriority = modal.querySelector('select[name="test_priority"]');
           if (testPriority) testPriority.value = sourceRule.condition_priority || "*";
           const testCategory = modal.querySelector('select[name="test_category"]');
-          if (testCategory) testCategory.value = sourceRule.condition_category || "*";
+          if (testCategory) testCategory.value = opts.scope.category !== "*" ? opts.scope.category : (sourceRule.condition_category || "*");
           const testSubcategory = modal.querySelector('select[name="test_subcategory"]');
-          if (testSubcategory) testSubcategory.value = sourceRule.condition_subcategory || "*";
+          if (testSubcategory) testSubcategory.value = opts.scope.subcategory !== "*" ? opts.scope.subcategory : (sourceRule.condition_subcategory || "*");
           const testSlaState = modal.querySelector('select[name="test_sla_state"]');
           if (testSlaState) testSlaState.value = sourceRule.condition_sla_state || "*";
           workflowAutomationActiveConditionKeys = workflowAutomationInitialConditionKeys(sourceRule, opts);
@@ -10177,7 +10294,12 @@ data:
             return None, "Nieprawidłowa podkategoria."
         if len(unique_steps) < 2:
             return None, "Workflow musi mieć co najmniej dwa kroki."
-        automations = normalize_workflow_automations(payload, unique_steps)
+        automations = normalize_workflow_automations(
+            payload,
+            unique_steps,
+            workflow_category=category,
+            workflow_subcategory=subcategory,
+        )
         return {
             "workflow_key": workflow_key,
             "name": name,
@@ -10282,6 +10404,20 @@ data:
             data["name"], data["category"], data["subcategory"],
             data["is_default"], data["is_active"], workflow_id,
         ))
+        if data["category"] != "*":
+            cur.execute("""
+                UPDATE workflow_automations
+                SET condition_category = '*',
+                    condition_category_operator = 'eq'
+                WHERE workflow_id = %s
+            """, (workflow_id,))
+        if data["subcategory"] != "*":
+            cur.execute("""
+                UPDATE workflow_automations
+                SET condition_subcategory = '*',
+                    condition_subcategory_operator = 'eq'
+                WHERE workflow_id = %s
+            """, (workflow_id,))
         cur.execute("DELETE FROM workflow_steps WHERE workflow_id = %s", (workflow_id,))
         for idx, step_name in enumerate(data["steps"], start=1):
             cur.execute("""
@@ -10323,14 +10459,19 @@ data:
         payload = request.get_json(silent=True) or {}
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        cur.execute("SELECT workflow_key, name, category, subcategory FROM workflow_definitions WHERE id = %s", (workflow_id,))
         workflow_row = cur.fetchone()
         if not workflow_row:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
         steps = workflow_steps_for_id(cur, workflow_id)
-        item, error = normalize_single_workflow_automation_payload(payload, steps)
+        item, error = normalize_single_workflow_automation_payload(
+            payload,
+            steps,
+            workflow_category=workflow_row[2],
+            workflow_subcategory=workflow_row[3],
+        )
         if error:
             cur.close()
             conn.close()
@@ -10356,14 +10497,19 @@ data:
         payload = request.get_json(silent=True) or {}
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        cur.execute("SELECT workflow_key, name, category, subcategory FROM workflow_definitions WHERE id = %s", (workflow_id,))
         workflow_row = cur.fetchone()
         if not workflow_row:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
         steps = workflow_steps_for_id(cur, workflow_id)
-        item, error = normalize_single_workflow_automation_payload(payload, steps)
+        item, error = normalize_single_workflow_automation_payload(
+            payload,
+            steps,
+            workflow_category=workflow_row[2],
+            workflow_subcategory=workflow_row[3],
+        )
         if error:
             cur.close()
             conn.close()
@@ -10397,14 +10543,19 @@ data:
         sample = payload.get("sample") or {}
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT workflow_key, name FROM workflow_definitions WHERE id = %s", (workflow_id,))
+        cur.execute("SELECT workflow_key, name, category, subcategory FROM workflow_definitions WHERE id = %s", (workflow_id,))
         workflow_row = cur.fetchone()
         if not workflow_row:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
         steps = workflow_steps_for_id(cur, workflow_id)
-        item, error = normalize_single_workflow_automation_payload(rule_payload, steps)
+        item, error = normalize_single_workflow_automation_payload(
+            rule_payload,
+            steps,
+            workflow_category=workflow_row[2],
+            workflow_subcategory=workflow_row[3],
+        )
         cur.close()
         conn.close()
         if error:
@@ -10425,8 +10576,8 @@ data:
         visibility = clean(sample.get("comment_visibility")) or item.get("condition_comment_visibility") or "*"
         assigned_state = clean(sample.get("assigned_state")) or item.get("assigned_state") or "*"
         sample_priority = clean(sample.get("priority")) or item.get("condition_priority") or "*"
-        sample_category = clean(sample.get("category")) or item.get("condition_category") or "*"
-        sample_subcategory = clean(sample.get("subcategory")) or item.get("condition_subcategory") or "*"
+        sample_category = clean(sample.get("category")) or (workflow_row[2] if workflow_row[2] != "*" else item.get("condition_category")) or "*"
+        sample_subcategory = clean(sample.get("subcategory")) or (workflow_row[3] if workflow_row[3] != "*" else item.get("condition_subcategory")) or "*"
         sample_sla_state = clean(sample.get("sla_state")) or item.get("condition_sla_state") or "*"
         operator_added_comment = bool(sample.get("operator_added_comment"))
         operator_added_attachment = bool(sample.get("operator_added_attachment"))
