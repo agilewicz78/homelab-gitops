@@ -5221,6 +5221,114 @@ data:
         function workflowAutomationRuleBadge(text) {{
           return `<span class="status-badge status-progress">${{esc(text || "")}}</span>`;
         }}
+        function workflowAutomationConditionFingerprint(rule) {{
+          const fields = [
+            "event_type",
+            "condition_status", "condition_status_operator",
+            "condition_to_status", "condition_to_status_operator",
+            "condition_role", "condition_role_operator",
+            "condition_comment_visibility", "condition_comment_visibility_operator",
+            "assigned_state", "assigned_state_operator",
+            "condition_priority", "condition_priority_operator",
+            "condition_category", "condition_category_operator",
+            "condition_subcategory", "condition_subcategory_operator",
+            "condition_sla_state", "condition_sla_state_operator",
+          ];
+          return fields.map(field => String(rule[field] || (field.endsWith("_operator") ? "eq" : "*"))).join("|");
+        }}
+        function workflowAutomationSafetyReport(rules) {{
+          const source = Array.isArray(rules) ? rules : [];
+          const activeRules = source
+            .map((rule, index) => ({{ rule, index }}))
+            .filter(item => item.rule.is_active !== false);
+          const issues = [];
+          const addIssue = (severity, title, detail, ruleIndexes = []) => {{
+            issues.push({{ severity, title, detail, ruleIndexes }});
+          }};
+          const hasSpecificValue = value => !!value && !["*", "any"].includes(String(value));
+          activeRules.forEach((item) => {{
+            const rule = item.rule;
+            const actions = workflowAutomationRuleActions(rule).filter(action => action.is_active !== false);
+            if (!actions.length) {{
+              addIssue("warning", "Aktywna reguła nie ma aktywnych akcji", `„${{rule.name || `Reguła ${{item.index + 1}}`}}” dopasuje zdarzenie, ale niczego nie wykona.`, [item.index]);
+            }}
+            if (rule.event_type !== "status_changed" && hasSpecificValue(rule.condition_to_status)) {{
+              addIssue("error", "Warunek statusu docelowego nie pasuje do zdarzenia", `„${{rule.name || `Reguła ${{item.index + 1}}`}}” sprawdza status docelowy, ale nie reaguje na zmianę statusu, więc reguła nie zostanie dopasowana.`, [item.index]);
+            }}
+            if (!["comment_added", "user_comment_added", "staff_comment_added"].includes(rule.event_type)
+                && hasSpecificValue(rule.condition_comment_visibility)) {{
+              addIssue("error", "Warunek typu komentarza nie pasuje do zdarzenia", `„${{rule.name || `Reguła ${{item.index + 1}}`}}” sprawdza widoczność komentarza, ale zdarzenie nie jest komentarzem.`, [item.index]);
+            }}
+          }});
+          for (let left = 0; left < activeRules.length; left += 1) {{
+            for (let right = left + 1; right < activeRules.length; right += 1) {{
+              const first = activeRules[left];
+              const second = activeRules[right];
+              if (workflowAutomationConditionFingerprint(first.rule) !== workflowAutomationConditionFingerprint(second.rule)) continue;
+              const ordered = [first, second].sort((a, b) =>
+                Number(a.rule.priority || 100) - Number(b.rule.priority || 100) || a.index - b.index
+              );
+              const earlier = ordered[0];
+              const later = ordered[1];
+              const earlierName = earlier.rule.name || `Reguła ${{earlier.index + 1}}`;
+              const laterName = later.rule.name || `Reguła ${{later.index + 1}}`;
+              const firstTargets = workflowAutomationRuleActions(first.rule)
+                .filter(action => action.is_active !== false && action.action_type === "change_status")
+                .map(action => action.action_value)
+                .filter(Boolean);
+              const secondTargets = workflowAutomationRuleActions(second.rule)
+                .filter(action => action.is_active !== false && action.action_type === "change_status")
+                .map(action => action.action_value)
+                .filter(Boolean);
+              const conflictingTargets = firstTargets.some(target => secondTargets.some(other => other !== target));
+              if (conflictingTargets) {{
+                addIssue("error", "Sprzeczna zmiana statusu", `„${{earlierName}}” i „${{laterName}}” mają te same warunki, ale ustawiają różne statusy.`, [first.index, second.index]);
+              }}
+              if (earlier.rule.stop_processing !== false) {{
+                addIssue("error", "Późniejsza reguła jest zasłonięta", `„${{earlierName}}” pasuje do tych samych danych i zatrzymuje przetwarzanie, dlatego „${{laterName}}” nie zostanie wykonana.`, [earlier.index, later.index]);
+              }} else if (Number(first.rule.priority || 100) === Number(second.rule.priority || 100)) {{
+                addIssue("warning", "Dwie reguły mają te same warunki i priorytet", `„${{earlierName}}” i „${{laterName}}” mogą wykonać się w kolejności zależnej od czasu utworzenia. Nadaj im różne priorytety.`, [first.index, second.index]);
+              }} else {{
+                addIssue("warning", "Dwie aktywne reguły mają te same warunki", `„${{earlierName}}” i „${{laterName}}” mogą wykonać się dla tego samego zdarzenia. Sprawdź, czy jest to zamierzone.`, [first.index, second.index]);
+              }}
+            }}
+          }}
+          return {{
+            active: activeRules.length,
+            drafts: source.length - activeRules.length,
+            errors: issues.filter(issue => issue.severity === "error").length,
+            warnings: issues.filter(issue => issue.severity === "warning").length,
+            issues,
+          }};
+        }}
+        function workflowAutomationSafetyPanel(rules) {{
+          const report = workflowAutomationSafetyReport(rules);
+          const healthy = report.errors === 0 && report.warnings === 0;
+          const issueRows = report.issues.map(issue => `
+            <div class="${{issue.severity === "error" ? "error" : "readonly-box"}}" style="margin-top:8px">
+              <strong>${{esc(issue.title)}}</strong>
+              <div style="margin-top:4px">${{esc(issue.detail)}}</div>
+            </div>
+          `).join("");
+          return `
+            <div class="panel-soft" style="margin:10px 0 14px">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Kontrola bezpieczeństwa automatyzacji</strong>
+                  <div class="attachment-upload-hint">Sprawdza typowe konflikty przed włączeniem reguł. Nie wykonuje żadnych akcji na zgłoszeniach.</div>
+                </div>
+                <span class="status-badge ${{healthy ? "status-new" : report.errors ? "status-closed" : "status-wait"}}">
+                  ${{healthy ? "Brak problemów" : `${{report.errors}} błędów · ${{report.warnings}} ostrzeżeń`}}
+                </span>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                ${{workflowAutomationRuleBadge(`Aktywne: ${{report.active}}`)}}
+                ${{workflowAutomationRuleBadge(`Wersje robocze: ${{report.drafts}}`)}}
+              </div>
+              ${{issueRows || `<div class="success" style="margin-top:8px">Aktywne reguły nie mają wykrytych konfliktów.</div>`}}
+            </div>
+          `;
+        }}
         function workflowAutomationDiagramConditions(rule) {{
           const conditions = [];
           const add = (label, operator, rawValue, displayValue = rawValue) => {{
@@ -5301,7 +5409,7 @@ data:
         function workflowAutomationRuleDiagramCard(rule, idx) {{
           const activeBadge = rule.is_active !== false
             ? `<span class="status-badge status-new">Aktywna</span>`
-            : `<span class="status-badge status-closed">Nieaktywna</span>`;
+            : `<span class="status-badge status-closed">Wersja robocza</span>`;
           return `
             <div class="card workflow-diagram-card">
               <div class="workflow-diagram-header">
@@ -5314,6 +5422,7 @@ data:
                 </div>
                 <div class="actions">
                   <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{idx}}); return false;">Edytuj klocki</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="duplicateWorkflowAutomationRule(${{idx}}); return false;">Utwórz kopię roboczą</button>
                   <button type="button" class="btn-danger btn-small" onclick="deleteWorkflowAutomationRule(${{idx}}); return false;">Usuń</button>
                 </div>
               </div>
@@ -5329,7 +5438,7 @@ data:
         function workflowAutomationRuleListItem(rule, idx) {{
           const activeBadge = rule.is_active !== false
             ? `<span class="status-badge status-new">Aktywna</span>`
-            : `<span class="status-badge status-closed">Nieaktywna</span>`;
+            : `<span class="status-badge status-closed">Wersja robocza</span>`;
           const stopBadge = rule.stop_processing !== false
             ? `<span class="status-badge status-wait">Stop po wykonaniu</span>`
             : `<span class="status-badge status-open">Kontynuuj reguły</span>`;
@@ -5348,6 +5457,7 @@ data:
                 </div>
                 <div class="actions">
                   <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{idx}}); return false;">Edytuj</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="duplicateWorkflowAutomationRule(${{idx}}); return false;">Utwórz kopię roboczą</button>
                   <button type="button" class="btn-danger btn-small" onclick="deleteWorkflowAutomationRule(${{idx}}); return false;">Usuń</button>
                 </div>
               </div>
@@ -5376,6 +5486,8 @@ data:
         function renderWorkflowAutomationRules() {{
           const box = document.getElementById("workflowAutomationRules");
           if (!box) return;
+          const safetyBox = document.getElementById("workflowAutomationSafety");
+          if (safetyBox) safetyBox.innerHTML = workflowAutomationSafetyPanel(workflowAutomationEditor);
           const viewMode = sessionStorage.getItem("helpdesk_workflow_automation_view") === "list" ? "list" : "diagram";
           const rules = workflowAutomationEditor
             .map((rule, idx) => viewMode === "diagram"
@@ -5399,7 +5511,7 @@ data:
           return {{
             ...workflowAutomationEmptyRule(),
             id: null,
-            is_active: true,
+            is_active: false,
             stop_processing: true,
             priority: ((workflowAutomationEditor.length + 1) * 10),
             ...overrides,
@@ -5605,7 +5717,7 @@ data:
             action_type: "change_status",
             action_status: "",
             actions: [{{ action_type: "change_status", action_value: "", is_active: true, action_order: 1 }}],
-            is_active: true,
+            is_active: false,
             stop_processing: true,
             priority: ((workflowAutomationEditor.length + 1) * 10),
           }};
@@ -5892,6 +6004,7 @@ data:
                   <input name="is_active" type="checkbox" ${{sourceRule.is_active !== false ? "checked" : ""}}>
                   Aktywna
                 </label>
+                <div class="attachment-upload-hint">Wyłączona reguła jest wersją roboczą. Najpierw użyj testu poniżej, a potem zaznacz „Aktywna”, gdy wynik jest poprawny.</div>
                 <label class="checkbox-row" style="margin-top:8px">
                   <input name="stop_processing" type="checkbox" ${{sourceRule.stop_processing !== false ? "checked" : ""}}>
                   Po wykonaniu zatrzymaj dalsze reguły
@@ -6138,6 +6251,16 @@ data:
         }}
         function addWorkflowAutomationRule() {{
           openWorkflowAutomationRuleForm();
+        }}
+        function duplicateWorkflowAutomationRule(idx) {{
+          const source = workflowAutomationEditor[idx];
+          if (!source) return;
+          const copy = JSON.parse(JSON.stringify(source));
+          copy.id = null;
+          copy.name = `${{source.name || `Reguła ${{idx + 1}}`}} (wersja robocza)`;
+          copy.is_active = false;
+          copy.priority = Math.min(9999, Number(source.priority || 100) + 1);
+          openWorkflowAutomationRuleForm(null, copy);
         }}
         async function deleteWorkflowAutomationRule(idx) {{
           const rule = workflowAutomationEditor[idx];
@@ -6555,11 +6678,12 @@ data:
                     <button id="workflowAutomationListViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('list'); return false;">Widok listy</button>
                     <button id="workflowAutomationDiagramViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('diagram'); return false;">Widok diagramu</button>
                   </div>
+                  <div id="workflowAutomationSafety"></div>
                   <div id="workflowAutomationRules"></div>
                   <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(); return false;">Dodaj regułę automatyzacji</button>
                   <button type="button" onclick="openWorkflowAutomationTemplatePicker(); return false;">Szablony automatyzacji</button>
                   <div class="attachment-upload-hint">
-                    Diagram nie jest osobnym workflow. Edycja klocków aktualizuje warunki i akcje tej samej reguły. W pierwszej wersji wszystkie warunki są łączone przez ORAZ.
+                    Diagram nie jest osobnym workflow. Edycja klocków aktualizuje warunki i akcje tej samej reguły. W pierwszej wersji wszystkie warunki są łączone przez ORAZ. Do zmiany aktywnej reguły najlepiej użyć kopii roboczej, przetestować ją, a dopiero potem aktywować.
                   </div>
                 </section>
                 ${{editing && workflow.ticket_count > 0 ? `

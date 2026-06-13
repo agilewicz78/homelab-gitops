@@ -274,9 +274,17 @@ def main() -> None:
     assert "Co zrobiły automatyzacje" in text
     assert "Wykonane działania:" in text
     assert 'reason = f"{match_reason}; {execution_result}"' in text
+    assert "function workflowAutomationSafetyReport(rules)" in text
+    assert "function workflowAutomationConditionFingerprint(rule)" in text
+    assert "Kontrola bezpieczeństwa automatyzacji" in text
+    assert "Późniejsza reguła jest zasłonięta" in text
+    assert "Sprzeczna zmiana statusu" in text
+    assert "function duplicateWorkflowAutomationRule(idx)" in text
+    assert "copy.is_active = false" in text
+    assert "Wyłączona reguła jest wersją roboczą" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-automation-explanations-v15" in deployment_text
+    assert "2026-06-13-workflow-safety-v16" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
