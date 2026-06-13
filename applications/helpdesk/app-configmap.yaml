@@ -5914,6 +5914,53 @@ data:
             }}))
             .filter(action => action.action_type !== "change_status" || !!action.action_value);
         }}
+        let workflowAutomationRuleFormStage = 1;
+        function workflowAutomationRuleInvalidField(stage) {{
+          const section = document.querySelector(`[data-rule-stage="${{stage}}"]`);
+          if (!section) return null;
+          return Array.from(section.querySelectorAll("input, select, textarea"))
+            .find(field => typeof field.checkValidity === "function" && !field.checkValidity()) || null;
+        }}
+        function setWorkflowAutomationRuleFormStage(stage, skipValidation = false) {{
+          const targetStage = Math.max(1, Math.min(Number(stage) || 1, 4));
+          if (!skipValidation && targetStage > workflowAutomationRuleFormStage) {{
+            for (let currentStage = workflowAutomationRuleFormStage; currentStage < targetStage; currentStage += 1) {{
+              const invalidField = workflowAutomationRuleInvalidField(currentStage);
+              if (invalidField) {{
+                setWorkflowAutomationRuleFormStage(currentStage, true);
+                invalidField.reportValidity();
+                return;
+              }}
+              if (currentStage === 3 && !normalizedWorkflowAutomationFormActions().length) {{
+                setWorkflowAutomationRuleFormStage(3, true);
+                alert("Dodaj przynajmniej jedną poprawną akcję reguły.");
+                return;
+              }}
+            }}
+          }}
+          workflowAutomationRuleFormStage = targetStage;
+          document.querySelectorAll("[data-rule-stage]").forEach(section => {{
+            section.classList.toggle("hidden", Number(section.dataset.ruleStage) !== workflowAutomationRuleFormStage);
+          }});
+          document.querySelectorAll("[data-rule-step]").forEach(button => {{
+            button.setAttribute("aria-current", Number(button.dataset.ruleStep) === workflowAutomationRuleFormStage ? "step" : "false");
+          }});
+          const back = document.getElementById("workflowRuleStageBack");
+          const next = document.getElementById("workflowRuleStageNext");
+          const save = document.getElementById("workflowRuleSaveButton");
+          if (back) back.classList.toggle("hidden", workflowAutomationRuleFormStage === 1);
+          if (next) next.classList.toggle("hidden", workflowAutomationRuleFormStage === 4);
+          if (save) save.classList.toggle("hidden", workflowAutomationRuleFormStage !== 4);
+          document.getElementById("workflowAutomationRuleFormTop")?.scrollIntoView({{ behavior: "smooth", block: "start" }});
+        }}
+        function workflowAutomationRuleStageButton(stage, title, description) {{
+          return `
+            <button type="button" class="workflow-wizard-step" data-rule-step="${{stage}}" onclick="setWorkflowAutomationRuleFormStage(${{stage}}); return false;">
+              <strong>${{stage}}. ${{esc(title)}}</strong>
+              <small>${{esc(description)}}</small>
+            </button>
+          `;
+        }}
         function openWorkflowAutomationRuleForm(idx = null, presetRule = null) {{
           workflowAutomationEditingIndex = idx === null || idx === undefined ? null : Number(idx);
           const sourceRule = presetRule
@@ -5930,101 +5977,151 @@ data:
           const opts = workflowAutomationFormOptions(sourceRule);
           const modal = document.getElementById("workflowAutomationRuleModal");
           if (!modal) return;
+          workflowAutomationRuleFormStage = 1;
           modal.innerHTML = `
-            <div class="modal-card">
+            <div id="workflowAutomationRuleFormTop" class="modal-card">
               <div class="modal-header">
                 <div>
                   <h2>${{workflowAutomationEditingIndex === null ? "Dodaj regułę automatyzacji" : "Edytuj regułę automatyzacji"}}</h2>
-                  <p class="muted">Reguła składa się ze zdarzenia, warunków i akcji. Zapisanie reguły doda ją do listy automatyzacji workflow.</p>
+                  <p class="muted">Skonfiguruj regułę krok po kroku. Pola techniczne są dostępne w sekcjach zaawansowanych.</p>
                 </div>
                 <button type="button" class="btn-secondary btn-small" onclick="closeWorkflowAutomationRuleForm(); return false;">✕</button>
               </div>
-              <form id="workflowAutomationRuleForm">
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3 style="margin-top:0">1. Kiedy reguła ma się uruchomić</h3>
+              <div class="workflow-wizard-steps">
+                ${{workflowAutomationRuleStageButton(1, "Zdarzenie", "Co uruchamia regułę")}}
+                ${{workflowAutomationRuleStageButton(2, "Warunki", "Kiedy ma zadziałać")}}
+                ${{workflowAutomationRuleStageButton(3, "Akcje", "Co ma wykonać")}}
+                ${{workflowAutomationRuleStageButton(4, "Test", "Sprawdź i aktywuj")}}
+              </div>
+              <form id="workflowAutomationRuleForm" novalidate>
+                <section class="workflow-form-stage" data-rule-stage="1">
+                  <div class="workflow-form-stage-header">
+                    <h3>Nazwa i zdarzenie</h3>
+                    <p class="muted">Nadaj regule zrozumiałą nazwę i wybierz moment, w którym ma być sprawdzana.</p>
+                  </div>
                   <div class="grid">
                     <div>
                       <label>Nazwa reguły</label>
                       <input name="name" value="${{esc(sourceRule.name || "")}}" required placeholder="np. Wymagaj komentarza przed oczekiwaniem na użytkownika">
                     </div>
                     <div>
-                      <label>Priorytet</label>
-                      <input name="priority" type="number" min="1" max="9999" value="${{Number(sourceRule.priority || 100)}}" required>
-                      <div class="attachment-upload-hint">Niższy numer oznacza wcześniejsze wykonanie.</div>
-                    </div>
-                    <div>
                       <label>Zdarzenie</label>
                       <select name="event_type">${{opts.eventOptions}}</select>
                     </div>
+                  </div>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Kolejność wykonywania</summary>
+                    <div style="margin-top:12px">
+                      <label>Priorytet reguły</label>
+                      <input name="priority" type="number" min="1" max="9999" value="${{Number(sourceRule.priority || 100)}}" required>
+                      <div class="attachment-upload-hint">Niższy numer oznacza wcześniejsze wykonanie. W większości przypadków nie trzeba go zmieniać.</div>
+                    </div>
+                  </details>
+                </section>
+
+                <section class="workflow-form-stage hidden" data-rule-stage="2">
+                  <div class="workflow-form-stage-header">
+                    <h3>Warunki dopasowania</h3>
+                    <p class="muted">Pozostaw „dowolny”, jeśli dany warunek nie ma ograniczać reguły.</p>
+                  </div>
+                  <div class="grid">
                     <div>
                       <label>Status przed zmianą / status bieżący</label>
-                      <select name="condition_status_operator">${{opts.conditionStatusOperatorOptions}}</select><select name="condition_status">${{opts.statusOptions}}</select>
+                      <select name="condition_status">${{opts.statusOptions}}</select>
                       <div class="attachment-upload-hint">Dla zdarzenia „Zmieniono status” oznacza status <strong>z</strong>.</div>
                     </div>
                     <div>
                       <label>Status po zmianie</label>
-                      <select name="condition_to_status_operator">${{opts.conditionToStatusOperatorOptions}}</select><select name="condition_to_status">${{opts.toStatusOptions}}</select>
+                      <select name="condition_to_status">${{opts.toStatusOptions}}</select>
                       <div class="attachment-upload-hint">Dla zdarzenia „Zmieniono status” oznacza status <strong>na</strong>.</div>
                     </div>
                     <div>
                       <label>Rola wykonawcy</label>
-                      <select name="condition_role_operator">${{opts.conditionRoleOperatorOptions}}</select><select name="condition_role">${{opts.roleOptions}}</select>
+                      <select name="condition_role">${{opts.roleOptions}}</select>
                     </div>
+                  </div>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Dodatkowe warunki</summary>
+                    <div class="grid" style="margin-top:12px">
                     <div>
                       <label>Typ komentarza</label>
-                      <select name="condition_comment_visibility_operator">${{opts.conditionCommentVisibilityOperatorOptions}}</select><select name="condition_comment_visibility">${{opts.visibilityOptions}}</select>
+                      <select name="condition_comment_visibility">${{opts.visibilityOptions}}</select>
                     </div>
                     <div>
                       <label>Przypisanie zgłoszenia</label>
-                      <select name="assigned_state_operator">${{opts.assignedStateOperatorOptions}}</select><select name="assigned_state">${{opts.assignedOptions}}</select>
+                      <select name="assigned_state">${{opts.assignedOptions}}</select>
                     </div>
                     <div>
                       <label>Priorytet zgłoszenia</label>
-                      <select name="condition_priority_operator">${{opts.priorityConditionOperatorOptions}}</select><select name="condition_priority">${{opts.priorityConditionOptions}}</select>
+                      <select name="condition_priority">${{opts.priorityConditionOptions}}</select>
                     </div>
                     <div>
                       <label>Kategoria zgłoszenia</label>
-                      <select name="condition_category_operator">${{opts.categoryConditionOperatorOptions}}</select><select name="condition_category">${{opts.categoryConditionOptions}}</select>
+                      <select name="condition_category">${{opts.categoryConditionOptions}}</select>
                     </div>
                     <div>
                       <label>Podkategoria zgłoszenia</label>
-                      <select name="condition_subcategory_operator">${{opts.subcategoryConditionOperatorOptions}}</select><select name="condition_subcategory">${{opts.subcategoryConditionOptions}}</select>
+                      <select name="condition_subcategory">${{opts.subcategoryConditionOptions}}</select>
                     </div>
                     <div>
                       <label>Stan SLA</label>
-                      <select name="condition_sla_state_operator">${{opts.slaConditionOperatorOptions}}</select><select name="condition_sla_state">${{opts.slaConditionOptions}}</select>
+                      <select name="condition_sla_state">${{opts.slaConditionOptions}}</select>
                     </div>
                   </div>
+                  </details>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Zaawansowane operatory porównań</summary>
+                    <p class="muted">Domyślnie warunek oznacza „jest równe”. Zmień operator tylko dla bardziej złożonych reguł.</p>
+                    <div class="grid">
+                      <div><label>Status bieżący</label><select name="condition_status_operator">${{opts.conditionStatusOperatorOptions}}</select></div>
+                      <div><label>Status docelowy</label><select name="condition_to_status_operator">${{opts.conditionToStatusOperatorOptions}}</select></div>
+                      <div><label>Rola wykonawcy</label><select name="condition_role_operator">${{opts.conditionRoleOperatorOptions}}</select></div>
+                      <div><label>Typ komentarza</label><select name="condition_comment_visibility_operator">${{opts.conditionCommentVisibilityOperatorOptions}}</select></div>
+                      <div><label>Przypisanie</label><select name="assigned_state_operator">${{opts.assignedStateOperatorOptions}}</select></div>
+                      <div><label>Priorytet</label><select name="condition_priority_operator">${{opts.priorityConditionOperatorOptions}}</select></div>
+                      <div><label>Kategoria</label><select name="condition_category_operator">${{opts.categoryConditionOperatorOptions}}</select></div>
+                      <div><label>Podkategoria</label><select name="condition_subcategory_operator">${{opts.subcategoryConditionOperatorOptions}}</select></div>
+                      <div><label>SLA</label><select name="condition_sla_state_operator">${{opts.slaConditionOperatorOptions}}</select></div>
+                    </div>
+                  </details>
+                  <div class="card" style="padding:12px;margin:12px 0">
+                    <h4 style="margin-top:0">Czy operacja ma wymagać potwierdzenia?</h4>
+                    <p class="muted">Te opcje mogą zablokować zmianę statusu, dopóki operator nie uzupełni wymaganych informacji.</p>
+                    <label class="checkbox-row" style="margin-top:8px">
+                      <input id="workflowRequireCommentCheckbox" type="checkbox" onchange="setWorkflowAutomationRequirementAction('require_comment', this.checked);">
+                      Wymagaj nowego komentarza operatora
+                    </label>
+                    <label class="checkbox-row" style="margin-top:8px">
+                      <input id="workflowRequireAttachmentCheckbox" type="checkbox" onchange="setWorkflowAutomationRequirementAction('require_attachment', this.checked);">
+                      Wymagaj nowego załącznika operatora
+                    </label>
+                  </div>
                 </section>
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3 style="margin-top:0">2. Wymagania przed zmianą statusu</h3>
-                  <p class="muted">Te opcje blokują zmianę statusu, jeśli aktualny operator nie dodał nowego elementu po wejściu zgłoszenia w obecny status.</p>
-                  <label class="checkbox-row" style="margin-top:8px">
-                    <input id="workflowRequireCommentCheckbox" type="checkbox" onchange="setWorkflowAutomationRequirementAction('require_comment', this.checked);">
-                    Wymagaj nowego komentarza od aktualnego operatora
-                  </label>
-                  <label class="checkbox-row" style="margin-top:8px">
-                    <input id="workflowRequireAttachmentCheckbox" type="checkbox" onchange="setWorkflowAutomationRequirementAction('require_attachment', this.checked);">
-                    Wymagaj nowego załącznika od aktualnego operatora
-                  </label>
-                </section>
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3 style="margin-top:0">3. Akcje reguły</h3>
-                  <p class="muted">Tutaj możesz dodać akcje wykonywane przez regułę, np. zmianę statusu, powiadomienie albo wpis w historii. Wymagania z poprzedniej sekcji są również widoczne jako akcje techniczne.</p>
+
+                <section class="workflow-form-stage hidden" data-rule-stage="3">
+                  <div class="workflow-form-stage-header">
+                    <h3>Akcje reguły</h3>
+                    <p class="muted">Dodaj działania w kolejności, w której system ma je wykonać.</p>
+                  </div>
                   <div id="workflowAutomationActionsEditor"></div>
                   <button type="button" class="btn-secondary btn-small" onclick="addWorkflowAutomationActionToForm(); return false;">Dodaj akcję</button>
+                  <details class="card workflow-advanced-settings" style="margin-top:12px">
+                    <summary>Zachowanie po wykonaniu</summary>
+                    <label class="checkbox-row" style="margin-top:12px">
+                      <input name="stop_processing" type="checkbox" ${{sourceRule.stop_processing !== false ? "checked" : ""}}>
+                      Po wykonaniu zatrzymaj dalsze reguły
+                    </label>
+                    <div class="attachment-upload-hint">Wyłącz tę opcję tylko wtedy, gdy kolejne pasujące reguły również powinny się wykonać.</div>
+                  </details>
                 </section>
-                <label class="checkbox-row" style="margin-top:8px">
-                  <input name="is_active" type="checkbox" ${{sourceRule.is_active !== false ? "checked" : ""}}>
-                  Aktywna
-                </label>
-                <div class="attachment-upload-hint">Wyłączona reguła jest wersją roboczą. Najpierw użyj testu poniżej, a potem zaznacz „Aktywna”, gdy wynik jest poprawny.</div>
-                <label class="checkbox-row" style="margin-top:8px">
-                  <input name="stop_processing" type="checkbox" ${{sourceRule.stop_processing !== false ? "checked" : ""}}>
-                  Po wykonaniu zatrzymaj dalsze reguły
-                </label>
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3 style="margin-top:0">4. Test reguły</h3>
+
+                <section class="workflow-form-stage hidden" data-rule-stage="4">
+                  <div class="workflow-form-stage-header">
+                    <h3>Test i aktywacja</h3>
+                    <p class="muted">Sprawdź regułę na przykładowych danych. Test nie modyfikuje żadnego zgłoszenia.</p>
+                  </div>
+                  <div class="card" style="padding:12px;margin:12px 0">
+                  <h4 style="margin-top:0">Dane testowe</h4>
                   <p class="muted">Test nie zmienia zgłoszenia. Pokazuje tylko, czy reguła dopasuje się do przykładowych danych i jakie akcje zostałyby wykonane.</p>
                   <div class="grid">
                     <div>
@@ -6043,8 +6140,11 @@ data:
                     <div>
                       <label>Rola wykonawcy</label>
                       <select name="test_actor_role">${{opts.roleOptions}}</select>
-                      <div class="attachment-upload-hint">Te same opcje, które są dostępne w warunku reguły.</div>
                     </div>
+                  </div>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Dodatkowe dane testowe</summary>
+                    <div class="grid" style="margin-top:12px">
                     <div>
                       <label>Typ komentarza</label>
                       <select name="test_comment_visibility">${{opts.visibilityOptions}}</select>
@@ -6070,9 +6170,7 @@ data:
                       <select name="test_sla_state">${{opts.slaConditionOptions}}</select>
                     </div>
                   </div>
-                  <div class="card" style="padding:10px;margin:10px 0;background:#f8fafc">
-                    <strong>Dane do testu akcji walidacyjnych</strong>
-                    <p class="muted" style="margin:4px 0 8px">Jeżeli reguła ma akcję „Wymagaj komentarza” albo „Wymagaj załącznika”, test musi wiedzieć, czy operator w tej próbce dodał nowy element w obecnym statusie.</p>
+                    <div style="margin-top:10px">
                     <label class="checkbox-row">
                       <input name="test_operator_added_comment" type="checkbox">
                       Operator dodał nowy komentarz w obecnym statusie
@@ -6081,18 +6179,32 @@ data:
                       <input name="test_operator_added_attachment" type="checkbox">
                       Operator dodał nowy załącznik w obecnym statusie
                     </label>
-                  </div>
-                  <button type="button" class="btn-secondary btn-small" onclick="testWorkflowAutomationRuleForm(); return false;">Testuj regułę</button>
+                    </div>
+                  </details>
+                  <button type="button" onclick="testWorkflowAutomationRuleForm(); return false;">Testuj regułę</button>
                   <div id="workflowAutomationRuleTestResult"></div>
+                  </div>
+                  <div class="card" style="padding:12px;margin:12px 0">
+                    <label class="checkbox-row">
+                      <input name="is_active" type="checkbox" ${{sourceRule.is_active !== false ? "checked" : ""}}>
+                      Aktywuj regułę po zapisaniu
+                    </label>
+                    <div class="attachment-upload-hint">Pozostaw wyłączone, aby zapisać bezpieczną wersję roboczą i aktywować ją później.</div>
+                  </div>
+                  <details class="card workflow-advanced-settings">
+                    <summary>Podgląd technicznego diagramu</summary>
+                    <p class="muted">Diagram pokazuje zdarzenie, warunki, wymagania i akcje tej samej reguły.</p>
+                    <div id="workflowAutomationRulePreview"></div>
+                  </details>
                 </section>
-                <section class="card" style="padding:12px;margin:12px 0">
-                  <h3 style="margin-top:0">5. Podgląd diagramu</h3>
-                  <p class="muted">To wizualny zapis tej samej reguły. Warunki w pierwszej wersji są łączone przez ORAZ.</p>
-                  <div id="workflowAutomationRulePreview"></div>
-                </section>
-                <div class="modal-actions">
-                  <button type="button" class="btn-secondary" onclick="closeWorkflowAutomationRuleForm(); return false;">Anuluj</button>
-                  <button type="submit">Zapisz regułę</button>
+
+                <div class="workflow-wizard-actions">
+                  <button id="workflowRuleStageBack" type="button" class="btn-secondary hidden" onclick="setWorkflowAutomationRuleFormStage(workflowAutomationRuleFormStage - 1); return false;">← Wstecz</button>
+                  <div class="actions">
+                    <button id="workflowRuleStageNext" type="button" onclick="setWorkflowAutomationRuleFormStage(workflowAutomationRuleFormStage + 1); return false;">Dalej →</button>
+                    <button id="workflowRuleSaveButton" type="submit" class="hidden">Zapisz regułę</button>
+                    <button type="button" class="btn-secondary" onclick="closeWorkflowAutomationRuleForm(); return false;">Anuluj</button>
+                  </div>
                 </div>
               </form>
             </div>
@@ -6115,6 +6227,7 @@ data:
           const testSlaState = modal.querySelector('select[name="test_sla_state"]');
           if (testSlaState) testSlaState.value = sourceRule.condition_sla_state || "*";
           renderWorkflowAutomationActionsForm();
+          setWorkflowAutomationRuleFormStage(1, true);
           const form = document.getElementById("workflowAutomationRuleForm");
           const updatePreview = () => {{
             const previewRule = workflowAutomationRuleFromForm(form);
@@ -6231,11 +6344,20 @@ data:
         }}
         async function saveWorkflowAutomationRuleForm(e) {{
           e.preventDefault();
-          const rule = workflowAutomationRuleFromForm(e.target);
-          if (!rule.actions || !rule.actions.length) {{
+          for (let stage = 1; stage <= 4; stage += 1) {{
+            const invalidField = workflowAutomationRuleInvalidField(stage);
+            if (invalidField) {{
+              setWorkflowAutomationRuleFormStage(stage, true);
+              invalidField.reportValidity();
+              return;
+            }}
+          }}
+          if (!normalizedWorkflowAutomationFormActions().length) {{
+            setWorkflowAutomationRuleFormStage(3, true);
             alert("Dodaj przynajmniej jedną poprawną akcję reguły.");
             return;
           }}
+          const rule = workflowAutomationRuleFromForm(e.target);
           const workflowId = workflowAutomationEditorWorkflow && workflowAutomationEditorWorkflow.id;
           const existingRule = workflowAutomationEditingIndex === null ? null : workflowAutomationEditor[workflowAutomationEditingIndex];
           if (workflowId) {{
