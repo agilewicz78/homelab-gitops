@@ -53,6 +53,24 @@ class Cursor:
         return None
 
     def fetchall(self):
+        if "FROM knowledge_articles ka" in self.last_query:
+            return [
+                (
+                    7,
+                    "Naprawa wysyłania poczty w Outlooku",
+                    "Outlook nie wysyła wiadomości.",
+                    "Wyczyść profil Outlooka i uruchom aplikację ponownie.",
+                    "Oprogramowanie",
+                    "Poczta",
+                    "published",
+                    101,
+                    "Operator",
+                    "2026-06-13 12:00:00",
+                    "2026-06-12 20:00:00",
+                    2,
+                    3,
+                ),
+            ]
         if "WHERE status = 'published'" in self.last_query:
             return [
                 (
@@ -133,6 +151,7 @@ def main():
         "CATEGORIES": ["Oprogramowanie"],
         "SUBCATEGORIES": {"Oprogramowanie": ["Poczta", "Inne"]},
         "KNOWLEDGE_STATUSES": ["draft", "published", "archived"],
+        "is_staff": lambda user: user.get("role") in ("Operator", "Administrator"),
         "add_ticket_event": lambda *args, **kwargs: ticket_events.append((args, kwargs)),
         "log_audit": lambda *args, **kwargs: audit_events.append((args, kwargs)),
         "publish_event": lambda *args, **kwargs: live_events.append((args, kwargs)),
@@ -149,6 +168,7 @@ def main():
         ),
     }
     exec(load_function("api_create_knowledge_article"), namespace)
+    exec(load_function("api_knowledge_articles"), namespace)
     exec(load_function("api_knowledge_suggestions"), namespace)
     exec(load_function("api_knowledge_article_feedback"), namespace)
 
@@ -172,6 +192,19 @@ def main():
     assert audit_events[-1][0][2] == "knowledge_article_created"
     assert live_events[-1][0][1] == "knowledge_article_changed"
     assert live_events[-1][1]["staff_only"] is False
+
+    Request.args = {"quality": "needs_review"}
+    list_body = namespace["api_knowledge_articles"]({
+        "email": "operator@example.local",
+        "name": "Operator",
+        "role": "Operator",
+    })
+    list_connection = connections[-1]
+    assert list_body["filter"]["quality"] == "needs_review"
+    assert list_body["articles"][0]["helpful_count"] == 2
+    assert list_body["articles"][0]["not_helpful_count"] == 3
+    assert "COALESCE(feedback.not_helpful_count, 0) > 0" in list_connection.cursor_value.last_query
+    assert "GROUP BY article_id" in list_connection.cursor_value.last_query
 
     Request.args = {
         "title": "Outlook nie wysyła poczty",
