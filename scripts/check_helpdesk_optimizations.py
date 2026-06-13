@@ -257,9 +257,16 @@ def main() -> None:
     assert "KNOWLEDGE_FEEDBACK_REASONS" in text
     assert "reason_code = EXCLUDED.reason_code" in text
     assert "reason_comment = EXCLUDED.reason_comment" in text
+    assert "function workflowAutomationRuleDiagram(rule)" in text
+    assert "function workflowAutomationDiagramConditions(rule)" in text
+    assert "helpdesk_workflow_automation_view" in text
+    assert "Widok diagramu" in text
+    assert "Szablony automatyzacji" in text
+    assert "Warunki: ORAZ" in text
+    assert "preview.innerHTML = workflowAutomationRuleDiagram" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-feedback-reasons-v13" in deployment_text
+    assert "2026-06-13-workflow-diagram-v14" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

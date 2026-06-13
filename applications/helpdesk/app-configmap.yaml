@@ -3156,6 +3156,22 @@ data:
       .modal-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
       .modal-header h2 { margin: 0; }
       .modal-actions { display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
+      .workflow-view-switch { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+      .workflow-view-switch button { margin-top: 0; }
+      .workflow-view-switch button[aria-pressed="true"] { border-color: rgba(56,189,248,.8); background: rgba(2,132,199,.28); }
+      .workflow-diagram-card { padding: 16px; margin: 12px 0; }
+      .workflow-diagram-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
+      .workflow-diagram-lane { display: flex; gap: 10px; align-items: stretch; overflow-x: auto; padding: 6px 2px 12px; }
+      .workflow-diagram-node { flex: 0 0 210px; min-height: 120px; border: 1px solid var(--border); border-radius: 16px; padding: 13px; background: rgba(15,23,42,.78); }
+      .workflow-diagram-node.event { border-color: rgba(56,189,248,.55); background: rgba(2,132,199,.12); }
+      .workflow-diagram-node.condition { border-color: rgba(250,204,21,.48); background: rgba(250,204,21,.08); }
+      .workflow-diagram-node.requirement { border-color: rgba(244,114,182,.48); background: rgba(190,24,93,.10); }
+      .workflow-diagram-node.action { border-color: rgba(34,197,94,.48); background: rgba(34,197,94,.09); }
+      .workflow-diagram-kicker { display: block; margin-bottom: 7px; color: var(--muted); font-size: 11px; font-weight: 900; letter-spacing: .09em; text-transform: uppercase; }
+      .workflow-diagram-node strong { display: block; line-height: 1.35; }
+      .workflow-diagram-node ul { margin: 9px 0 0 18px; padding: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .workflow-diagram-arrow { flex: 0 0 30px; display: grid; place-items: center; color: #7dd3fc; font-size: 27px; font-weight: 900; }
+      .workflow-diagram-note { color: var(--muted); font-size: 12px; margin-top: 4px; }
       .incident-ticket-choice { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
       .incident-ticket-choice input[type="checkbox"] { width: auto; margin-top: 4px; }
       .resolution-time-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
@@ -3188,6 +3204,11 @@ data:
       .sla-calendar-empty { color: var(--muted); margin: 0; }
       .hidden { display: none; }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
+      @media (max-width: 720px) {
+        .workflow-diagram-lane { flex-direction: column; overflow-x: visible; }
+        .workflow-diagram-node { flex-basis: auto; min-height: 0; }
+        .workflow-diagram-arrow { min-height: 28px; transform: rotate(90deg); }
+      }
     """
     SPA_HTML = f"""
     <!doctype html>
@@ -5200,6 +5221,111 @@ data:
         function workflowAutomationRuleBadge(text) {{
           return `<span class="status-badge status-progress">${{esc(text || "")}}</span>`;
         }}
+        function workflowAutomationDiagramConditions(rule) {{
+          const conditions = [];
+          const add = (label, operator, rawValue, displayValue = rawValue) => {{
+            if (!rawValue || rawValue === "*" || rawValue === "any") return;
+            conditions.push(`${{label}} ${{workflowConditionOperatorLabel(operator || "eq")}} ${{displayValue}}`);
+          }};
+          add("Status bieżący", rule.condition_status_operator, rule.condition_status);
+          if (rule.event_type === "status_changed") {{
+            add("Status docelowy", rule.condition_to_status_operator, rule.condition_to_status);
+          }}
+          add("Rola wykonawcy", rule.condition_role_operator, rule.condition_role, workflowAutomationRoleLabel(rule.condition_role));
+          if (["comment_added", "user_comment_added", "staff_comment_added"].includes(rule.event_type)) {{
+            add("Komentarz", rule.condition_comment_visibility_operator, rule.condition_comment_visibility, workflowAutomationVisibilityLabel(rule.condition_comment_visibility));
+          }}
+          add("Przypisanie", rule.assigned_state_operator, rule.assigned_state, workflowAutomationAssignedLabel(rule.assigned_state));
+          add("Priorytet", rule.condition_priority_operator, rule.condition_priority);
+          add("Kategoria", rule.condition_category_operator, rule.condition_category);
+          add("Podkategoria", rule.condition_subcategory_operator, rule.condition_subcategory);
+          add("SLA", rule.condition_sla_state_operator, rule.condition_sla_state, workflowAutomationSlaConditionLabel(rule.condition_sla_state));
+          return conditions;
+        }}
+        function workflowAutomationDiagramNode(kind, kicker, title, items = []) {{
+          const list = items.length
+            ? `<ul>${{items.map(item => `<li>${{esc(item)}}</li>`).join("")}}</ul>`
+            : "";
+          return `
+            <div class="workflow-diagram-node ${{kind}}">
+              <span class="workflow-diagram-kicker">${{esc(kicker)}}</span>
+              <strong>${{esc(title)}}</strong>
+              ${{list}}
+            </div>
+          `;
+        }}
+        function workflowAutomationRuleDiagram(rule) {{
+          const conditions = workflowAutomationDiagramConditions(rule);
+          const requirements = workflowAutomationRuleActions(rule)
+            .filter(action => ["require_comment", "require_attachment"].includes(action.action_type))
+            .map(action => workflowAutomationActionSummary(action));
+          const actions = workflowAutomationRuleAfterActions(rule)
+            .map(action => workflowAutomationActionSummary(action));
+          const nodes = [
+            workflowAutomationDiagramNode(
+              "event",
+              "Zdarzenie",
+              workflowAutomationRuleEventLabel(rule.event_type),
+              [workflowAutomationRuleWhenText(rule)]
+            ),
+            workflowAutomationDiagramNode(
+              "condition",
+              "Warunki: ORAZ",
+              conditions.length ? "Wszystkie warunki muszą pasować" : "Bez dodatkowych warunków",
+              conditions
+            ),
+          ];
+          if (requirements.length) {{
+            nodes.push(workflowAutomationDiagramNode(
+              "requirement",
+              "Wymagania",
+              "Sprawdź przed wykonaniem",
+              requirements
+            ));
+          }}
+          nodes.push(workflowAutomationDiagramNode(
+            "action",
+            "Akcje",
+            actions.length ? "Wykonaj po kolei" : "Brak dodatkowych akcji",
+            actions
+          ));
+          return `
+            <div class="workflow-diagram-lane">
+              ${{nodes.map((node, idx) => `${{idx ? `<div class="workflow-diagram-arrow" aria-hidden="true">→</div>` : ""}}${{node}}`).join("")}}
+            </div>
+            <div class="workflow-diagram-note">
+              Reguła ma priorytet ${{Number(rule.priority || 100)}} i ${{rule.stop_processing !== false ? "zatrzymuje" : "nie zatrzymuje"}} kolejne reguły po wykonaniu.
+            </div>
+          `;
+        }}
+        function workflowAutomationRuleDiagramCard(rule, idx) {{
+          const activeBadge = rule.is_active !== false
+            ? `<span class="status-badge status-new">Aktywna</span>`
+            : `<span class="status-badge status-closed">Nieaktywna</span>`;
+          return `
+            <div class="card workflow-diagram-card">
+              <div class="workflow-diagram-header">
+                <div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <h4 style="margin:0">${{esc(rule.name || `Reguła ${{idx + 1}}`)}}</h4>
+                    ${{activeBadge}}
+                  </div>
+                  <p class="muted" style="margin:6px 0 0">${{esc(workflowAutomationRuleReadableDescription(rule))}}</p>
+                </div>
+                <div class="actions">
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{idx}}); return false;">Edytuj klocki</button>
+                  <button type="button" class="btn-danger btn-small" onclick="deleteWorkflowAutomationRule(${{idx}}); return false;">Usuń</button>
+                </div>
+              </div>
+              ${{workflowAutomationRuleDiagram(rule)}}
+            </div>
+          `;
+        }}
+        function setWorkflowAutomationViewMode(mode) {{
+          const normalized = mode === "diagram" ? "diagram" : "list";
+          sessionStorage.setItem("helpdesk_workflow_automation_view", normalized);
+          renderWorkflowAutomationRules();
+        }}
         function workflowAutomationRuleListItem(rule, idx) {{
           const activeBadge = rule.is_active !== false
             ? `<span class="status-badge status-new">Aktywna</span>`
@@ -5250,10 +5376,17 @@ data:
         function renderWorkflowAutomationRules() {{
           const box = document.getElementById("workflowAutomationRules");
           if (!box) return;
+          const viewMode = sessionStorage.getItem("helpdesk_workflow_automation_view") === "list" ? "list" : "diagram";
           const rules = workflowAutomationEditor
-            .map((rule, idx) => workflowAutomationRuleListItem(rule, idx))
+            .map((rule, idx) => viewMode === "diagram"
+              ? workflowAutomationRuleDiagramCard(rule, idx)
+              : workflowAutomationRuleListItem(rule, idx))
             .join("");
           box.innerHTML = rules || `<p class="muted">Brak reguł automatyzacji. Kliknij „Dodaj regułę automatyzacji”, aby utworzyć pierwszą regułę.</p>`;
+          const listButton = document.getElementById("workflowAutomationListViewButton");
+          const diagramButton = document.getElementById("workflowAutomationDiagramViewButton");
+          if (listButton) listButton.setAttribute("aria-pressed", viewMode === "list" ? "true" : "false");
+          if (diagramButton) diagramButton.setAttribute("aria-pressed", viewMode === "diagram" ? "true" : "false");
         }}
         function workflowAutomationTemplateStatus(workflow, preferred, fallback = "") {{
           const statuses = workflowStatuses(workflow);
@@ -5609,7 +5742,7 @@ data:
           const requireAttachment = document.getElementById("workflowRequireAttachmentCheckbox");
           if (requireComment) requireComment.checked = workflowAutomationFormHasAction("require_comment");
           if (requireAttachment) requireAttachment.checked = workflowAutomationFormHasAction("require_attachment");
-          if (preview && form) preview.textContent = workflowAutomationRuleSummary(workflowAutomationRuleFromForm(form));
+          if (preview && form) preview.innerHTML = workflowAutomationRuleDiagram(workflowAutomationRuleFromForm(form));
         }}
         function addWorkflowAutomationActionToForm() {{
           workflowAutomationFormActions.push({{
@@ -5825,7 +5958,11 @@ data:
                   <button type="button" class="btn-secondary btn-small" onclick="testWorkflowAutomationRuleForm(); return false;">Testuj regułę</button>
                   <div id="workflowAutomationRuleTestResult"></div>
                 </section>
-                <div id="workflowAutomationRulePreview" class="attachment-upload-hint" style="margin-top:12px"></div>
+                <section class="card" style="padding:12px;margin:12px 0">
+                  <h3 style="margin-top:0">5. Podgląd diagramu</h3>
+                  <p class="muted">To wizualny zapis tej samej reguły. Warunki w pierwszej wersji są łączone przez ORAZ.</p>
+                  <div id="workflowAutomationRulePreview"></div>
+                </section>
                 <div class="modal-actions">
                   <button type="button" class="btn-secondary" onclick="closeWorkflowAutomationRuleForm(); return false;">Anuluj</button>
                   <button type="submit">Zapisz regułę</button>
@@ -5855,7 +5992,7 @@ data:
           const updatePreview = () => {{
             const previewRule = workflowAutomationRuleFromForm(form);
             const preview = document.getElementById("workflowAutomationRulePreview");
-            if (preview) preview.textContent = workflowAutomationRuleSummary(previewRule);
+            if (preview) preview.innerHTML = workflowAutomationRuleDiagram(previewRule);
           }};
           form.querySelectorAll("input,select").forEach(el => {{
             el.addEventListener("input", updatePreview);
@@ -6286,7 +6423,7 @@ data:
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <h2>Workflow zgłoszeń</h2>
-              <p class="muted">Workflow określa proces obsługi zgłoszenia zależnie od kategorii i podkategorii. Na tym etapie edytujemy nazwę, dopasowanie i listę kroków/statusów.</p>
+              <p class="muted">Workflow określa proces obsługi zgłoszenia, statusy oraz automatyzacje. Szablony i diagram są różnymi widokami tych samych reguł wykonywanych przez obecny silnik.</p>
               <button onclick="renderAdminWorkflowForm()">Dodaj workflow</button>
               <button class="btn-secondary" onclick="renderWorkflowRuleExecutions()">Log automatyzacji</button>
             </section>
@@ -6413,12 +6550,16 @@ data:
                 <div class="attachment-upload-hint">System automatycznie dopilnuje, żeby workflow miał kroki „Nowe” i „Zamknięte”.</div>
                 <section class="card" style="padding:12px;margin:12px 0">
                   <h3>Reguły automatyzacji workflow</h3>
-                  <p class="muted">Każda reguła działa według schematu: zdarzenie → warunki → jedna lub wiele akcji. Regułę można też przetestować na przykładowych danych przed zapisaniem.</p>
+                  <p class="muted">Najprościej zacząć od szablonu. Widok diagramu pokazuje tę samą regułę jako klocki: zdarzenie → warunki → wymagania → akcje.</p>
+                  <div class="workflow-view-switch">
+                    <button id="workflowAutomationListViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('list'); return false;">Widok listy</button>
+                    <button id="workflowAutomationDiagramViewButton" type="button" class="btn-secondary btn-small" onclick="setWorkflowAutomationViewMode('diagram'); return false;">Widok diagramu</button>
+                  </div>
                   <div id="workflowAutomationRules"></div>
                   <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(); return false;">Dodaj regułę automatyzacji</button>
-                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationTemplatePicker(); return false;">Dodaj z szablonu</button>
+                  <button type="button" onclick="openWorkflowAutomationTemplatePicker(); return false;">Szablony automatyzacji</button>
                   <div class="attachment-upload-hint">
-                    Przykład: „Dodano komentarz” + rola „user” + status „Oczekuje na użytkownika” → „Zmień status” na „Otwarte”. Reguły zapisują się osobno po kliknięciu „Zapisz regułę”.
+                    Diagram nie jest osobnym workflow. Edycja klocków aktualizuje warunki i akcje tej samej reguły. W pierwszej wersji wszystkie warunki są łączone przez ORAZ.
                   </div>
                 </section>
                 ${{editing && workflow.ticket_count > 0 ? `
