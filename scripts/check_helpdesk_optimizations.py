@@ -308,6 +308,14 @@ def main() -> None:
     assert "Reguła zadziała, jeżeli jednocześnie:" in text
     assert "Dodaj kolejny warunek" in text
     assert "function workflowAutomationScope()" in text
+    assert 'const categoryField = document.getElementById("workflowCategorySelect")' in text
+    assert 'const subcategoryField = document.getElementById("workflowSubcategorySelect")' in text
+    assert "categoryField?.value || workflow.category" in text
+    assert "subcategoryField?.value || workflow.subcategory" in text
+    assert "workflowAutomationEditorWorkflow.category = e.target.value" in text
+    assert "workflowAutomationEditorWorkflow.subcategory = e.target.value" in text
+    assert "condition_category: rule.condition_category ||" in text
+    assert "condition_subcategory: rule.condition_subcategory ||" in text
     assert "function workflowAutomationSubcategoryValues(rule, workflow, scope)" in text
     assert "scopeLocked: opts.scope.category" in text
     assert "scopeLocked: opts.scope.subcategory" in text
@@ -323,7 +331,7 @@ def main() -> None:
     assert "Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie." in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-workflow-scoped-conditions-v20" in deployment_text
+    assert "2026-06-13-live-workflow-scope-v21" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
