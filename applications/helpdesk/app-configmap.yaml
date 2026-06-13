@@ -8079,6 +8079,40 @@ data:
                   <div>${{esc(e.message)}}</div>
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak historii zmian.</p>`;
+          const automationExecutions = canWorkTickets(me) ? (data.automation_executions || []) : [];
+          const automationExplanationPanel = canWorkTickets(me) ? `
+            <section class="card">
+              <div class="ticket-section-title">
+                <h3>Co zrobiły automatyzacje</h3>
+                <span class="counter">${{automationExecutions.length}}</span>
+              </div>
+              <p class="muted">Panel pokazuje tylko reguły, które dopasowały się do tego zgłoszenia. Dzięki temu wiadomo, co system zrobił i dlaczego.</p>
+              ${{automationExecutions.length ? `
+                <div class="timeline">${{automationExecutions.map(execution => `
+                  <div class="event-item automation-explanation-item">
+                    <div class="ticket-section-title">
+                      <strong>${{esc(execution.automation_name || "Reguła workflow")}}</strong>
+                      <span class="status-badge status-new">Wykonana</span>
+                    </div>
+                    <div class="muted">
+                      ${{esc(execution.created_at)}} · ${{esc(workflowAutomationRuleEventLabel(execution.event_type))}}
+                      ${{execution.current_status ? " · " + esc(execution.current_status) : ""}}
+                      ${{execution.event_new_status ? " → " + esc(execution.event_new_status) : ""}}
+                    </div>
+                    <div style="margin-top:8px"><strong>Dlaczego:</strong> ${{esc(execution.reason || "Reguła spełniła warunki.")}}</div>
+                    <div style="margin-top:6px"><strong>Wykonane działania:</strong> ${{esc(workflowRuleExecutionActionSummary(execution.actions_executed))}}</div>
+                    <details style="margin-top:8px">
+                      <summary>Szczegóły techniczne</summary>
+                      ${{workflowRuleExecutionActionDetails(execution.actions_executed)}}
+                    </details>
+                    <div class="muted" style="margin-top:6px">
+                      Workflow: ${{esc(execution.workflow_name || t.workflow_name)}} · wykonawca zdarzenia: ${{esc(execution.actor_name || "System")}}
+                    </div>
+                  </div>
+                `).join("")}}</div>
+              ` : `<p class="muted">Dla tego zgłoszenia nie zapisano jeszcze wykonanej automatyzacji.</p>`}}
+            </section>
+          ` : "";
           const attachmentList = (data.attachments || []).length
             ? `<div class="attachment-list">${{data.attachments.map(a => `
                 <div class="attachment-item">
@@ -8183,6 +8217,7 @@ data:
                   <p class="muted">Uporządkowany zapis przejść statusu: kto, kiedy, z jakiego statusu na jaki oraz czy spełniono wymagania workflow.</p>
                   ${{statusHistory}}
                 </section>
+                ${{automationExplanationPanel}}
                 <section class="card">
                   <div class="ticket-section-title">
                     <h3>Historia aktywności</h3>
@@ -12905,7 +12940,8 @@ data:
                     action_executed = True
                 else:
                     action_results.append({"action_type": action_type, "result": "skipped", "reason": "nieobsługiwany typ akcji"})
-            reason = "wykonano" if action_executed else "reguła pasowała, ale żadna akcja nie została wykonana"
+            execution_result = "wykonano akcje" if action_executed else "nie wykonano żadnej akcji"
+            reason = f"{match_reason}; {execution_result}"
             log_workflow_rule_execution(
                 cur,
                 rule.get("id"),
@@ -13292,6 +13328,29 @@ data:
             reverse=True,
         )
         suggestions["articles"] = article_suggestions[:3]
+        automation_execution_rows = []
+        if is_staff(user):
+            cur.execute("""
+                SELECT
+                  wre.id,
+                  COALESCE(wa.name, 'Reguła usunięta'),
+                  COALESCE(wd.name, wre.workflow_key, 'Workflow usunięty'),
+                  COALESCE(wre.event_type, ''),
+                  COALESCE(wre.actions_executed, '[]'),
+                  COALESCE(wre.reason, ''),
+                  COALESCE(wre.actor_name, wre.actor_email, 'System'),
+                  COALESCE(wre.current_status, ''),
+                  COALESCE(wre.event_new_status, ''),
+                  wre.created_at
+                FROM workflow_rule_executions wre
+                LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id
+                LEFT JOIN workflow_definitions wd ON wd.id = wre.workflow_id
+                WHERE wre.ticket_id = %s
+                  AND COALESCE(wre.matched, TRUE) = TRUE
+                ORDER BY wre.id DESC
+                LIMIT 20
+            """, (ticket_id,))
+            automation_execution_rows = cur.fetchall()
         cur.close()
         conn.close()
         ticket = {
@@ -13412,6 +13471,28 @@ data:
                 "title": knowledge_article_row[1],
                 "status": knowledge_article_row[2],
             }
+        automation_executions = []
+        for execution in automation_execution_rows:
+            actions_raw = execution[4] or "[]"
+            if isinstance(actions_raw, str):
+                try:
+                    actions = json.loads(actions_raw)
+                except Exception:
+                    actions = actions_raw
+            else:
+                actions = actions_raw
+            automation_executions.append({
+                "id": execution[0],
+                "automation_name": execution[1],
+                "workflow_name": execution[2],
+                "event_type": execution[3],
+                "actions_executed": actions,
+                "reason": execution[5],
+                "actor_name": execution[6],
+                "current_status": execution[7],
+                "event_new_status": execution[8],
+                "created_at": str(execution[9]),
+            })
         conn2 = get_conn()
         cur2 = conn2.cursor()
         cur2.execute("""
@@ -13437,6 +13518,7 @@ data:
             "incidents": incidents,
             "suggestions": suggestions,
             "knowledge_article": knowledge_article,
+            "automation_executions": automation_executions,
             "meta": {
                 "statuses": workflow_statuses(ticket.get("workflow_key")),
                 "operators": operators,

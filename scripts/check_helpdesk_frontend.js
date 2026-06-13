@@ -58,4 +58,19 @@ for (const fragment of requiredWorkflowDiagram) {
   }
 }
 
+const requiredAutomationExplanation = [
+  "const automationExecutions = canWorkTickets(me)",
+  "Co zrobiły automatyzacje",
+  "Panel pokazuje tylko reguły, które dopasowały się",
+  "workflowRuleExecutionActionSummary(execution.actions_executed)",
+  "workflowRuleExecutionActionDetails(execution.actions_executed)",
+  "Dlaczego:",
+  "Wykonane działania:",
+];
+for (const fragment of requiredAutomationExplanation) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing ticket automation explanation fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");

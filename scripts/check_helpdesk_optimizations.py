@@ -208,6 +208,12 @@ def main() -> None:
     assert '"articles": []' in ticket_detail_api
     assert "knowledge_article_row[2] != \"published\"" in ticket_detail_api
     assert "FROM knowledge_articles" in ticket_detail_api
+    assert "automation_execution_rows = []" in ticket_detail_api
+    assert "if is_staff(user):" in ticket_detail_api
+    assert "FROM workflow_rule_executions wre" in ticket_detail_api
+    assert "AND COALESCE(wre.matched, TRUE) = TRUE" in ticket_detail_api
+    assert "LIMIT 20" in ticket_detail_api
+    assert '"automation_executions": automation_executions' in ticket_detail_api
 
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
@@ -264,9 +270,13 @@ def main() -> None:
     assert "Szablony automatyzacji" in text
     assert "Warunki: ORAZ" in text
     assert "preview.innerHTML = workflowAutomationRuleDiagram" in text
+    assert "const automationExecutions = canWorkTickets(me)" in text
+    assert "Co zrobiły automatyzacje" in text
+    assert "Wykonane działania:" in text
+    assert 'reason = f"{match_reason}; {execution_result}"' in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-workflow-diagram-v14" in deployment_text
+    assert "2026-06-13-automation-explanations-v15" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
