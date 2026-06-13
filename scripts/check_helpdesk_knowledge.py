@@ -35,6 +35,24 @@ class Cursor:
     def fetchone(self):
         if "SELECT status, source_ticket_id FROM knowledge_articles" in self.last_query:
             return ("published", 101)
+        if "FROM knowledge_articles ka" in self.last_query and "WHERE ka.id = %s" in self.last_query:
+            return (
+                7,
+                "Naprawa wysyłania poczty w Outlooku",
+                "Outlook nie wysyła wiadomości.",
+                "Wyczyść profil Outlooka i uruchom aplikację ponownie.",
+                "Oprogramowanie",
+                "Poczta",
+                "published",
+                101,
+                "Operator",
+                "Operator",
+                "2026-06-12 19:00:00",
+                "2026-06-13 12:00:00",
+                "2026-06-12 20:00:00",
+            )
+        if "BOOL_OR(helpful)" in self.last_query:
+            return (3, 1, False, "unclear", "Krok 3 jest niejasny.")
         if "COUNT(*) FILTER (WHERE helpful = TRUE)" in self.last_query:
             return (3, 1)
         if "FROM tickets" in self.last_query:
@@ -69,8 +87,13 @@ class Cursor:
                     "2026-06-12 20:00:00",
                     2,
                     3,
+                    "did_not_solve=2,unclear=1",
                 ),
             ]
+        if "SELECT reason_code, COUNT(*)" in self.last_query:
+            return [("unclear", 2), ("did_not_solve", 1)]
+        if "SELECT reason_code, reason_comment, updated_at" in self.last_query:
+            return [("unclear", "Krok 3 jest niejasny.", "2026-06-13 12:30:00")]
         if "WHERE status = 'published'" in self.last_query:
             return [
                 (
@@ -151,6 +174,13 @@ def main():
         "CATEGORIES": ["Oprogramowanie"],
         "SUBCATEGORIES": {"Oprogramowanie": ["Poczta", "Inne"]},
         "KNOWLEDGE_STATUSES": ["draft", "published", "archived"],
+        "KNOWLEDGE_FEEDBACK_REASONS": {
+            "outdated": "Informacja jest nieaktualna",
+            "unclear": "Instrukcja jest niejasna",
+            "incomplete": "Brakuje kroków lub informacji",
+            "did_not_solve": "Instrukcja nie rozwiązuje problemu",
+            "other": "Inny powód",
+        },
         "is_staff": lambda user: user.get("role") in ("Operator", "Administrator"),
         "add_ticket_event": lambda *args, **kwargs: ticket_events.append((args, kwargs)),
         "log_audit": lambda *args, **kwargs: audit_events.append((args, kwargs)),
@@ -169,6 +199,7 @@ def main():
     }
     exec(load_function("api_create_knowledge_article"), namespace)
     exec(load_function("api_knowledge_articles"), namespace)
+    exec(load_function("api_knowledge_article_detail"), namespace)
     exec(load_function("api_knowledge_suggestions"), namespace)
     exec(load_function("api_knowledge_article_feedback"), namespace)
 
@@ -203,8 +234,34 @@ def main():
     assert list_body["filter"]["quality"] == "needs_review"
     assert list_body["articles"][0]["helpful_count"] == 2
     assert list_body["articles"][0]["not_helpful_count"] == 3
+    assert list_body["articles"][0]["reason_counts"] == [
+        {
+            "code": "did_not_solve",
+            "label": "Instrukcja nie rozwiązuje problemu",
+            "count": 2,
+        },
+        {"code": "unclear", "label": "Instrukcja jest niejasna", "count": 1},
+    ]
     assert "COALESCE(feedback.not_helpful_count, 0) > 0" in list_connection.cursor_value.last_query
     assert "GROUP BY article_id" in list_connection.cursor_value.last_query
+
+    detail_body = namespace["api_knowledge_article_detail"](
+        {
+            "email": "operator@example.local",
+            "name": "Operator",
+            "role": "Operator",
+        },
+        7,
+    )
+    assert detail_body["feedback"]["my_feedback"] is False
+    assert detail_body["feedback"]["my_reason"] == "unclear"
+    assert detail_body["feedback"]["reason_counts"][0] == {
+        "code": "unclear",
+        "label": "Instrukcja jest niejasna",
+        "count": 2,
+    }
+    assert detail_body["feedback"]["reason_comments"][0]["comment"] == "Krok 3 jest niejasny."
+    assert detail_body["meta"]["feedback_reasons"][0]["code"] == "outdated"
 
     Request.args = {
         "title": "Outlook nie wysyła poczty",
@@ -223,6 +280,38 @@ def main():
     assert namespace["api_knowledge_suggestions"](user) == {"suggestions": []}
     assert len(connections) == connection_count
 
+    Request.payload = {"helpful": False}
+    invalid_body, invalid_status = namespace["api_knowledge_article_feedback"](
+        {"email": "user@example.local", "name": "User"},
+        7,
+    )
+    assert invalid_status == 400
+    assert "Wybierz powód" in invalid_body["error"]
+    assert len(connections) == connection_count
+
+    Request.payload = {
+        "helpful": False,
+        "reason_code": "did_not_solve",
+        "reason_comment": "Krok 3 nie odpowiada aktualnemu ekranowi.",
+    }
+    negative_feedback_body = namespace["api_knowledge_article_feedback"](
+        {"email": "user@example.local", "name": "User"},
+        7,
+    )
+    negative_connection = connections[-1]
+    assert negative_feedback_body["my_feedback"] is False
+    assert negative_feedback_body["my_reason"] == "did_not_solve"
+    assert negative_feedback_body["my_comment"].startswith("Krok 3")
+    assert negative_connection.cursor_value.feedback_upserts == [
+        (
+            7,
+            "user@example.local",
+            False,
+            "did_not_solve",
+            "Krok 3 nie odpowiada aktualnemu ekranowi.",
+        ),
+    ]
+
     Request.payload = {"helpful": True}
     feedback_body = namespace["api_knowledge_article_feedback"](
         {"email": "user@example.local", "name": "User"},
@@ -233,10 +322,12 @@ def main():
         "helpful": 3,
         "not_helpful": 1,
         "my_feedback": True,
+        "my_reason": "",
+        "my_comment": "",
     }
     assert feedback_connection.committed is True
     assert feedback_connection.cursor_value.feedback_upserts == [
-        (7, "user@example.local", True),
+        (7, "user@example.local", True, None, None),
     ]
     assert audit_events[-1][0][2] == "knowledge_article_feedback"
     assert live_events[-1][0][1] == "knowledge_article_changed"

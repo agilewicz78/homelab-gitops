@@ -24,4 +24,21 @@ const script = text
   .replaceAll("}}", "}");
 
 new vm.Script(script, { filename: "helpdesk-spa.js" });
+
+const requiredFeedbackFlow = [
+  'id="knowledgeFeedbackModal"',
+  'id="knowledgeFeedbackForm"',
+  'name="reason_code"',
+  'name="reason_comment"',
+  "openKnowledgeFeedbackModal()",
+  "closeKnowledgeFeedbackModal()",
+  "payload.reason_code",
+  "payload.reason_comment",
+];
+for (const fragment of requiredFeedbackFlow) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing knowledge feedback UI fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
