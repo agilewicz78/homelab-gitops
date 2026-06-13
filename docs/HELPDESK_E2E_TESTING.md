@@ -74,12 +74,13 @@ Test dynamicznego menu jest pomijany, jeśli nie ustawisz `HELPDESK_OPERATOR_EMA
 
 Test workflow tworzy tymczasową regułę automatyzacji ograniczoną do zgłoszeń testowych o priorytecie `Niski` i usuwa ją w bloku `finally`.
 Test uprawnień tymczasowo odbiera operatorowi `sla.view`/`sla.manage`, sprawdza menu i przywraca oryginalne uprawnienia w bloku `finally`.
+Testy Playwright są uruchamiane z `workers: 1`, ponieważ część scenariuszy modyfikuje globalne reguły workflow i nie powinna działać równolegle.
 
 ## Zbieranie wyników po błędzie
 
 ```bash
 tar -czf helpdesk-ui-test-results.tar.gz playwright-report test-results
-kubectl logs -n helpdesk deploy/helpdesk-app --tail=300 > helpdesk-app.log
+kubectl logs -n helpdesk deploy/helpdesk --tail=300 > helpdesk-app.log
 kubectl get pods -n helpdesk -o wide > helpdesk-pods.txt
 ```
 
