@@ -27,7 +27,7 @@ spec:
         app: helpdesk
       annotations:
         # Zmiana rewizji wymusza odtworzenie poda po aktualizacji kodu w ConfigMap.
-        helpdesk.incoprp.local/app-config-revision: "2026-06-13-friendly-condition-builder-v19"
+        helpdesk.incoprp.local/app-config-revision: "2026-06-13-workflow-scoped-conditions-v20"
 
     spec:
       # Pod-level securityContext:

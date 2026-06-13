@@ -307,9 +307,23 @@ def main() -> None:
     assert "function handleWorkflowAutomationEventChange()" in text
     assert "Reguła zadziała, jeżeli jednocześnie:" in text
     assert "Dodaj kolejny warunek" in text
+    assert "function workflowAutomationScope()" in text
+    assert "function workflowAutomationSubcategoryValues(rule, workflow, scope)" in text
+    assert "scopeLocked: opts.scope.category" in text
+    assert "scopeLocked: opts.scope.subcategory" in text
+    assert 'def normalize_workflow_automations(payload, steps, workflow_category="*", workflow_subcategory="*")' in text
+    assert "workflow_category=workflow_row[2]" in text
+    assert "workflow_subcategory=workflow_row[3]" in text
+    assert 'if workflow_category != "*":' in text
+    assert 'if workflow_subcategory != "*":' in text
+    assert "UPDATE workflow_automations wa" in text
+    assert "AND wd.category <> '*'" in text
+    assert "AND wd.subcategory <> '*'" in text
+    assert "Zakres odziedziczony z workflow:" in text
+    assert "Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie." in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-friendly-condition-builder-v19" in deployment_text
+    assert "2026-06-13-workflow-scoped-conditions-v20" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
