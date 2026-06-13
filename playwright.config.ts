@@ -5,6 +5,11 @@ export default defineConfig({
   timeout: 60_000,
   expect: { timeout: 15_000 },
   fullyParallel: false,
+
+  // Testy Helpdesku tworzą tymczasowe globalne reguły workflow,
+  // dlatego muszą uruchamiać się szeregowo bez równoległych workerów.
+  workers: 1,
+
   retries: 0,
   reporter: [['html', { outputFolder: 'playwright-report', open: 'never' }], ['list']],
   use: {
