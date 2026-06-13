@@ -3170,8 +3170,20 @@ data:
       .workflow-wizard-actions { display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin-top: 16px; }
       .workflow-wizard-actions .actions { margin-left: auto; }
       .workflow-advanced-settings summary { cursor: pointer; font-weight: 700; }
+      .workflow-condition-builder { display: grid; gap: 10px; margin: 12px 0; }
+      .workflow-condition-row { display: grid; grid-template-columns: minmax(150px, .8fr) minmax(130px, .65fr) minmax(190px, 1fr) auto; gap: 8px; align-items: end; padding: 12px; border: 1px solid rgba(56,189,248,.32); border-radius: 15px; background: rgba(2,132,199,.08); }
+      .workflow-condition-row label { margin: 0; color: var(--muted); font-size: 12px; }
+      .workflow-condition-row select { margin-top: 5px; }
+      .workflow-condition-row button { margin: 0; }
+      .workflow-condition-empty { padding: 16px; border: 1px dashed var(--border); border-radius: 14px; color: var(--muted); text-align: center; }
+      .workflow-condition-add { display: flex; gap: 8px; align-items: end; flex-wrap: wrap; margin-top: 12px; }
+      .workflow-condition-add > div { min-width: 260px; flex: 1; }
+      .workflow-condition-sentence { margin-top: 14px; padding: 13px 14px; border-left: 4px solid #38bdf8; border-radius: 10px; background: rgba(56,189,248,.10); line-height: 1.5; }
+      .workflow-condition-event-hint { margin-top: 10px; }
+      .workflow-condition-warning { margin-top: 10px; padding: 11px 13px; border: 1px solid rgba(251,191,36,.45); border-radius: 12px; background: rgba(245,158,11,.12); color: #fde68a; }
       @media (max-width: 760px) {
         .workflow-wizard-steps { grid-template-columns: 1fr 1fr; }
+        .workflow-condition-row { grid-template-columns: 1fr; }
       }
       .workflow-diagram-card { padding: 16px; margin: 12px 0; }
       .workflow-diagram-header { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 14px; }
@@ -5914,6 +5926,195 @@ data:
             }}))
             .filter(action => action.action_type !== "change_status" || !!action.action_value);
         }}
+        let workflowAutomationActiveConditionKeys = new Set();
+        function workflowAutomationConditionDefinitions(opts) {{
+          return [
+            {{ key: "status", label: "Status zgłoszenia", operator: "condition_status_operator", value: "condition_status", options: opts.statusOptions }},
+            {{ key: "to_status", label: "Nowy status", operator: "condition_to_status_operator", value: "condition_to_status", options: opts.toStatusOptions, events: ["status_changed"] }},
+            {{ key: "role", label: "Osoba wykonująca czynność", operator: "condition_role_operator", value: "condition_role", options: opts.roleOptions }},
+            {{ key: "visibility", label: "Rodzaj komentarza", operator: "condition_comment_visibility_operator", value: "condition_comment_visibility", options: opts.visibilityOptions, events: ["comment_added", "user_comment_added", "staff_comment_added"] }},
+            {{ key: "assigned", label: "Przypisanie zgłoszenia", operator: "assigned_state_operator", value: "assigned_state", options: opts.assignedOptions }},
+            {{ key: "priority", label: "Priorytet zgłoszenia", operator: "condition_priority_operator", value: "condition_priority", options: opts.priorityConditionOptions }},
+            {{ key: "category", label: "Kategoria zgłoszenia", operator: "condition_category_operator", value: "condition_category", options: opts.categoryConditionOptions }},
+            {{ key: "subcategory", label: "Podkategoria zgłoszenia", operator: "condition_subcategory_operator", value: "condition_subcategory", options: opts.subcategoryConditionOptions }},
+            {{ key: "sla", label: "Stan SLA", operator: "condition_sla_state_operator", value: "condition_sla_state", options: opts.slaConditionOptions }},
+          ];
+        }}
+        function workflowAutomationConditionAllowed(definition, eventType) {{
+          return !definition.events || definition.events.includes(eventType);
+        }}
+        function workflowAutomationConditionHasValue(rule, definition) {{
+          const value = rule[definition.value];
+          const operator = rule[definition.operator] || "eq";
+          return ["empty", "not_empty"].includes(operator) || (!!value && !["*", "any"].includes(String(value)));
+        }}
+        function workflowAutomationInitialConditionKeys(rule, opts) {{
+          return new Set(
+            workflowAutomationConditionDefinitions(opts)
+              .filter(definition => workflowAutomationConditionHasValue(rule, definition))
+              .map(definition => definition.key)
+          );
+        }}
+        function workflowAutomationFriendlyOperatorOptions(selected) {{
+          return automationSelectOptions([
+            {{ value: "eq", label: "jest" }},
+            {{ value: "neq", label: "nie jest" }},
+            {{ value: "contains", label: "zawiera" }},
+            {{ value: "not_contains", label: "nie zawiera" }},
+            {{ value: "empty", label: "jest puste" }},
+            {{ value: "not_empty", label: "nie jest puste" }},
+          ], selected || "eq");
+        }}
+        function workflowAutomationConditionRow(definition, rule) {{
+          return `
+            <div class="workflow-condition-row hidden" data-condition-key="${{esc(definition.key)}}">
+              <div>
+                <label>Jeżeli</label>
+                <strong>${{esc(definition.label)}}</strong>
+              </div>
+              <div>
+                <label>Sposób dopasowania</label>
+                <select name="${{esc(definition.operator)}}" onchange="syncWorkflowAutomationConditionRow('${{esc(definition.key)}}'); updateWorkflowAutomationConditionSentence();">
+                  ${{workflowAutomationFriendlyOperatorOptions(rule[definition.operator] || "eq")}}
+                </select>
+              </div>
+              <div>
+                <label>Wartość</label>
+                <select name="${{esc(definition.value)}}" onchange="updateWorkflowAutomationConditionSentence();">
+                  ${{definition.options}}
+                </select>
+              </div>
+              <button type="button" class="btn-danger btn-small" onclick="removeWorkflowAutomationCondition('${{esc(definition.key)}}'); return false;">Usuń</button>
+            </div>
+          `;
+        }}
+        function workflowAutomationConditionSelectedLabel(select) {{
+          if (!select) return "";
+          return select.options?.[select.selectedIndex]?.text || select.value || "";
+        }}
+        function workflowAutomationConditionSentenceParts() {{
+          const form = document.getElementById("workflowAutomationRuleForm");
+          if (!form) return [];
+          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          return workflowAutomationConditionDefinitions(opts)
+            .filter(definition => workflowAutomationActiveConditionKeys.has(definition.key))
+            .map(definition => {{
+              const operator = form.elements[definition.operator]?.value || "eq";
+              const valueSelect = form.elements[definition.value];
+              const value = valueSelect?.value || "";
+              if (!["empty", "not_empty"].includes(operator) && (!value || ["*", "any"].includes(value))) return "";
+              const operatorLabel = workflowAutomationFriendlyOperatorLabel(operator);
+              const valueLabel = ["empty", "not_empty"].includes(operator) ? "" : ` „${{workflowAutomationConditionSelectedLabel(valueSelect)}}”`;
+              return `${{definition.label.toLowerCase()}} ${{operatorLabel}}${{valueLabel}}`;
+            }})
+            .filter(Boolean);
+        }}
+        function workflowAutomationFriendlyOperatorLabel(operator) {{
+          const labels = {{ eq: "jest", neq: "nie jest", contains: "zawiera", not_contains: "nie zawiera", empty: "jest puste", not_empty: "nie jest puste" }};
+          return labels[operator || "eq"] || "jest";
+        }}
+        function updateWorkflowAutomationConditionSentence() {{
+          const preview = document.getElementById("workflowConditionSentencePreview");
+          if (!preview) return;
+          const parts = workflowAutomationConditionSentenceParts();
+          preview.innerHTML = parts.length
+            ? `<strong>Reguła zadziała, jeżeli jednocześnie:</strong> ${{esc(parts.join(" oraz "))}}.`
+            : `<strong>Bez dodatkowych warunków.</strong> Reguła sprawdzi każde wystąpienie wybranego zdarzenia.`;
+        }}
+        function syncWorkflowAutomationConditionRow(key) {{
+          const form = document.getElementById("workflowAutomationRuleForm");
+          if (!form) return;
+          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          const definition = workflowAutomationConditionDefinitions(opts).find(item => item.key === key);
+          if (!definition) return;
+          const operator = form.elements[definition.operator]?.value || "eq";
+          const valueSelect = form.elements[definition.value];
+          if (valueSelect) valueSelect.disabled = ["empty", "not_empty"].includes(operator);
+        }}
+        function renderWorkflowAutomationConditionBuilder() {{
+          const form = document.getElementById("workflowAutomationRuleForm");
+          const addSelect = document.getElementById("workflowConditionAddSelect");
+          const emptyState = document.getElementById("workflowConditionEmpty");
+          if (!form || !addSelect) return;
+          const eventType = form.elements.event_type?.value || "comment_added";
+          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          const definitions = workflowAutomationConditionDefinitions(opts);
+          let visibleCount = 0;
+          const incompatible = [];
+          definitions.forEach(definition => {{
+            const row = form.querySelector(`[data-condition-key="${{definition.key}}"]`);
+            const visible = workflowAutomationActiveConditionKeys.has(definition.key);
+            if (row) row.classList.toggle("hidden", !visible);
+            if (visible) {{
+              visibleCount += 1;
+              if (!workflowAutomationConditionAllowed(definition, eventType)) incompatible.push(definition.label);
+              syncWorkflowAutomationConditionRow(definition.key);
+            }}
+          }});
+          const available = definitions.filter(definition =>
+            workflowAutomationConditionAllowed(definition, eventType)
+            && !workflowAutomationActiveConditionKeys.has(definition.key)
+          );
+          addSelect.innerHTML = `<option value="">Wybierz warunek...</option>` + available
+            .map(definition => `<option value="${{esc(definition.key)}}">${{esc(definition.label)}}</option>`)
+            .join("");
+          if (emptyState) emptyState.classList.toggle("hidden", visibleCount > 0);
+          const warning = document.getElementById("workflowConditionCompatibilityWarning");
+          if (warning) {{
+            warning.classList.toggle("hidden", incompatible.length === 0);
+            warning.textContent = incompatible.length
+              ? `Te warunki nie pasują do wybranego zdarzenia: ${{incompatible.join(", ")}}. Zmień zdarzenie albo usuń warunek.`
+              : "";
+          }}
+          updateWorkflowAutomationConditionSentence();
+          const preview = document.getElementById("workflowAutomationRulePreview");
+          if (preview) preview.innerHTML = workflowAutomationRuleDiagram(workflowAutomationRuleFromForm(form));
+        }}
+        function addWorkflowAutomationCondition() {{
+          const select = document.getElementById("workflowConditionAddSelect");
+          const key = select?.value || "";
+          if (!key) return;
+          workflowAutomationActiveConditionKeys.add(key);
+          renderWorkflowAutomationConditionBuilder();
+          const row = document.querySelector(`[data-condition-key="${{key}}"]`);
+          row?.scrollIntoView({{ behavior: "smooth", block: "nearest" }});
+        }}
+        function removeWorkflowAutomationCondition(key) {{
+          const form = document.getElementById("workflowAutomationRuleForm");
+          if (!form) return;
+          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          const definition = workflowAutomationConditionDefinitions(opts).find(item => item.key === key);
+          if (definition) {{
+            const operatorSelect = form.elements[definition.operator];
+            const valueSelect = form.elements[definition.value];
+            if (operatorSelect) operatorSelect.value = "eq";
+            if (valueSelect) {{
+              const wildcard = Array.from(valueSelect.options || []).find(option => ["", "*", "any"].includes(option.value));
+              valueSelect.value = wildcard ? wildcard.value : "";
+              valueSelect.disabled = false;
+            }}
+          }}
+          workflowAutomationActiveConditionKeys.delete(key);
+          renderWorkflowAutomationConditionBuilder();
+        }}
+        function handleWorkflowAutomationEventChange() {{
+          const form = document.getElementById("workflowAutomationRuleForm");
+          if (!form) return;
+          const eventType = form.elements.event_type?.value || "comment_added";
+          const opts = workflowAutomationFormOptions(workflowAutomationRuleFromForm(form));
+          const removed = [];
+          workflowAutomationConditionDefinitions(opts).forEach(definition => {{
+            if (workflowAutomationActiveConditionKeys.has(definition.key)
+                && !workflowAutomationConditionAllowed(definition, eventType)) {{
+              removed.push(definition.label);
+              removeWorkflowAutomationCondition(definition.key);
+            }}
+          }});
+          renderWorkflowAutomationConditionBuilder();
+          if (removed.length) showToast("Dostosowano warunki", `Usunięto: ${{removed.join(", ")}}`);
+          const testEvent = form.elements.test_event_type;
+          if (testEvent) testEvent.value = eventType;
+        }}
         let workflowAutomationRuleFormStage = 1;
         function workflowAutomationRuleInvalidField(stage) {{
           const section = document.querySelector(`[data-rule-stage="${{stage}}"]`);
@@ -6021,69 +6222,23 @@ data:
 
                 <section class="workflow-form-stage hidden" data-rule-stage="2">
                   <div class="workflow-form-stage-header">
-                    <h3>Warunki dopasowania</h3>
-                    <p class="muted">Pozostaw „dowolny”, jeśli dany warunek nie ma ograniczać reguły.</p>
+                    <h3>Kiedy dokładnie reguła ma zadziałać?</h3>
+                    <p class="muted">Dodawaj tylko potrzebne warunki. Wszystkie dodane warunki muszą być spełnione jednocześnie.</p>
                   </div>
-                  <div class="grid">
-                    <div>
-                      <label>Status przed zmianą / status bieżący</label>
-                      <select name="condition_status">${{opts.statusOptions}}</select>
-                      <div class="attachment-upload-hint">Dla zdarzenia „Zmieniono status” oznacza status <strong>z</strong>.</div>
-                    </div>
-                    <div>
-                      <label>Status po zmianie</label>
-                      <select name="condition_to_status">${{opts.toStatusOptions}}</select>
-                      <div class="attachment-upload-hint">Dla zdarzenia „Zmieniono status” oznacza status <strong>na</strong>.</div>
-                    </div>
-                    <div>
-                      <label>Rola wykonawcy</label>
-                      <select name="condition_role">${{opts.roleOptions}}</select>
-                    </div>
+                  <div id="workflowConditionEmpty" class="workflow-condition-empty">Brak dodatkowych warunków. Reguła sprawdzi każde wystąpienie wybranego zdarzenia.</div>
+                  <div id="workflowConditionBuilder" class="workflow-condition-builder">
+                    ${{workflowAutomationConditionDefinitions(opts).map(definition => workflowAutomationConditionRow(definition, sourceRule)).join("")}}
                   </div>
-                  <details class="card workflow-advanced-settings">
-                    <summary>Dodatkowe warunki</summary>
-                    <div class="grid" style="margin-top:12px">
+                  <div id="workflowConditionCompatibilityWarning" class="workflow-condition-warning hidden"></div>
+                  <div class="workflow-condition-add">
                     <div>
-                      <label>Typ komentarza</label>
-                      <select name="condition_comment_visibility">${{opts.visibilityOptions}}</select>
+                      <label>Dodaj kolejny warunek</label>
+                      <select id="workflowConditionAddSelect"><option value="">Wybierz warunek...</option></select>
                     </div>
-                    <div>
-                      <label>Przypisanie zgłoszenia</label>
-                      <select name="assigned_state">${{opts.assignedOptions}}</select>
-                    </div>
-                    <div>
-                      <label>Priorytet zgłoszenia</label>
-                      <select name="condition_priority">${{opts.priorityConditionOptions}}</select>
-                    </div>
-                    <div>
-                      <label>Kategoria zgłoszenia</label>
-                      <select name="condition_category">${{opts.categoryConditionOptions}}</select>
-                    </div>
-                    <div>
-                      <label>Podkategoria zgłoszenia</label>
-                      <select name="condition_subcategory">${{opts.subcategoryConditionOptions}}</select>
-                    </div>
-                    <div>
-                      <label>Stan SLA</label>
-                      <select name="condition_sla_state">${{opts.slaConditionOptions}}</select>
-                    </div>
+                    <button type="button" onclick="addWorkflowAutomationCondition(); return false;">Dodaj warunek</button>
                   </div>
-                  </details>
-                  <details class="card workflow-advanced-settings">
-                    <summary>Zaawansowane operatory porównań</summary>
-                    <p class="muted">Domyślnie warunek oznacza „jest równe”. Zmień operator tylko dla bardziej złożonych reguł.</p>
-                    <div class="grid">
-                      <div><label>Status bieżący</label><select name="condition_status_operator">${{opts.conditionStatusOperatorOptions}}</select></div>
-                      <div><label>Status docelowy</label><select name="condition_to_status_operator">${{opts.conditionToStatusOperatorOptions}}</select></div>
-                      <div><label>Rola wykonawcy</label><select name="condition_role_operator">${{opts.conditionRoleOperatorOptions}}</select></div>
-                      <div><label>Typ komentarza</label><select name="condition_comment_visibility_operator">${{opts.conditionCommentVisibilityOperatorOptions}}</select></div>
-                      <div><label>Przypisanie</label><select name="assigned_state_operator">${{opts.assignedStateOperatorOptions}}</select></div>
-                      <div><label>Priorytet</label><select name="condition_priority_operator">${{opts.priorityConditionOperatorOptions}}</select></div>
-                      <div><label>Kategoria</label><select name="condition_category_operator">${{opts.categoryConditionOperatorOptions}}</select></div>
-                      <div><label>Podkategoria</label><select name="condition_subcategory_operator">${{opts.subcategoryConditionOperatorOptions}}</select></div>
-                      <div><label>SLA</label><select name="condition_sla_state_operator">${{opts.slaConditionOperatorOptions}}</select></div>
-                    </div>
-                  </details>
+                  <div id="workflowConditionSentencePreview" class="workflow-condition-sentence"></div>
+                  <div class="attachment-upload-hint workflow-condition-event-hint">Lista dostępnych warunków dopasowuje się automatycznie do zdarzenia wybranego w pierwszym kroku.</div>
                   <div class="card" style="padding:12px;margin:12px 0">
                     <h4 style="margin-top:0">Czy operacja ma wymagać potwierdzenia?</h4>
                     <p class="muted">Te opcje mogą zablokować zmianę statusu, dopóki operator nie uzupełni wymaganych informacji.</p>
@@ -6226,7 +6381,9 @@ data:
           if (testSubcategory) testSubcategory.value = sourceRule.condition_subcategory || "*";
           const testSlaState = modal.querySelector('select[name="test_sla_state"]');
           if (testSlaState) testSlaState.value = sourceRule.condition_sla_state || "*";
+          workflowAutomationActiveConditionKeys = workflowAutomationInitialConditionKeys(sourceRule, opts);
           renderWorkflowAutomationActionsForm();
+          renderWorkflowAutomationConditionBuilder();
           setWorkflowAutomationRuleFormStage(1, true);
           const form = document.getElementById("workflowAutomationRuleForm");
           const updatePreview = () => {{
@@ -6238,6 +6395,8 @@ data:
             el.addEventListener("input", updatePreview);
             el.addEventListener("change", updatePreview);
           }});
+          const eventField = form.elements.event_type;
+          if (eventField) eventField.addEventListener("change", handleWorkflowAutomationEventChange);
           form.addEventListener("submit", saveWorkflowAutomationRuleForm);
           updatePreview();
         }}
