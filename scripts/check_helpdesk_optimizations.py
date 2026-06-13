@@ -246,9 +246,13 @@ def main() -> None:
     assert "submitKnowledgeFeedback" in text
     assert "knowledge_article_feedback" in text
     assert "BOOL_OR(helpful) FILTER" in text
+    assert "knowledgeQualityFilter" in text
+    assert "Wymaga poprawy" in text
+    assert "COALESCE(feedback.not_helpful_count, 0) > 0" in text
+    assert '"quality_filters": ["needs_review", "unrated"]' in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-12-knowledge-feedback-v11" in deployment_text
+    assert "2026-06-13-knowledge-quality-v12" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

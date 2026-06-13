@@ -6659,15 +6659,23 @@ data:
             archived: "Archiwalny"
           }})[status] || status;
         }}
+        function knowledgeQualityLabel(quality) {{
+          return ({{
+            needs_review: "Wymaga poprawy",
+            unrated: "Bez ocen"
+          }})[quality] || quality;
+        }}
         async function renderKnowledgeArticles() {{
           currentView = {{ name: "knowledge", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
           const query = sessionStorage.getItem("helpdesk_knowledge_q") || "";
           const status = sessionStorage.getItem("helpdesk_knowledge_status") || "all";
+          const quality = sessionStorage.getItem("helpdesk_knowledge_quality") || "all";
           const params = new URLSearchParams();
           if (query) params.set("q", query);
           if (canWorkTickets(me) && status !== "all") params.set("status", status);
+          if (canWorkTickets(me) && quality !== "all") params.set("quality", quality);
           const res = await api(`/api/knowledge-articles?${{params.toString()}}`);
           if (!res || !res.ok) {{
             appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać bazy wiedzy</h2></section>`;
@@ -6685,6 +6693,16 @@ data:
                 ).join("")}}
               </select>
             </div>` : "";
+          const qualityFilter = canWorkTickets(me) ? `
+            <div class="filter-field">
+              <label>Jakość</label>
+              <select id="knowledgeQualityFilter">
+                <option value="all" ${{quality === "all" ? "selected" : ""}}>Wszystkie</option>
+                ${{(data.meta?.quality_filters || []).map(value =>
+                  `<option value="${{esc(value)}}" ${{quality === value ? "selected" : ""}}>${{esc(knowledgeQualityLabel(value))}}</option>`
+                ).join("")}}
+              </select>
+            </div>` : "";
           const cards = articles.length ? articles.map(article => `
             <section class="card knowledge-card" onclick="renderKnowledgeArticle(${{article.id}})">
               <div class="ticket-section-title">
@@ -6695,6 +6713,10 @@ data:
                 <span class="chip">${{esc(article.category)}}</span>
                 <span class="chip">${{esc(article.subcategory)}}</span>
                 ${{article.source_ticket_id ? `<span class="chip">Źródło: #${{article.source_ticket_id}}</span>` : ""}}
+                ${{canWorkTickets(me) ? `<span class="chip">Pomogło: ${{article.helpful_count || 0}}</span>` : ""}}
+                ${{canWorkTickets(me) ? `<span class="chip">Nie pomogło: ${{article.not_helpful_count || 0}}</span>` : ""}}
+                ${{canWorkTickets(me) && article.not_helpful_count > 0 && article.not_helpful_count >= article.helpful_count
+                  ? `<span class="pill">Wymaga poprawy</span>` : ""}}
               </div>
               <p>${{esc(article.problem)}}</p>
               <p class="muted">Aktualizacja: ${{esc(article.updated_at)}}${{article.updated_by_name ? " · " + esc(article.updated_by_name) : ""}}</p>
@@ -6718,6 +6740,7 @@ data:
                   </form>
                 </div>
                 ${{statusFilter}}
+                ${{qualityFilter}}
               </div>
             </section>
             <div class="incident-grid">${{cards}}</div>
@@ -6729,6 +6752,10 @@ data:
           }});
           document.getElementById("knowledgeStatusFilter")?.addEventListener("change", event => {{
             sessionStorage.setItem("helpdesk_knowledge_status", event.target.value || "all");
+            renderKnowledgeArticles();
+          }});
+          document.getElementById("knowledgeQualityFilter")?.addEventListener("change", event => {{
+            sessionStorage.setItem("helpdesk_knowledge_quality", event.target.value || "all");
             renderKnowledgeArticles();
           }});
         }}
@@ -9862,14 +9889,25 @@ data:
     def api_knowledge_articles(user):
         query = clean(request.args.get("q"))
         requested_status = clean(request.args.get("status"))
+        requested_quality = clean(request.args.get("quality"))
+        quality = requested_quality if requested_quality in ("needs_review", "unrated") else "all"
         clauses = []
         params = []
         if is_staff(user):
             if requested_status in KNOWLEDGE_STATUSES:
                 clauses.append("ka.status = %s")
                 params.append(requested_status)
+            if quality == "needs_review":
+                clauses.append("""
+                    COALESCE(feedback.not_helpful_count, 0) > 0
+                    AND COALESCE(feedback.not_helpful_count, 0)
+                        >= COALESCE(feedback.helpful_count, 0)
+                """)
+            elif quality == "unrated":
+                clauses.append("COALESCE(feedback.total_count, 0) = 0")
         else:
             clauses.append("ka.status = 'published'")
+            quality = "all"
         if query:
             pattern = f"%{query}%"
             clauses.append("""
@@ -9889,8 +9927,19 @@ data:
               ka.category, ka.subcategory, ka.status,
               ka.source_ticket_id,
               COALESCE(ka.updated_by_name, ka.created_by_name, ''),
-              ka.updated_at, ka.published_at
+              ka.updated_at, ka.published_at,
+              COALESCE(feedback.helpful_count, 0),
+              COALESCE(feedback.not_helpful_count, 0)
             FROM knowledge_articles ka
+            LEFT JOIN (
+              SELECT
+                article_id,
+                COUNT(*) FILTER (WHERE helpful = TRUE) AS helpful_count,
+                COUNT(*) FILTER (WHERE helpful = FALSE) AS not_helpful_count,
+                COUNT(*) AS total_count
+              FROM knowledge_article_feedback
+              GROUP BY article_id
+            ) feedback ON feedback.article_id = ka.id
             {where_sql}
             ORDER BY
               CASE ka.status WHEN 'published' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
@@ -9910,14 +9959,17 @@ data:
             "updated_by_name": row[8],
             "updated_at": str(row[9]),
             "published_at": str(row[10]) if row[10] else "",
+            "helpful_count": int(row[11] or 0),
+            "not_helpful_count": int(row[12] or 0),
         } for row in cur.fetchall()]
         cur.close()
         conn.close()
         return jsonify({
             "articles": articles,
-            "filter": {"q": query, "status": requested_status},
+            "filter": {"q": query, "status": requested_status, "quality": quality},
             "meta": {
                 "statuses": KNOWLEDGE_STATUSES,
+                "quality_filters": ["needs_review", "unrated"],
                 "categories": CATEGORIES,
                 "subcategories": SUBCATEGORIES,
             },
