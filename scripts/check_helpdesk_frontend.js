@@ -41,4 +41,21 @@ for (const fragment of requiredFeedbackFlow) {
   }
 }
 
+const requiredWorkflowDiagram = [
+  "workflowAutomationRuleDiagram(rule)",
+  "workflowAutomationDiagramConditions(rule)",
+  "workflowAutomationRuleDiagramCard(rule, idx)",
+  "helpdesk_workflow_automation_view",
+  "workflowAutomationListViewButton",
+  "workflowAutomationDiagramViewButton",
+  "Warunki: ORAZ",
+  "Szablony automatyzacji",
+  "preview.innerHTML = workflowAutomationRuleDiagram",
+];
+for (const fragment of requiredWorkflowDiagram) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing workflow diagram fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
