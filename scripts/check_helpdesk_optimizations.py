@@ -296,12 +296,20 @@ def main() -> None:
     assert "function workflowAutomationRuleInvalidField(stage)" in text
     assert 'data-rule-stage="1"' in text
     assert 'data-rule-stage="4"' in text
-    assert "Zaawansowane operatory porównań" in text
+    assert "Kiedy dokładnie reguła ma zadziałać?" in text
+    assert "Sposób dopasowania" in text
     assert "Test i aktywacja" in text
     assert "Aktywuj regułę po zapisaniu" in text
+    assert "function workflowAutomationConditionDefinitions(opts)" in text
+    assert "function renderWorkflowAutomationConditionBuilder()" in text
+    assert "function addWorkflowAutomationCondition()" in text
+    assert "function removeWorkflowAutomationCondition(key)" in text
+    assert "function handleWorkflowAutomationEventChange()" in text
+    assert "Reguła zadziała, jeżeli jednocześnie:" in text
+    assert "Dodaj kolejny warunek" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-automation-rule-wizard-v18" in deployment_text
+    assert "2026-06-13-friendly-condition-builder-v19" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

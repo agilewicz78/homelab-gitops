@@ -128,9 +128,9 @@ const requiredAutomationRuleWizard = [
   'data-rule-stage="3"',
   'data-rule-stage="4"',
   "Nazwa i zdarzenie",
-  "Warunki dopasowania",
-  "Dodatkowe warunki",
-  "Zaawansowane operatory porównań",
+  "Kiedy dokładnie reguła ma zadziałać?",
+  "Dodaj kolejny warunek",
+  "Sposób dopasowania",
   "Test i aktywacja",
   "Aktywuj regułę po zapisaniu",
   'id="workflowRuleStageBack"',
@@ -140,6 +140,26 @@ const requiredAutomationRuleWizard = [
 for (const fragment of requiredAutomationRuleWizard) {
   if (!text.includes(fragment)) {
     throw new Error(`Missing automation rule wizard fragment: ${fragment}`);
+  }
+}
+
+const requiredFriendlyConditionBuilder = [
+  "workflowAutomationConditionDefinitions(opts)",
+  "workflowAutomationActiveConditionKeys",
+  "workflowAutomationConditionRow(definition, rule)",
+  "renderWorkflowAutomationConditionBuilder()",
+  "addWorkflowAutomationCondition()",
+  "removeWorkflowAutomationCondition(key)",
+  "handleWorkflowAutomationEventChange()",
+  'id="workflowConditionAddSelect"',
+  'id="workflowConditionSentencePreview"',
+  "Dodaj kolejny warunek",
+  "Reguła zadziała, jeżeli jednocześnie:",
+  "Lista dostępnych warunków dopasowuje się automatycznie",
+];
+for (const fragment of requiredFriendlyConditionBuilder) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing friendly condition builder fragment: ${fragment}`);
   }
 }
 
