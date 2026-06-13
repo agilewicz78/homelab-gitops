@@ -5786,8 +5786,12 @@ data:
         }}
         function workflowAutomationScope() {{
           const workflow = workflowAutomationEditorWorkflow || {{}};
-          const category = String(workflow.category || "*");
-          const subcategory = category === "*" ? "*" : String(workflow.subcategory || "*");
+          const categoryField = document.getElementById("workflowCategorySelect");
+          const subcategoryField = document.getElementById("workflowSubcategorySelect");
+          const category = String(categoryField?.value || workflow.category || "*");
+          const subcategory = category === "*"
+            ? "*"
+            : String(subcategoryField?.value || workflow.subcategory || "*");
           return {{ category, subcategory }};
         }}
         function workflowAutomationScopeText() {{
@@ -7207,6 +7211,13 @@ data:
           setWorkflowFormStage(1);
           document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
             updateWorkflowSubcategoryOptions(meta, e.target.value, "*");
+            if (workflowAutomationEditorWorkflow) {{
+              workflowAutomationEditorWorkflow.category = e.target.value;
+              workflowAutomationEditorWorkflow.subcategory = document.getElementById("workflowSubcategorySelect")?.value || "*";
+            }}
+          }});
+          document.getElementById("workflowSubcategorySelect").addEventListener("change", (e) => {{
+            if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.subcategory = e.target.value;
           }});
           document.getElementById("workflowForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
@@ -7234,6 +7245,19 @@ data:
                   condition_role: rule.condition_role || "*",
                   condition_comment_visibility: rule.condition_comment_visibility || "*",
                   assigned_state: rule.assigned_state || "*",
+                  condition_priority: rule.condition_priority || "*",
+                  condition_category: rule.condition_category || "*",
+                  condition_subcategory: rule.condition_subcategory || "*",
+                  condition_sla_state: rule.condition_sla_state || "*",
+                  condition_status_operator: rule.condition_status_operator || "eq",
+                  condition_to_status_operator: rule.condition_to_status_operator || "eq",
+                  condition_role_operator: rule.condition_role_operator || "eq",
+                  condition_comment_visibility_operator: rule.condition_comment_visibility_operator || "eq",
+                  assigned_state_operator: rule.assigned_state_operator || "eq",
+                  condition_priority_operator: rule.condition_priority_operator || "eq",
+                  condition_category_operator: rule.condition_category_operator || "eq",
+                  condition_subcategory_operator: rule.condition_subcategory_operator || "eq",
+                  condition_sla_state_operator: rule.condition_sla_state_operator || "eq",
                   action_type: (workflowAutomationRuleActions(rule)[0]?.action_type) || rule.action_type || "change_status",
                   action_status: (workflowAutomationRuleActions(rule)[0]?.action_value) || rule.action_status || "",
                   actions: workflowAutomationRuleActions(rule).map((action, idx) => ({{

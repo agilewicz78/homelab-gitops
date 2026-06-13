@@ -157,6 +157,8 @@ const requiredFriendlyConditionBuilder = [
   "Reguła zadziała, jeżeli jednocześnie:",
   "Lista dostępnych warunków dopasowuje się automatycznie",
   "workflowAutomationScope()",
+  'document.getElementById("workflowCategorySelect")',
+  'document.getElementById("workflowSubcategorySelect")',
   "workflowAutomationScopeText()",
   "workflowAutomationSubcategoryValues(rule, workflow, scope)",
   "resetWorkflowAutomationInheritedCondition(form, definition)",
