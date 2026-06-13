@@ -156,6 +156,13 @@ data:
     INCIDENT_SEVERITIES = ["SEV1", "SEV2", "SEV3", "SEV4"]
     INCIDENT_STATUSES = ["investigating", "identified", "monitoring", "resolved"]
     KNOWLEDGE_STATUSES = ["draft", "published", "archived"]
+    KNOWLEDGE_FEEDBACK_REASONS = {
+        "outdated": "Informacja jest nieaktualna",
+        "unclear": "Instrukcja jest niejasna",
+        "incomplete": "Brakuje kroków lub informacji",
+        "did_not_solve": "Instrukcja nie rozwiązuje problemu",
+        "other": "Inny powód",
+    }
     STANDARD_STATUSES = [
         "Nowe",
         "Otwarte",
@@ -1336,11 +1343,15 @@ data:
                         article_id INTEGER REFERENCES knowledge_articles(id) ON DELETE CASCADE,
                         user_email TEXT NOT NULL REFERENCES users(email) ON DELETE CASCADE,
                         helpful BOOLEAN NOT NULL,
+                        reason_code TEXT,
+                        reason_comment TEXT,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW(),
                         PRIMARY KEY (article_id, user_email)
                     );
                 """)
+                cur.execute("ALTER TABLE knowledge_article_feedback ADD COLUMN IF NOT EXISTS reason_code TEXT")
+                cur.execute("ALTER TABLE knowledge_article_feedback ADD COLUMN IF NOT EXISTS reason_comment TEXT")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS audit_log (
                         id SERIAL PRIMARY KEY,
@@ -3369,6 +3380,28 @@ data:
           </form>
         </div>
       </div>
+      <div id="knowledgeFeedbackModal" class="modal-backdrop hidden">
+        <div class="modal-card">
+          <div class="modal-header">
+            <div>
+              <h2>Dlaczego artykuł nie pomógł?</h2>
+              <p class="muted">Ta informacja trafi do operatorów i pomoże poprawić instrukcję.</p>
+            </div>
+            <button class="btn-secondary btn-small" onclick="closeKnowledgeFeedbackModal(); return false;">✕</button>
+          </div>
+          <form id="knowledgeFeedbackForm">
+            <label>Powód</label>
+            <select name="reason_code" id="knowledgeFeedbackReason" required></select>
+            <label>Co konkretnie warto poprawić? <span class="muted">(opcjonalnie)</span></label>
+            <textarea name="reason_comment" id="knowledgeFeedbackComment" rows="4" maxlength="500" placeholder="Np. krok 3 nie odpowiada aktualnemu wyglądowi aplikacji."></textarea>
+            <div class="attachment-upload-hint">Komentarz jest widoczny tylko dla operatorów i administratorów.</div>
+            <div class="modal-actions">
+              <button type="button" class="btn-secondary" onclick="closeKnowledgeFeedbackModal(); return false;">Anuluj</button>
+              <button type="submit">Wyślij opinię</button>
+            </div>
+          </form>
+        </div>
+      </div>
       <script>
         const appEl = document.getElementById("app");
         const userBadge = document.getElementById("userBadge");
@@ -3390,6 +3423,7 @@ data:
         let reopenTicketId = null;
         let incidentCreationContext = null;
         let knowledgeArticleContext = null;
+        let knowledgeFeedbackContext = null;
         let knowledgeSuggestionTimer = null;
         let knowledgeSuggestionRequest = 0;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
@@ -6717,6 +6751,9 @@ data:
                 ${{canWorkTickets(me) ? `<span class="chip">Nie pomogło: ${{article.not_helpful_count || 0}}</span>` : ""}}
                 ${{canWorkTickets(me) && article.not_helpful_count > 0 && article.not_helpful_count >= article.helpful_count
                   ? `<span class="pill">Wymaga poprawy</span>` : ""}}
+                ${{canWorkTickets(me) ? (article.reason_counts || []).slice(0, 2).map(reason =>
+                  `<span class="chip">${{esc(reason.label)}}: ${{reason.count}}</span>`
+                ).join("") : ""}}
               </div>
               <p>${{esc(article.problem)}}</p>
               <p class="muted">Aktualizacja: ${{esc(article.updated_at)}}${{article.updated_by_name ? " · " + esc(article.updated_by_name) : ""}}</p>
@@ -6770,7 +6807,21 @@ data:
           }}
           const data = await res.json();
           const article = data.article;
-          const feedback = data.feedback || {{ helpful: 0, not_helpful: 0, my_feedback: null }};
+          const feedback = data.feedback || {{
+            helpful: 0,
+            not_helpful: 0,
+            my_feedback: null,
+            my_reason: "",
+            my_comment: "",
+            reason_counts: [],
+            reason_comments: []
+          }};
+          knowledgeFeedbackContext = {{
+            articleId: article.id,
+            reasons: data.meta?.feedback_reasons || [],
+            myReason: feedback.my_reason || "",
+            myComment: feedback.my_comment || ""
+          }};
           knowledgeArticleContext = canWorkTickets(me) ? {{
             mode: "edit",
             article,
@@ -6803,10 +6854,33 @@ data:
                     <button class="${{feedback.my_feedback === true ? "" : "btn-secondary"}}" onclick="submitKnowledgeFeedback(${{article.id}}, true)">
                       Pomogło · ${{feedback.helpful}}
                     </button>
-                    <button class="${{feedback.my_feedback === false ? "" : "btn-secondary"}}" onclick="submitKnowledgeFeedback(${{article.id}}, false)">
+                    <button class="${{feedback.my_feedback === false ? "" : "btn-secondary"}}" onclick="openKnowledgeFeedbackModal()">
                       Nie pomogło · ${{feedback.not_helpful}}
                     </button>
                   </div>
+                </section>
+              ` : ""}}
+              ${{canWorkTickets(me) && feedback.not_helpful > 0 ? `
+                <section class="panel-soft">
+                  <h3>Dlaczego artykuł nie pomógł</h3>
+                  <div class="incident-meta">
+                    ${{(feedback.reason_counts || []).length
+                      ? feedback.reason_counts.map(reason =>
+                          `<span class="chip">${{esc(reason.label)}}: ${{reason.count}}</span>`
+                        ).join("")
+                      : `<span class="muted">Starsze negatywne oceny nie zawierają jeszcze powodu.</span>`}}
+                  </div>
+                  ${{(feedback.reason_comments || []).length ? `
+                    <div class="timeline">
+                      ${{feedback.reason_comments.map(item => `
+                        <div class="timeline-item">
+                          <strong>${{esc(item.reason_label)}}</strong>
+                          <p>${{esc(item.comment)}}</p>
+                          <span class="muted">${{esc(item.updated_at)}}</span>
+                        </div>
+                      `).join("")}}
+                    </div>
+                  ` : ""}}
                 </section>
               ` : ""}}
               <p class="muted">Utworzono: ${{esc(article.created_at)}} · aktualizacja: ${{esc(article.updated_at)}} · ${{esc(article.updated_by_name || article.created_by_name)}}</p>
@@ -6814,11 +6888,35 @@ data:
             </section>
           `;
         }}
-        async function submitKnowledgeFeedback(articleId, helpful) {{
+        function openKnowledgeFeedbackModal() {{
+          const context = knowledgeFeedbackContext;
+          const modal = document.getElementById("knowledgeFeedbackModal");
+          const form = document.getElementById("knowledgeFeedbackForm");
+          const reasonSelect = document.getElementById("knowledgeFeedbackReason");
+          const commentInput = document.getElementById("knowledgeFeedbackComment");
+          if (!context || !modal || !form || !reasonSelect || !commentInput) return;
+          reasonSelect.innerHTML = `
+            <option value="">Wybierz powód...</option>
+            ${{context.reasons.map(reason =>
+              `<option value="${{esc(reason.code)}}">${{esc(reason.label)}}</option>`
+            ).join("")}}
+          `;
+          reasonSelect.value = context.myReason || "";
+          commentInput.value = context.myComment || "";
+          modal.classList.remove("hidden");
+        }}
+        function closeKnowledgeFeedbackModal() {{
+          document.getElementById("knowledgeFeedbackModal")?.classList.add("hidden");
+        }}
+        async function submitKnowledgeFeedback(articleId, helpful, reasonCode = "", reasonComment = "") {{
           suppressNextLiveRefresh = true;
           const res = await api(`/api/knowledge-articles/${{articleId}}/feedback`, {{
             method: "POST",
-            body: JSON.stringify({{ helpful }})
+            body: JSON.stringify({{
+              helpful,
+              reason_code: reasonCode,
+              reason_comment: reasonComment
+            }})
           }});
           if (!res || !res.ok) {{
             suppressNextLiveRefresh = false;
@@ -6826,9 +6924,21 @@ data:
             alert(err.error || "Nie udało się zapisać oceny artykułu.");
             return;
           }}
+          closeKnowledgeFeedbackModal();
           showToast(helpful ? "Dziękujemy za pozytywną ocenę" : "Dziękujemy za informację");
           await renderKnowledgeArticle(articleId);
         }}
+        document.getElementById("knowledgeFeedbackForm")?.addEventListener("submit", async event => {{
+          event.preventDefault();
+          if (!knowledgeFeedbackContext) return;
+          const payload = Object.fromEntries(new FormData(event.target).entries());
+          await submitKnowledgeFeedback(
+            knowledgeFeedbackContext.articleId,
+            false,
+            payload.reason_code || "",
+            payload.reason_comment || ""
+          );
+        }});
         function incidentStatusLabel(status) {{
           return ({{
             investigating: "Badanie",
@@ -9929,7 +10039,8 @@ data:
               COALESCE(ka.updated_by_name, ka.created_by_name, ''),
               ka.updated_at, ka.published_at,
               COALESCE(feedback.helpful_count, 0),
-              COALESCE(feedback.not_helpful_count, 0)
+              COALESCE(feedback.not_helpful_count, 0),
+              COALESCE(reasons.reason_counts, '')
             FROM knowledge_articles ka
             LEFT JOIN (
               SELECT
@@ -9940,6 +10051,18 @@ data:
               FROM knowledge_article_feedback
               GROUP BY article_id
             ) feedback ON feedback.article_id = ka.id
+            LEFT JOIN (
+              SELECT
+                article_id,
+                string_agg(reason_code || '=' || reason_count, ',' ORDER BY reason_count DESC, reason_code) AS reason_counts
+              FROM (
+                SELECT article_id, reason_code, COUNT(*) AS reason_count
+                FROM knowledge_article_feedback
+                WHERE helpful = FALSE AND reason_code IS NOT NULL
+                GROUP BY article_id, reason_code
+              ) grouped_reasons
+              GROUP BY article_id
+            ) reasons ON reasons.article_id = ka.id
             {where_sql}
             ORDER BY
               CASE ka.status WHEN 'published' THEN 1 WHEN 'draft' THEN 2 ELSE 3 END,
@@ -9961,6 +10084,11 @@ data:
             "published_at": str(row[10]) if row[10] else "",
             "helpful_count": int(row[11] or 0),
             "not_helpful_count": int(row[12] or 0),
+            "reason_counts": [{
+                "code": item.split("=", 1)[0],
+                "label": KNOWLEDGE_FEEDBACK_REASONS.get(item.split("=", 1)[0], item.split("=", 1)[0]),
+                "count": int(item.split("=", 1)[1]),
+            } for item in str(row[13] or "").split(",") if "=" in item] if is_staff(user) else [],
         } for row in cur.fetchall()]
         cur.close()
         conn.close()
@@ -9970,6 +10098,10 @@ data:
             "meta": {
                 "statuses": KNOWLEDGE_STATUSES,
                 "quality_filters": ["needs_review", "unrated"],
+                "feedback_reasons": [
+                    {"code": code, "label": label}
+                    for code, label in KNOWLEDGE_FEEDBACK_REASONS.items()
+                ],
                 "categories": CATEGORIES,
                 "subcategories": SUBCATEGORIES,
             },
@@ -10015,11 +10147,45 @@ data:
             SELECT
               COUNT(*) FILTER (WHERE helpful = TRUE),
               COUNT(*) FILTER (WHERE helpful = FALSE),
-              BOOL_OR(helpful) FILTER (WHERE lower(user_email) = lower(%s))
+              BOOL_OR(helpful) FILTER (WHERE lower(user_email) = lower(%s)),
+              MAX(reason_code) FILTER (WHERE lower(user_email) = lower(%s)),
+              MAX(reason_comment) FILTER (WHERE lower(user_email) = lower(%s))
             FROM knowledge_article_feedback
             WHERE article_id = %s
-        """, (user["email"], article_id))
+        """, (user["email"], user["email"], user["email"], article_id))
         feedback_row = cur.fetchone()
+        reason_counts = []
+        reason_comments = []
+        if is_staff(user):
+            cur.execute("""
+                SELECT reason_code, COUNT(*)
+                FROM knowledge_article_feedback
+                WHERE article_id = %s
+                  AND helpful = FALSE
+                  AND reason_code IS NOT NULL
+                GROUP BY reason_code
+                ORDER BY COUNT(*) DESC, reason_code
+            """, (article_id,))
+            reason_counts = [{
+                "code": reason[0],
+                "label": KNOWLEDGE_FEEDBACK_REASONS.get(reason[0], reason[0]),
+                "count": int(reason[1] or 0),
+            } for reason in cur.fetchall()]
+            cur.execute("""
+                SELECT reason_code, reason_comment, updated_at
+                FROM knowledge_article_feedback
+                WHERE article_id = %s
+                  AND helpful = FALSE
+                  AND COALESCE(reason_comment, '') <> ''
+                ORDER BY updated_at DESC
+                LIMIT 20
+            """, (article_id,))
+            reason_comments = [{
+                "reason_code": comment[0],
+                "reason_label": KNOWLEDGE_FEEDBACK_REASONS.get(comment[0], comment[0]),
+                "comment": comment[1],
+                "updated_at": str(comment[2]),
+            } for comment in cur.fetchall()]
         cur.close()
         conn.close()
         return jsonify({
@@ -10028,11 +10194,19 @@ data:
                 "helpful": int(feedback_row[0] or 0),
                 "not_helpful": int(feedback_row[1] or 0),
                 "my_feedback": feedback_row[2],
+                "my_reason": feedback_row[3] or "",
+                "my_comment": feedback_row[4] or "",
+                "reason_counts": reason_counts,
+                "reason_comments": reason_comments,
             },
             "meta": {
                 "categories": CATEGORIES,
                 "subcategories": SUBCATEGORIES,
                 "statuses": KNOWLEDGE_STATUSES,
+                "feedback_reasons": [
+                    {"code": code, "label": label}
+                    for code, label in KNOWLEDGE_FEEDBACK_REASONS.items()
+                ],
             },
         })
 
@@ -10093,6 +10267,13 @@ data:
         helpful = payload.get("helpful")
         if not isinstance(helpful, bool):
             return jsonify({"error": "Ocena musi mieć wartość Pomogło lub Nie pomogło."}), 400
+        reason_code = clean(payload.get("reason_code"))
+        reason_comment = clean(payload.get("reason_comment"))[:500]
+        if helpful:
+            reason_code = None
+            reason_comment = None
+        elif reason_code not in KNOWLEDGE_FEEDBACK_REASONS:
+            return jsonify({"error": "Wybierz powód, dlaczego artykuł nie pomógł."}), 400
         conn = get_conn()
         cur = conn.cursor()
         cur.execute(
@@ -10110,15 +10291,19 @@ data:
             return jsonify({"error": "Można oceniać tylko opublikowane artykuły."}), 400
         cur.execute("""
             INSERT INTO knowledge_article_feedback (
-              article_id, user_email, helpful, created_at, updated_at
+              article_id, user_email, helpful, reason_code, reason_comment,
+              created_at, updated_at
             )
-            VALUES (%s, %s, %s, NOW(), NOW())
+            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
             ON CONFLICT (article_id, user_email) DO UPDATE
             SET helpful = EXCLUDED.helpful,
+                reason_code = EXCLUDED.reason_code,
+                reason_comment = EXCLUDED.reason_comment,
                 updated_at = NOW()
-        """, (article_id, user["email"], helpful))
+        """, (article_id, user["email"], helpful, reason_code, reason_comment))
         log_audit(cur, user, "knowledge_article_feedback", "knowledge_article", article_id, {
             "helpful": helpful,
+            "reason_code": reason_code,
         })
         cur.execute("""
             SELECT
@@ -10141,6 +10326,8 @@ data:
             "helpful": int(counts[0] or 0),
             "not_helpful": int(counts[1] or 0),
             "my_feedback": helpful,
+            "my_reason": reason_code or "",
+            "my_comment": reason_comment or "",
         })
 
     @app.post("/api/knowledge-articles")

@@ -116,6 +116,8 @@ def main() -> None:
         assert f"CREATE TABLE IF NOT EXISTS {table}" in text
     assert "CREATE TABLE IF NOT EXISTS knowledge_articles" in text
     assert "CREATE TABLE IF NOT EXISTS knowledge_article_feedback" in text
+    assert "ALTER TABLE knowledge_article_feedback ADD COLUMN IF NOT EXISTS reason_code TEXT" in text
+    assert "ALTER TABLE knowledge_article_feedback ADD COLUMN IF NOT EXISTS reason_comment TEXT" in text
     assert "Uzupełnia komentarze dla publicznych aktualizacji" in text
     assert "JOIN incident_tickets it ON it.incident_id = iu.incident_id" in text
     assert "COALESCE(iu.is_public, FALSE) = TRUE" in text
@@ -250,9 +252,14 @@ def main() -> None:
     assert "Wymaga poprawy" in text
     assert "COALESCE(feedback.not_helpful_count, 0) > 0" in text
     assert '"quality_filters": ["needs_review", "unrated"]' in text
+    assert "knowledgeFeedbackModal" in text
+    assert "Dlaczego artykuł nie pomógł?" in text
+    assert "KNOWLEDGE_FEEDBACK_REASONS" in text
+    assert "reason_code = EXCLUDED.reason_code" in text
+    assert "reason_comment = EXCLUDED.reason_comment" in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-06-13-knowledge-quality-v12" in deployment_text
+    assert "2026-06-13-feedback-reasons-v13" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
