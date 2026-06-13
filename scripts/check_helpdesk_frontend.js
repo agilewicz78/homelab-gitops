@@ -73,4 +73,21 @@ for (const fragment of requiredAutomationExplanation) {
   }
 }
 
+const requiredWorkflowSafety = [
+  "workflowAutomationSafetyReport(rules)",
+  "workflowAutomationConditionFingerprint(rule)",
+  "workflowAutomationSafetyPanel(rules)",
+  'id="workflowAutomationSafety"',
+  "Kontrola bezpieczeństwa automatyzacji",
+  "Utwórz kopię roboczą",
+  "duplicateWorkflowAutomationRule(idx)",
+  "copy.is_active = false",
+  "Wyłączona reguła jest wersją roboczą",
+];
+for (const fragment of requiredWorkflowSafety) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing workflow safety fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
