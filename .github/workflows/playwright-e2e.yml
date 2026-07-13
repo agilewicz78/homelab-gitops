@@ -23,6 +23,7 @@ jobs:
     timeout-minutes: 20
     env:
       HELPDESK_URL: ${{ inputs.base_url || 'https://helpdesk.lab.local' }}
+      HELPDESK_IGNORE_TLS: "1"
 
     steps:
       - name: Check out repository
