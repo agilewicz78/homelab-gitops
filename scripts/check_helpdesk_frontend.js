@@ -261,4 +261,23 @@ for (const fragment of requiredAutomationDashboard) {
   }
 }
 
+const requiredWorkflowChangeHistory = [
+  "renderWorkflowChangeHistory",
+  "workflowChangeHistoryValue",
+  "workflowChangeHistoryDetails",
+  "/change-history",
+  "Historia zmian workflow",
+  "Historia zmian",
+  "Otwórz historię",
+  "Kto, kiedy i co zmienił",
+  "Utworzono regułę automatyzacji",
+  "Zmieniono regułę automatyzacji",
+  "Usunięto regułę automatyzacji",
+];
+for (const fragment of requiredWorkflowChangeHistory) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing workflow change history fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
