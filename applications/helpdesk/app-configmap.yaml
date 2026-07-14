@@ -3960,7 +3960,12 @@ data:
             internal_note_added: "Notatka wewnętrzna",
             assignment_changed: "Przypisanie",
             attachment_added: "Załącznik",
-            ticket_link_changed: "Powiązanie zgłoszeń"
+            ticket_link_changed: "Powiązanie zgłoszeń",
+            sla_first_response_overdue: "SLA reakcji przekroczone",
+            sla_first_response_warning: "SLA reakcji blisko terminu",
+            sla_resolution_overdue: "SLA rozwiązania przekroczone",
+            sla_resolution_warning: "SLA rozwiązania blisko terminu",
+            workflow_rule_notification: "Automatyzacja workflow"
           }};
           return map[type] || "Powiadomienie";
         }}
@@ -4061,6 +4066,7 @@ data:
           return false;
         }}
         function canViewDashboard(user) {{ return userHasPermission(user, "dashboard.operator"); }}
+        function canViewOperatorCenter(user) {{ return canViewDashboard(user); }}
         function canViewReports(user) {{ return userHasPermission(user, "reports.view"); }}
         function canViewSlaCalendar(user) {{ return userHasPermission(user, "sla.view") || userHasPermission(user, "sla.manage"); }}
         function canManageUsers(user) {{ return userHasPermission(user, "users.manage"); }}
@@ -4205,6 +4211,10 @@ data:
           }}
           if (currentView.name === "home") {{
             await renderHome(loadStatusFilters(), true);
+          }}
+          if (currentView.name === "operator-center") {{
+            if (!shouldSuppress) showToast("Centrum operatora odświeżone", liveEvent.message || "");
+            await renderOperatorCenter(true);
           }}
           if (currentView.name === "dashboard") {{
             await renderDashboard();
@@ -4487,6 +4497,7 @@ data:
           // a po ponownym nadaniu pojawia się po odświeżeniu danych użytkownika.
           const moduleLinks = [];
           moduleLinks.push(`<a href="#" onclick="renderKnowledgeArticles();return false;">Baza wiedzy</a>`);
+          if (canViewOperatorCenter(data)) moduleLinks.push(`<a href="#" onclick="renderOperatorCenter();return false;">Centrum operatora</a>`);
           if (canViewDashboard(data)) moduleLinks.push(`<a href="#" onclick="renderDashboard();return false;">Dashboard</a>`);
           if (canViewReports(data)) moduleLinks.push(`<a href="#" onclick="renderReports();return false;">Raporty</a>`);
           if (canViewSlaCalendar(data)) moduleLinks.push(`<a href="#" onclick="renderSlaCalendar();return false;">Kalendarz SLA</a>`);
@@ -4512,6 +4523,192 @@ data:
           notificationPanel.classList.add("hidden");
           notificationCount.classList.add("hidden");
           window.location.href = "/login";
+        }}
+        function operatorCenterMetric(label, value, hint, action = "") {{
+          const click = action ? ` onclick="${{action}}"` : "";
+          return `
+            <div class="dashboard-card"${{click}}>
+              <div class="num">${{Number(value || 0)}}</div>
+              <div class="label">${{esc(label)}}</div>
+              ${{hint ? `<div class="muted">${{esc(hint)}}</div>` : ""}}
+            </div>
+          `;
+        }}
+        function operatorCenterSignals(ticket) {{
+          const signals = Array.isArray(ticket.signals) ? ticket.signals : [];
+          return signals.length
+            ? `<div class="attachment-upload-hint">${{signals.map(esc).join(" · ")}}</div>`
+            : "";
+        }}
+        function operatorCenterTicketCard(ticket) {{
+          const assigned = ticket.assigned_to_name || "Nieprzypisane";
+          return `
+            <button class="notification-card" onclick="renderTicket(${{Number(ticket.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(ticket.id)}} · ${{esc(ticket.title || "Bez tytułu")}}</div>
+                <div>
+                  <span class="pill ${{priorityClass(ticket.priority)}}">${{esc(ticket.priority || "-")}}</span>
+                  <span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status || "-")}}</span>
+                  <span class="sla-badge ${{slaClass(ticket.sla_state)}}">${{slaLabel(ticket.sla_state)}}</span>
+                </div>
+                <div class="notification-meta">
+                  ${{esc(ticket.requester_name || "-")}} · ${{esc(ticket.category || "-")}} / ${{esc(ticket.subcategory || "Inne")}} · Operator: ${{esc(assigned)}}
+                </div>
+                ${{operatorCenterSignals(ticket)}}
+              </div>
+            </button>
+          `;
+        }}
+        function operatorCenterTicketSection(title, items, emptyText, actionHtml = "") {{
+          const rows = (items || []).map(operatorCenterTicketCard).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>${{esc(title)}}</strong>
+                  <div class="attachment-upload-hint">${{esc(emptyText)}}</div>
+                </div>
+                ${{actionHtml}}
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">${{esc(emptyText)}}</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function operatorCenterIncidentList(items) {{
+          const rows = (items || []).map(item => `
+            <button class="notification-card" onclick="renderIncident(${{Number(item.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">${{esc(item.severity || "SEV")}} #${{Number(item.id)}} · ${{esc(item.title || "Incydent")}}</div>
+                <div class="notification-meta">Status: ${{esc(item.status || "-")}} · zgłoszeń: ${{Number(item.ticket_count || 0)}} · aktualizacja: ${{esc(item.updated_at || "")}}</div>
+              </div>
+            </button>
+          `).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Aktywne incydenty</strong>
+                  <div class="attachment-upload-hint">Większe problemy, które mogą generować wiele zgłoszeń.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderIncidents()">Otwórz incydenty</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak aktywnych incydentów.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function operatorCenterSuggestionList(items) {{
+          const rows = (items || []).map(item => `
+            <div class="panel-soft" style="margin-top:8px">
+              <strong>${{esc(item.title || "Sugestia")}}</strong>
+              <div class="attachment-upload-hint">${{esc(item.description || "")}}</div>
+              ${{item.category ? `<button class="btn-secondary btn-small" style="margin-top:8px" onclick="operatorCenterOpenSuggestion('${{encodeURIComponent(item.category || "")}}', '${{encodeURIComponent(item.subcategory || "")}}')">${{esc(item.action_label || "Pokaż zgłoszenia")}}</button>` : ""}}
+            </div>
+          `).join("");
+          return `
+            <section class="card">
+              <h3>Sugestie systemu</h3>
+              <p class="muted">Proste podpowiedzi z danych zgłoszeń. Na razie bez AI, ale bardzo praktyczne.</p>
+              ${{rows || `<p class="muted">Brak sugestii wymagających uwagi.</p>`}}
+            </section>
+          `;
+        }}
+        function operatorCenterOpenSuggestion(encodedCategory, encodedSubcategory) {{
+          const category = decodeURIComponent(encodedCategory || "");
+          const subcategory = decodeURIComponent(encodedSubcategory || "");
+          saveStatusFilters([]);
+          saveAssignedFilter("all");
+          savePriorityFilter("all");
+          saveSlaFilter("all");
+          saveTicketSearch("");
+          saveTicketCategoryFilter(category || "all");
+          saveTicketSubcategoryFilter(subcategory || "all");
+          resetTicketPage();
+          renderHome([]);
+        }}
+        function operatorCenterNotificationList(items, unreadCount) {{
+          const rows = (items || []).map(item => `
+            <div class="notification-card ${{item.is_read ? "" : "unread"}}">
+              <button class="notification-open" onclick="openNotification(${{Number(item.id)}}, ${{item.ticket_id || "null"}}); return false;">
+                ${{item.ticket_id ? `<div class="notification-ticket">#${{Number(item.ticket_id)}} · ${{esc(item.ticket_title || "Zgłoszenie")}}</div>` : ""}}
+                <div class="notification-message">${{esc(item.message || "")}}</div>
+                <div class="notification-meta">${{esc(notificationTypeLabel(item.type || ""))}} · ${{esc(item.created_at || "")}}</div>
+              </button>
+            </div>
+          `).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Powiadomienia</strong>
+                  <div class="attachment-upload-hint">Nieprzeczytane: ${{Number(unreadCount || 0)}}. Panel powiadomień nadal działa w prawym górnym rogu.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="toggleNotifications()">Otwórz panel</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak nowych powiadomień.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        async function renderOperatorCenter(fromLive = false) {{
+          currentView = {{ name: "operator-center", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          if (!canViewOperatorCenter(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Centrum operatora wymaga uprawnienia dashboard.operator.</p></section>`;
+            return;
+          }}
+          if (!fromLive) {{
+            appEl.innerHTML = `<section class="card"><h2>Centrum operatora</h2><p class="muted">Ładuję najważniejsze zadania...</p></section>`;
+          }}
+          const res = await api("/api/operator-center");
+          if (!res) return;
+          const data = await res.json().catch(() => ({{}}));
+          if (!res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać centrum operatora</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
+            return;
+          }}
+          const summary = data.summary || {{}};
+          const sections = data.sections || {{}};
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <h2>Centrum pracy operatora</h2>
+              <p class="muted">Najważniejsze rzeczy do obsługi teraz. Widok odświeża się przez WebSocket i korzysta z istniejących powiadomień Helpdesku.</p>
+              <div class="actions">
+                <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+                <button class="btn-secondary" onclick="applyWorkView('queue')">Moja kolejka</button>
+                <button class="btn-secondary" onclick="applyWorkView('unassigned')">Nieprzypisane</button>
+                <button class="btn-secondary" onclick="applyWorkView('overdue')">SLA przekroczone</button>
+                <button class="btn-secondary" onclick="renderIncidents()">Incydenty</button>
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie odświeżenie: ${{esc(data.generated_at || "")}}</div>
+            </section>
+            <section class="dashboard-grid">
+              ${{operatorCenterMetric("Moje otwarte", summary.my_open, "Zgłoszenia przypisane do Ciebie.", "applyWorkView('queue')")}}
+              ${{operatorCenterMetric("Wymaga uwagi", summary.my_attention, "Priorytet, SLA albo odpowiedź użytkownika.", "applyWorkView('queue')")}}
+              ${{operatorCenterMetric("Nieprzypisane", summary.unassigned, "Kolejka do przejęcia.", "applyWorkView('unassigned')")}}
+              ${{operatorCenterMetric("SLA przekroczone", summary.overdue_sla, "Otwarte zgłoszenia po SLA.", "applyWorkView('overdue')")}}
+              ${{operatorCenterMetric("Wraca do mnie", summary.returning_to_operator, "Użytkownik odpisał w Twoim zgłoszeniu.", "applyWorkView('queue')")}}
+            </section>
+            <div class="grid">
+              ${{operatorCenterTicketSection("Moje zadania", sections.my_tickets || [], "Brak otwartych zgłoszeń przypisanych do Ciebie.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Otwórz kolejkę</button>`)}}
+              ${{operatorCenterTicketSection("Pilne", sections.urgent || [], "Brak pilnych zgłoszeń według SLA, priorytetu i pierwszej reakcji.", `<button class="btn-secondary btn-small" onclick="applyWorkView('overdue')">Filtr SLA</button>`)}}
+            </div>
+            <div class="grid">
+              ${{operatorCenterTicketSection("Nowe nieprzypisane", sections.unassigned || [], "Brak otwartych nieprzypisanych zgłoszeń.", `<button class="btn-secondary btn-small" onclick="applyWorkView('unassigned')">Otwórz listę</button>`)}}
+              ${{operatorCenterTicketSection("Wraca do operatora", sections.returning_to_operator || [], "Brak zgłoszeń, w których ostatnio odpisał użytkownik.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Moja kolejka</button>`)}}
+            </div>
+            <div class="grid">
+              ${{operatorCenterIncidentList(data.incidents || [])}}
+              ${{operatorCenterSuggestionList(data.suggestions || [])}}
+            </div>
+            ${{operatorCenterNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
+          `;
         }}
         function dashboardPercent(count, total) {{
           const c = Number(count || 0);
@@ -9360,6 +9557,7 @@ data:
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
               <button class="btn-secondary" onclick="renderKnowledgeArticles()">Baza wiedzy</button>
+              ${{canViewOperatorCenter(me) ? `<button class="btn-secondary" onclick="renderOperatorCenter()">Centrum operatora</button>` : ""}}
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
               ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderIncidents()">Incident Command Center</button>` : ""}}
               ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAdminWorkflows()">Workflow</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
@@ -14289,6 +14487,271 @@ data:
                 "total_pages": total_pages,
             },
         })
+    @app.get("/api/operator-center")
+    @api_login_required
+
+    # Centrum pracy operatora: zadania, pilne zgłoszenia, incydenty i powiadomienia.
+    def api_operator_center(user):
+        if not has_permission(user, "dashboard.operator"):
+            return api_forbidden("Brak uprawnienia do centrum operatora.", "dashboard.operator")
+        conn = get_conn()
+        cur = conn.cursor()
+        open_ticket_sql = "t.status NOT IN ('Rozwiązane', 'Zamknięte')"
+
+        def serialize_ticket(row):
+            ticket_sla_state = sla_state(row[13], row[8])
+            signals = []
+            if row[7] in ("Krytyczny", "Wysoki"):
+                signals.append(f"Priorytet: {row[7]}")
+            if ticket_sla_state == "overdue":
+                signals.append("SLA przekroczone")
+            elif ticket_sla_state == "warning":
+                signals.append("SLA blisko terminu")
+            if row[14] and not row[15] and row[14] < datetime.now():
+                signals.append("Pierwsza reakcja po terminie")
+            if (row[17] or "").lower() == (row[3] or "").lower():
+                signals.append("Ostatnio odpisał użytkownik")
+            return {
+                "id": row[0],
+                "title": row[1],
+                "requester_name": row[2],
+                "requester_email": row[3],
+                "department": row[4],
+                "category": row[5],
+                "subcategory": row[6] or "Inne",
+                "priority": row[7],
+                "status": row[8],
+                "created_at": str(row[9]),
+                "updated_at": str(row[10]),
+                "assigned_to_email": row[11] or "",
+                "assigned_to_name": row[12] or "",
+                "sla_due_at": str(row[13]) if row[13] else "",
+                "first_response_due_at": str(row[14]) if row[14] else "",
+                "workflow_name": row[16] or WORKFLOWS["default"]["name"],
+                "sla_state": ticket_sla_state,
+                "latest_public_comment_at": str(row[18]) if row[18] else "",
+                "signals": signals,
+            }
+
+        def ticket_rows(where_sql, params=None, limit=6):
+            cur.execute(f"""
+                SELECT
+                  t.id, t.title, t.requester_name, t.requester_email, t.department,
+                  t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+                  t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+                  COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+                  t.sla_due_at, t.first_response_due_at, t.first_response_at,
+                  COALESCE(t.workflow_name, %s) AS workflow_name,
+                  lp.author_email AS latest_public_author_email,
+                  lp.created_at AS latest_public_comment_at
+                FROM tickets t
+                LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+                LEFT JOIN LATERAL (
+                  SELECT c.author_email, c.created_at
+                  FROM comments c
+                  WHERE c.ticket_id = t.id
+                    AND COALESCE(c.visibility, 'public') = 'public'
+                  ORDER BY c.created_at DESC, c.id DESC
+                  LIMIT 1
+                ) lp ON TRUE
+                {where_sql}
+                ORDER BY
+                  CASE
+                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at < NOW() THEN 1
+                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours' THEN 2
+                    ELSE 3
+                  END,
+                  CASE t.priority
+                    WHEN 'Krytyczny' THEN 1
+                    WHEN 'Wysoki' THEN 2
+                    WHEN 'Normalny' THEN 3
+                    WHEN 'Niski' THEN 4
+                    ELSE 5
+                  END,
+                  COALESCE(t.sla_due_at, t.updated_at) ASC NULLS LAST,
+                  t.updated_at DESC,
+                  t.id DESC
+                LIMIT %s
+            """, tuple([WORKFLOWS["default"]["name"]] + list(params or []) + [limit]))
+            return [serialize_ticket(row) for row in cur.fetchall()]
+
+        cur.execute(f"""
+            WITH latest_public_comment AS (
+              SELECT DISTINCT ON (ticket_id)
+                ticket_id, author_email, created_at
+              FROM comments
+              WHERE COALESCE(visibility, 'public') = 'public'
+              ORDER BY ticket_id, created_at DESC, id DESC
+            )
+            SELECT
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)
+              ) AS my_open,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)
+                  AND (
+                    t.priority IN ('Krytyczny', 'Wysoki')
+                    OR (t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours')
+                    OR (t.first_response_at IS NULL AND t.first_response_due_at IS NOT NULL AND t.first_response_due_at < NOW())
+                    OR lower(COALESCE(lp.author_email, '')) = lower(t.requester_email)
+                  )
+              ) AS my_attention,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND (t.assigned_to_email IS NULL OR t.assigned_to_email = '')
+              ) AS unassigned,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND t.sla_due_at IS NOT NULL
+                  AND t.sla_due_at < NOW()
+              ) AS overdue_sla,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND t.first_response_at IS NULL
+                  AND t.first_response_due_at IS NOT NULL
+                  AND t.first_response_due_at < NOW()
+              ) AS first_response_overdue,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)
+                  AND lower(COALESCE(lp.author_email, '')) = lower(t.requester_email)
+              ) AS returning_to_operator
+            FROM tickets t
+            LEFT JOIN latest_public_comment lp ON lp.ticket_id = t.id
+        """, (user["email"], user["email"], user["email"]))
+        summary_row = cur.fetchone()
+
+        my_tickets = ticket_rows(
+            f"WHERE {open_ticket_sql} AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)",
+            [user["email"]],
+            6,
+        )
+        urgent = ticket_rows(
+            f"""
+            WHERE {open_ticket_sql}
+              AND (
+                t.priority IN ('Krytyczny', 'Wysoki')
+                OR (t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours')
+                OR (t.first_response_at IS NULL AND t.first_response_due_at IS NOT NULL AND t.first_response_due_at < NOW())
+              )
+            """,
+            [],
+            6,
+        )
+        unassigned = ticket_rows(
+            f"WHERE {open_ticket_sql} AND (t.assigned_to_email IS NULL OR t.assigned_to_email = '')",
+            [],
+            6,
+        )
+        returning_to_operator = ticket_rows(
+            f"""
+            WHERE {open_ticket_sql}
+              AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)
+              AND lower(COALESCE(lp.author_email, '')) = lower(t.requester_email)
+            """,
+            [user["email"]],
+            6,
+        )
+
+        cur.execute("""
+            SELECT
+              i.id, i.title, i.severity, i.status, i.updated_at,
+              COUNT(DISTINCT it.ticket_id) AS ticket_count
+            FROM incidents i
+            LEFT JOIN incident_tickets it ON it.incident_id = i.id
+            WHERE i.status <> 'resolved'
+            GROUP BY i.id
+            ORDER BY
+              CASE i.severity WHEN 'SEV1' THEN 1 WHEN 'SEV2' THEN 2 WHEN 'SEV3' THEN 3 ELSE 4 END,
+              i.updated_at DESC
+            LIMIT 5
+        """)
+        incidents = [{
+            "id": row[0],
+            "title": row[1],
+            "severity": row[2],
+            "status": row[3],
+            "updated_at": str(row[4]),
+            "ticket_count": row[5],
+        } for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              COALESCE(NULLIF(category, ''), 'Brak kategorii') AS category,
+              COALESCE(NULLIF(subcategory, ''), 'Inne') AS subcategory,
+              COUNT(*) AS count,
+              MAX(updated_at) AS latest_update
+            FROM tickets
+            WHERE status NOT IN ('Rozwiązane', 'Zamknięte')
+              AND created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY 1, 2
+            HAVING COUNT(*) >= 3
+            ORDER BY count DESC, latest_update DESC
+            LIMIT 5
+        """)
+        suggestions = [{
+            "type": "incident_candidate",
+            "title": f"{row[2]} podobne zgłoszenia: {row[0]} / {row[1]}",
+            "description": "W ostatnich 7 dniach pojawiło się kilka otwartych zgłoszeń z tej samej kategorii. Rozważ sprawdzenie, czy to jeden incydent.",
+            "category": row[0],
+            "subcategory": row[1],
+            "count": row[2],
+            "action_label": "Pokaż zgłoszenia",
+        } for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM notifications
+            WHERE lower(user_email) = lower(%s)
+              AND is_read = FALSE
+        """, (user["email"],))
+        unread_notifications = cur.fetchone()[0] or 0
+        cur.execute("""
+            SELECT
+              n.id, n.ticket_id, n.type, n.message, n.is_read, n.created_at,
+              COALESCE(t.title, '')
+            FROM notifications n
+            LEFT JOIN tickets t ON t.id = n.ticket_id
+            WHERE lower(n.user_email) = lower(%s)
+            ORDER BY n.is_read ASC, n.created_at DESC
+            LIMIT 6
+        """, (user["email"],))
+        notifications = [{
+            "id": row[0],
+            "ticket_id": row[1],
+            "type": row[2],
+            "message": row[3],
+            "is_read": bool(row[4]),
+            "created_at": str(row[5]),
+            "ticket_title": row[6],
+        } for row in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        return jsonify({
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "summary": {
+                "my_open": summary_row[0] or 0,
+                "my_attention": summary_row[1] or 0,
+                "unassigned": summary_row[2] or 0,
+                "overdue_sla": summary_row[3] or 0,
+                "first_response_overdue": summary_row[4] or 0,
+                "returning_to_operator": summary_row[5] or 0,
+                "unread_notifications": unread_notifications,
+            },
+            "sections": {
+                "my_tickets": my_tickets,
+                "urgent": urgent,
+                "unassigned": unassigned,
+                "returning_to_operator": returning_to_operator,
+            },
+            "incidents": incidents,
+            "suggestions": suggestions,
+            "notifications": notifications,
+        })
+
     @app.get("/api/dashboard")
     @api_login_required
     

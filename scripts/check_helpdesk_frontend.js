@@ -261,6 +261,29 @@ for (const fragment of requiredAutomationDashboard) {
   }
 }
 
+const requiredOperatorCenter = [
+  "renderOperatorCenter",
+  "operatorCenterMetric",
+  "operatorCenterTicketSection",
+  "operatorCenterIncidentList",
+  "operatorCenterSuggestionList",
+  "operatorCenterNotificationList",
+  "operatorCenterOpenSuggestion",
+  "/api/operator-center",
+  "Centrum pracy operatora",
+  "Centrum operatora",
+  "Moje zadania",
+  "Wraca do operatora",
+  "Nowe nieprzypisane",
+  "Widok odświeża się przez WebSocket",
+  "workflow_rule_notification",
+];
+for (const fragment of requiredOperatorCenter) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing operator center fragment: ${fragment}`);
+  }
+}
+
 const requiredWorkflowChangeHistory = [
   "renderWorkflowChangeHistory",
   "workflowChangeHistoryLabel",
