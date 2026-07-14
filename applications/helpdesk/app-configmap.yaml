@@ -7670,6 +7670,92 @@ data:
             </section>
           `;
         }}
+        function workflowAutomationDashboardMetric(label, value, hint = "") {{
+          return workflowManagementMetric(label, value, hint);
+        }}
+        function workflowAutomationDashboardRuleList(title, rules, emptyText) {{
+          const rows = (rules || []).map(rule => `
+            <div class="panel-soft" style="margin-top:8px">
+              <strong>${{esc(rule.name || "Reguła workflow")}}</strong><br>
+              <span class="muted">${{esc(workflowAutomationRuleEventLabel(rule.event_type || ""))}} · priorytet ${{Number(rule.priority || 100)}} · wykonania 7 dni: ${{Number(rule.total || 0)}} · dopasowania: ${{Number(rule.matched || 0)}}</span>
+              ${{rule.last_execution_at ? `<div class="attachment-upload-hint">Ostatnie uruchomienie: ${{esc(rule.last_execution_at)}}</div>` : ""}}
+            </div>
+          `).join("");
+          return `
+            <section class="card">
+              <h3>${{esc(title)}}</h3>
+              ${{rows || `<p class="muted">${{esc(emptyText)}}</p>`}}
+            </section>
+          `;
+        }}
+        function workflowAutomationDashboardRecentList(executions) {{
+          const rows = (executions || []).map(item => `
+            <tr>
+              <td><strong>${{esc(item.automation_name || "Reguła workflow")}}</strong><br><span class="muted">${{esc(workflowAutomationRuleEventLabel(item.event_type || ""))}}</span></td>
+              <td>${{item.ticket_id ? `<button class="btn-link" onclick="renderTicket(${{Number(item.ticket_id)}})">#${{Number(item.ticket_id)}}</button>` : "—"}}<br><span class="muted">${{esc(item.ticket_title || "")}}</span></td>
+              <td>${{item.matched ? `<span class="status-badge status-new">Dopasowana</span>` : `<span class="status-badge status-closed">Pominięta</span>`}}</td>
+              <td>${{esc(item.created_at || "")}}</td>
+            </tr>
+          `).join("");
+          return `
+            <section class="card">
+              <h3>Ostatnie uruchomienia</h3>
+              <table>
+                <thead><tr><th>Reguła</th><th>Zgłoszenie</th><th>Wynik</th><th>Data</th></tr></thead>
+                <tbody>${{rows || `<tr><td colspan="4" class="muted">Brak uruchomień automatyzacji.</td></tr>`}}</tbody>
+              </table>
+            </section>
+          `;
+        }}
+        async function renderWorkflowAutomationDashboard(workflowId) {{
+          const me = await loadMe();
+          if (!me || !canManageWorkflow(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Dashboard automatyzacji wymaga uprawnienia workflow.manage.</p></section>`;
+            return;
+          }}
+          const backTarget = `renderWorkflowManagement(${{Number(workflowId)}})`;
+          const backLabel = "← Proces";
+          appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Dashboard automatyzacji</h2><p class="muted">Ładuję puls automatyzacji...</p></section>`;
+          const res = await api(`/api/admin/workflows/${{workflowId}}/automation-dashboard`);
+          const data = res && res.ok ? await res.json().catch(() => ({{}})) : null;
+          if (!data) {{
+            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Dashboard automatyzacji</h2><p class="error">Nie udało się pobrać dashboardu automatyzacji.</p></section>`;
+            return;
+          }}
+          const workflow = data.workflow || {{}};
+          const summary = data.summary || {{}};
+          const risk = summary.risk_counts || {{}};
+          const matched = Number(summary.matched_7d || 0);
+          const total = Number(summary.executions_7d || 0);
+          const matchRate = total ? `${{Math.round((matched / total) * 100)}}%` : "brak danych";
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button>
+              <h2>Dashboard automatyzacji: ${{esc(workflow.name || "Workflow")}}</h2>
+              <p class="muted">Puls z ostatnich 7 dni: pokazuje aktywność reguł, dopasowania, szkice i miejsca wymagające uwagi.</p>
+              <div class="actions">
+                <button onclick="renderAdminWorkflowForm(${{Number(workflow.id || workflowId)}}, null, 4)">Edytuj automatyzacje</button>
+                <button class="btn-secondary" onclick="renderWorkflowAutomationCenter(${{Number(workflow.id || workflowId)}})">Centrum automatyzacji</button>
+                <button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{Number(workflow.id || workflowId)}})">Pełny log</button>
+              </div>
+            </section>
+            <section class="card">
+              <h3>Puls z ostatnich 7 dni</h3>
+              <div class="grid two">
+                ${{workflowAutomationDashboardMetric("Reguły", `${{Number(summary.active_rules || 0)}} aktywne / ${{Number(summary.draft_rules || 0)}} robocze`, `Łącznie: ${{Number(summary.rules_total || 0)}}`)}}
+                ${{workflowAutomationDashboardMetric("Uruchomienia", Number(summary.executions_7d || 0), `Dopasowane: ${{Number(summary.matched_7d || 0)}} · pominięte: ${{Number(summary.skipped_7d || 0)}}`)}}
+                ${{workflowAutomationDashboardMetric("Skuteczność dopasowania", matchRate, "Procent uruchomień, które faktycznie pasowały do zdarzenia.")}}
+                ${{workflowAutomationDashboardMetric("Ryzyko", `${{Number(risk.high || 0)}} wysokie / ${{Number(risk.medium || 0)}} średnie`, `Niskie: ${{Number(risk.low || 0)}}`)}}
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie uruchomienie: ${{esc(summary.last_execution_at || "brak w ostatnich 7 dniach")}}. Reguły bez aktywności: ${{Number(summary.quiet_rules || 0)}}.</div>
+            </section>
+            <div class="grid two">
+              ${{workflowAutomationDashboardRuleList("Najaktywniejsze reguły", data.hot_rules || [], "Brak aktywnych reguł z uruchomieniami w ostatnich 7 dniach.")}}
+              ${{workflowAutomationDashboardRuleList("Reguły bez aktywności", data.quiet_rules || [], "Każda aktywna reguła miała aktywność albo workflow nie ma aktywnych reguł.")}}
+            </div>
+            ${{workflowAutomationDashboardRecentList(data.recent_executions || [])}}
+          `;
+        }}
         async function renderWorkflowManagement(workflowId) {{
           const me = await loadMe();
           if (!me || !canManageWorkflow(me)) {{
@@ -7726,6 +7812,12 @@ data:
                 "Reguły, szablony, kolejność wykonywania i test pojedynczej reguły.",
                 `Aktywne: ${{counts.active}}. Robocze: ${{counts.drafts}}. Kontrola: ${{esc(safetyLabel)}}.`,
                 `<button onclick="renderAdminWorkflowForm(${{Number(workflow.id)}}, null, 4)">Edytuj automatyzacje</button>`
+              )}}
+              ${{workflowManagementCard(
+                "Dashboard automatyzacji",
+                "Szybki puls reguł: aktywność, dopasowania, ryzyko i reguły bez uruchomień.",
+                "Najlepsze miejsce, żeby zobaczyć czy automatyzacje realnie pracują.",
+                `<button onclick="renderWorkflowAutomationDashboard(${{Number(workflow.id)}})">Otwórz dashboard</button>`
               )}}
               ${{workflowManagementCard(
                 "Centrum automatyzacji",
@@ -11292,6 +11384,142 @@ data:
                 "risk_counts": risk_counts,
                 "recent_executions": len(recent_executions),
             },
+        })
+
+    @app.get("/api/workflows/<int:workflow_id>/automation-dashboard")
+    @app.get("/api/admin/workflows/<int:workflow_id>/automation-dashboard")
+    @api_login_required
+
+    # Dashboard automatyzacji: szybki puls reguĹ‚ workflow bez wchodzenia w peĹ‚ny log.
+    def api_admin_workflow_automation_dashboard(user, workflow_id):
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarzÄ…dzania workflow.", "workflow.manage")
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, workflow_key, name, category, subcategory, is_active, updated_at
+            FROM workflow_definitions
+            WHERE id = %s
+        """, (workflow_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        automations = workflow_automation_entries(cur, workflow_id)
+        workflow_category = row[3] or "*"
+        workflow_subcategory = row[4] or "*"
+        risk_counts = {"high": 0, "medium": 0, "low": 0}
+        for item in automations:
+            risk = workflow_automation_risk(item, workflow_category, workflow_subcategory)
+            risk_counts[risk["level"]] = risk_counts.get(risk["level"], 0) + 1
+        cur.execute("""
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN COALESCE(matched, TRUE) = TRUE THEN 1 ELSE 0 END) AS matched,
+                SUM(CASE WHEN COALESCE(matched, TRUE) = FALSE THEN 1 ELSE 0 END) AS skipped,
+                MAX(created_at) AS last_execution_at
+            FROM workflow_rule_executions
+            WHERE workflow_id = %s
+              AND created_at >= NOW() - INTERVAL '7 days'
+        """, (workflow_id,))
+        totals = cur.fetchone() or (0, 0, 0, None)
+        cur.execute("""
+            SELECT
+                automation_id,
+                COUNT(*) AS total,
+                SUM(CASE WHEN COALESCE(matched, TRUE) = TRUE THEN 1 ELSE 0 END) AS matched,
+                SUM(CASE WHEN COALESCE(matched, TRUE) = FALSE THEN 1 ELSE 0 END) AS skipped,
+                MAX(created_at) AS last_execution_at
+            FROM workflow_rule_executions
+            WHERE workflow_id = %s
+              AND created_at >= NOW() - INTERVAL '7 days'
+            GROUP BY automation_id
+        """, (workflow_id,))
+        execution_by_rule = {
+            r[0]: {
+                "total": int(r[1] or 0),
+                "matched": int(r[2] or 0),
+                "skipped": int(r[3] or 0),
+                "last_execution_at": str(r[4]) if r[4] else "",
+            }
+            for r in cur.fetchall()
+        }
+        quiet_rules = []
+        hot_rules = []
+        for item in automations:
+            if item.get("is_active") is False:
+                continue
+            stats = execution_by_rule.get(item.get("id"), {"total": 0, "matched": 0, "skipped": 0, "last_execution_at": ""})
+            entry = {
+                "id": item.get("id"),
+                "name": item.get("name") or "ReguĹ‚a workflow",
+                "event_type": item.get("event_type") or "",
+                "priority": item.get("priority") or 100,
+                **stats,
+            }
+            if stats["total"] == 0:
+                quiet_rules.append(entry)
+            else:
+                hot_rules.append(entry)
+        hot_rules.sort(key=lambda item: (-int(item.get("total") or 0), int(item.get("priority") or 100), item.get("name") or ""))
+        quiet_rules.sort(key=lambda item: (int(item.get("priority") or 100), item.get("name") or ""))
+        cur.execute("""
+            SELECT
+                wre.id,
+                wre.automation_id,
+                COALESCE(wa.name, 'ReguĹ‚a usuniÄ™ta') AS automation_name,
+                wre.ticket_id,
+                COALESCE(t.title, '') AS ticket_title,
+                COALESCE(wre.event_type, '') AS event_type,
+                COALESCE(wre.matched, TRUE) AS matched,
+                COALESCE(wre.reason, '') AS reason,
+                COALESCE(wre.created_at, NOW()) AS created_at
+            FROM workflow_rule_executions wre
+            LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id
+            LEFT JOIN tickets t ON t.id = wre.ticket_id
+            WHERE wre.workflow_id = %s
+            ORDER BY wre.id DESC
+            LIMIT 5
+        """, (workflow_id,))
+        recent_executions = [{
+            "id": r[0],
+            "automation_id": r[1],
+            "automation_name": r[2],
+            "ticket_id": r[3],
+            "ticket_title": r[4],
+            "event_type": r[5],
+            "matched": bool(r[6]),
+            "reason": r[7],
+            "created_at": str(r[8]),
+        } for r in cur.fetchall()]
+        cur.close()
+        conn.close()
+        active_rules = sum(1 for item in automations if item.get("is_active") is not False)
+        return jsonify({
+            "workflow": {
+                "id": row[0],
+                "workflow_key": row[1],
+                "name": row[2],
+                "category": workflow_category,
+                "subcategory": workflow_subcategory,
+                "is_active": bool(row[5]),
+                "updated_at": str(row[6]) if row[6] else "",
+            },
+            "summary": {
+                "rules_total": len(automations),
+                "active_rules": active_rules,
+                "draft_rules": max(0, len(automations) - active_rules),
+                "executions_7d": int(totals[0] or 0),
+                "matched_7d": int(totals[1] or 0),
+                "skipped_7d": int(totals[2] or 0),
+                "last_execution_at": str(totals[3]) if totals[3] else "",
+                "risk_counts": risk_counts,
+                "quiet_rules": len(quiet_rules),
+            },
+            "hot_rules": hot_rules[:5],
+            "quiet_rules": quiet_rules[:5],
+            "recent_executions": recent_executions,
         })
     def normalize_workflow_payload(payload, existing_key=None):
         name = clean(payload.get("name"))
