@@ -243,4 +243,22 @@ for (const fragment of requiredAutomationStarterPacks) {
   }
 }
 
+const requiredAutomationDashboard = [
+  "renderWorkflowAutomationDashboard",
+  "workflowAutomationDashboardMetric",
+  "workflowAutomationDashboardRuleList",
+  "workflowAutomationDashboardRecentList",
+  "/automation-dashboard",
+  "Dashboard automatyzacji",
+  "Puls z ostatnich 7 dni",
+  "Najaktywniejsze reguły",
+  "Reguły bez aktywności",
+  "Otwórz dashboard",
+];
+for (const fragment of requiredAutomationDashboard) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing automation dashboard fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
