@@ -63,6 +63,7 @@ def main() -> None:
         "idx_workflow_automations_event",
         "idx_workflow_automation_actions_lookup",
         "idx_ticket_status_history_resolution",
+        "idx_tickets_resolution_feedback_at",
         "idx_audit_log_created",
         "idx_audit_log_action_created",
         "idx_audit_log_actor_created",
@@ -352,10 +353,18 @@ def main() -> None:
     assert "visible_ticket_sql" in text
     assert "function renderUserPortal" in text
     assert "function userPortalTicketStatusPanel" in text
+    assert "function resolutionFeedbackPanel" in text
+    assert "async function submitResolutionFeedback" in text
+    assert '@app.post("/api/tickets/<int:ticket_id>/resolution-feedback")' in text
+    assert "def api_ticket_resolution_feedback" in text
+    assert "resolution_feedback_reopen_status_for_workflow" in text
+    assert "user_resolution_feedback" in text
+    assert "resolution_feedback_accepted" in text
+    assert "resolution_feedback_rejected" in text
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-14-user-portal-v1" in deployment_text
+    assert "2026-07-14-resolution-feedback-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
