@@ -7260,16 +7260,18 @@ data:
             appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Centrum automatyzacji wymaga uprawnienia workflow.manage.</p></section>`;
             return;
           }}
+          const backTarget = `renderWorkflowManagement(${{Number(workflowId)}})`;
+          const backLabel = "← Proces";
           const params = new URLSearchParams();
           Object.entries(explicitSample || {{}}).forEach(([key, value]) => {{
             if (value !== undefined && value !== null) params.set(key, String(value));
           }});
-          appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Centrum automatyzacji</h2><p class="muted">Ładuję reguły i symulację...</p></section>`;
+          appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Centrum automatyzacji</h2><p class="muted">Ładuję reguły i symulację...</p></section>`;
           const suffix = params.toString() ? `?${{params.toString()}}` : "";
           const res = await api(`/api/admin/workflows/${{workflowId}}/automation-center${{suffix}}`);
           const data = res ? await res.json().catch(() => ({{}})) : {{}};
           if (!res || !res.ok) {{
-            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Centrum automatyzacji</h2><p class="error">${{esc(data.error || data.message || "Nie udało się pobrać Centrum automatyzacji.")}}</p></section>`;
+            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Centrum automatyzacji</h2><p class="error">${{esc(data.error || data.message || "Nie udało się pobrać Centrum automatyzacji.")}}</p></section>`;
             return;
           }}
           workflowAutomationCenterCurrentData = data;
@@ -7277,7 +7279,7 @@ data:
           const rules = (data.rules || []).map((rule, idx) => workflowAutomationCenterRuleCard(rule, idx)).join("");
           appEl.innerHTML = `
             <section class="card">
-              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              <button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button>
               <h2>Centrum automatyzacji: ${{esc(workflow.name || "Workflow")}}</h2>
               <p class="muted">To jest mapa działania workflow: pokazuje zapisane reguły, ich zakres, ryzyko oraz wynik symulacji na przykładowym zgłoszeniu.</p>
               <div class="actions">
@@ -7352,9 +7354,11 @@ data:
           const page = Number(pagination.page || 1);
           const totalPages = Number(pagination.total_pages || 1);
           const totalFiltered = pagination.total_filtered ?? "—";
+          const backTarget = workflowId ? `renderWorkflowManagement(${{Number(workflowId)}})` : "renderAdminWorkflows()";
+          const backLabel = workflowId ? "← Proces" : "← Workflow";
           return `
             <section class="card">
-              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              <button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button>
               <h2>Log automatyzacji workflow</h2>
               <p class="muted">Lista pokazuje, które reguły workflow zostały uruchomione, dla jakiego zgłoszenia i jakie akcje wykonały. Filtry ułatwiają debugowanie konkretnego zgłoszenia, zdarzenia albo operatora.</p>
             </section>
@@ -7389,6 +7393,8 @@ data:
           `;
         }}
         async function renderWorkflowRuleExecutions(workflowId = "", page = 1, explicitFilters = null) {{
+          const backTarget = workflowId ? `renderWorkflowManagement(${{Number(workflowId)}})` : "renderAdminWorkflows()";
+          const backLabel = workflowId ? "← Proces" : "← Workflow";
           try {{
             const me = await loadMe();
             if (!me || !isAdmin(me)) {{
@@ -7457,9 +7463,114 @@ data:
             if (content) {{
               content.innerHTML = `<div class="error"><strong>Nie udało się załadować logu automatyzacji.</strong><br>${{esc(msg)}}</div>`;
             }} else {{
-              appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Błąd logu automatyzacji</h2><p class="error">${{esc(msg)}}</p></section>`;
+              appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Błąd logu automatyzacji</h2><p class="error">${{esc(msg)}}</p></section>`;
             }}
           }}
+        }}
+        function workflowAutomationCountSummary(workflow) {{
+          const rules = Array.isArray(workflow.automations) ? workflow.automations : [];
+          const active = rules.filter(rule => rule.is_active !== false).length;
+          return {{
+            total: rules.length,
+            active,
+            drafts: Math.max(0, rules.length - active),
+          }};
+        }}
+        function workflowManagementMetric(label, value, hint = "") {{
+          return `
+            <div class="panel-soft">
+              <strong>${{esc(value)}}</strong><br>
+              <span class="muted">${{esc(label)}}</span>
+              ${{hint ? `<div class="attachment-upload-hint">${{esc(hint)}}</div>` : ""}}
+            </div>
+          `;
+        }}
+        function workflowManagementCard(title, description, details, actionsHtml) {{
+          return `
+            <section class="card">
+              <h3>${{esc(title)}}</h3>
+              <p class="muted">${{esc(description)}}</p>
+              ${{details ? `<div class="attachment-upload-hint">${{details}}</div>` : ""}}
+              <div class="actions" style="margin-top:12px">${{actionsHtml}}</div>
+            </section>
+          `;
+        }}
+        async function renderWorkflowManagement(workflowId) {{
+          const me = await loadMe();
+          if (!me || !canManageWorkflow(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Zarządzanie workflow wymaga uprawnienia workflow.manage.</p></section>`;
+            return;
+          }}
+          const backTarget = "renderAdminWorkflows()";
+          const backLabel = "← Workflow";
+          appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Zarządzanie procesem</h2><p class="muted">Ładuję szczegóły workflow...</p></section>`;
+          const res = await api(`/api/admin/workflows/${{workflowId}}`);
+          const workflow = res && res.ok ? await res.json().catch(() => ({{}})) : null;
+          if (!workflow) {{
+            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button><h2>Nie udało się pobrać workflow</h2><p class="error">Odśwież listę workflow i spróbuj ponownie.</p></section>`;
+            return;
+          }}
+          const counts = workflowAutomationCountSummary(workflow);
+          const safety = workflowAutomationSafetyReport(workflow.automations || []);
+          const safetyLabel = safety.errors
+            ? `${{safety.errors}} błędów`
+            : safety.warnings
+              ? `${{safety.warnings}} ostrzeżeń`
+              : "bez ostrzeżeń";
+          const statusBadge = workflow.is_active
+            ? `<span class="status-badge status-new">Aktywny</span>`
+            : `<span class="status-badge status-closed">Nieaktywny</span>`;
+          const defaultBadge = workflow.is_default ? `<span class="status-badge status-progress">Domyślny</span>` : "";
+          const operatorNames = (workflow.operators || []).map(o => esc(o.name || o.email)).join(", ") || "Brak operatorów";
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button>
+              <h2>Zarządzanie procesem: ${{esc(workflow.name || "Workflow")}}</h2>
+              <p class="muted">Ten ekran porządkuje pracę z jednym procesem: konfiguracja, automatyzacje, diagnostyka i log są rozdzielone na osobne kroki.</p>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">${{statusBadge}} ${{defaultBadge}}</div>
+            </section>
+            <section class="card">
+              <h3>Szybki przegląd</h3>
+              <div class="grid two">
+                ${{workflowManagementMetric("Dopasowanie", workflowMatchLabel(workflow))}}
+                ${{workflowManagementMetric("Zgłoszenia", workflow.ticket_count || 0)}}
+                ${{workflowManagementMetric("Automatyzacje", `${{counts.active}} aktywne / ${{counts.drafts}} robocze`, `Łącznie: ${{counts.total}}`)}}
+                ${{workflowManagementMetric("Kontrola reguł", safetyLabel)}}
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Operatorzy workflow: ${{operatorNames}}</div>
+            </section>
+            <div class="grid two">
+              ${{workflowManagementCard(
+                "Konfiguracja procesu",
+                "Nazwa, kategoria, podkategoria, statusy oraz zespół odpowiedzialny za obsługę.",
+                "To miejsce do zmian struktury procesu i przypisanych operatorów.",
+                `<button onclick="renderAdminWorkflowForm(${{Number(workflow.id)}})">Edytuj konfigurację</button>`
+              )}}
+              ${{workflowManagementCard(
+                "Automatyzacje",
+                "Reguły, szablony, kolejność wykonywania i test pojedynczej reguły.",
+                `Aktywne: ${{counts.active}}. Robocze: ${{counts.drafts}}. Kontrola: ${{esc(safetyLabel)}}.`,
+                `<button onclick="renderAdminWorkflowForm(${{Number(workflow.id)}}, null, 4)">Edytuj automatyzacje</button>`
+              )}}
+              ${{workflowManagementCard(
+                "Centrum automatyzacji",
+                "Mapa reguł i symulacja: sprawdź, co zadziała dla przykładowego zgłoszenia.",
+                "Najlepsze miejsce do debugowania i tworzenia szkicu reguły z symulacji.",
+                `<button onclick="renderWorkflowAutomationCenter(${{Number(workflow.id)}})">Otwórz Centrum</button>`
+              )}}
+              ${{workflowManagementCard(
+                "Log automatyzacji",
+                "Historia wykonania reguł: która reguła pasowała, co zrobiła i dlaczego.",
+                "Użyj, gdy trzeba wyjaśnić zachowanie automatyzacji w czasie.",
+                `<button onclick="renderWorkflowRuleExecutions(${{Number(workflow.id)}})">Otwórz log</button>`
+              )}}
+            </div>
+            <section class="card">
+              <h3>Strefa ostrożna</h3>
+              <p class="muted">Usunięcie workflow bez zgłoszeń usuwa definicję. Workflow używany przez zgłoszenia zostanie dezaktywowany, aby nie zerwać historii.</p>
+              <button class="btn-danger btn-small" onclick="deleteAdminWorkflow(${{Number(workflow.id)}}, ${{Number(workflow.ticket_count || 0)}})">Usuń/dezaktywuj workflow</button>
+            </section>
+          `;
         }}
         async function renderAdminWorkflows() {{
           const me = await loadMe();
@@ -7478,7 +7589,8 @@ data:
               <td>
                 <strong>${{esc(w.name)}}</strong><br>
                 <span class="muted">${{esc(w.workflow_key)}}</span><br>
-                <span class="muted">Operatorzy: ${{(w.operators || []).map(o => esc(o.name || o.email)).join(", ") || "Brak"}}</span>
+                <span class="muted">Operatorzy: ${{(w.operators || []).map(o => esc(o.name || o.email)).join(", ") || "Brak"}}</span><br>
+                <span class="muted">Automatyzacje: ${{workflowAutomationCountSummary(w).active}} aktywne / ${{workflowAutomationCountSummary(w).drafts}} robocze</span>
               </td>
               <td>${{workflowMatchLabel(w)}}</td>
               <td>
@@ -7488,10 +7600,7 @@ data:
               <td>${{w.ticket_count || 0}}</td>
               <td>
                 <div class="actions">
-                  <button class="btn-secondary btn-small" onclick="renderAdminWorkflowForm(${{w.id}})">Edytuj</button>
-                  <button class="btn-secondary btn-small" onclick="renderWorkflowAutomationCenter(${{w.id}})">Centrum</button>
-                  <button class="btn-secondary btn-small" onclick="renderWorkflowRuleExecutions(${{w.id}})">Log</button>
-                  <button class="btn-danger btn-small" onclick="deleteAdminWorkflow(${{w.id}}, ${{w.ticket_count || 0}})">Usuń/dezaktywuj</button>
+                  <button class="btn-secondary btn-small" onclick="renderWorkflowManagement(${{w.id}})">Otwórz</button>
                 </div>
               </td>
             </tr>
@@ -7576,7 +7685,7 @@ data:
             </button>
           `;
         }}
-        async function renderAdminWorkflowForm(workflowId = null, draftAutomationRule = null) {{
+        async function renderAdminWorkflowForm(workflowId = null, draftAutomationRule = null, initialStage = 1) {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) return;
           const metaRes = await api("/api/meta");
@@ -7631,11 +7740,12 @@ data:
               </label>
             `;
           }}).join("") || `<p class="muted">Brak operatorów/adminów do wyboru.</p>`;
+          const backTarget = editing ? `renderWorkflowManagement(${{Number(workflow.id)}})` : "renderAdminWorkflows()";
+          const backLabel = editing ? "← Proces" : "← Workflow";
           workflowFormStage = 1;
           appEl.innerHTML = `
             <section id="workflowFormTop" class="card">
-              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
-              ${{editing ? `<button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{workflow.id}})">Log automatyzacji</button>` : ""}}
+              <button class="btn-secondary" onclick="${{backTarget}}">${{backLabel}}</button>
               <h2>${{editing ? "Edytuj workflow" : "Dodaj workflow"}}</h2>
               <p class="muted">Skonfiguruj proces w czterech krótkich krokach. Ustawienia techniczne są dostępne, ale nie przeszkadzają w podstawowej konfiguracji.</p>
               <div class="workflow-wizard-steps">
@@ -7734,7 +7844,7 @@ data:
                   <div class="actions">
                     <button id="workflowStageNext" type="button" onclick="setWorkflowFormStage(workflowFormStage + 1); return false;">Dalej →</button>
                     <button id="workflowSaveButton" type="submit" class="hidden">Zapisz workflow</button>
-                    <button type="button" class="btn-secondary" onclick="renderAdminWorkflows()">Anuluj</button>
+                    <button type="button" class="btn-secondary" onclick="${{backTarget}}">Anuluj</button>
                   </div>
                 </div>
               </form>
@@ -7746,7 +7856,7 @@ data:
           workflowAutomationEditorWorkflow = workflow;
           workflowAutomationEditor = workflowDefaultAutomationRules(workflow);
           renderWorkflowAutomationRules();
-          setWorkflowFormStage(1);
+          setWorkflowFormStage(draftAutomationRule && editing ? 4 : initialStage, true);
           document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
             updateWorkflowSubcategoryOptions(meta, e.target.value, "*");
             if (workflowAutomationEditorWorkflow) {{
@@ -7828,7 +7938,10 @@ data:
               return;
             }}
             msg.classList.remove("hidden");
-            setTimeout(renderAdminWorkflows, 600);
+            setTimeout(() => {{
+              if (editing) renderWorkflowManagement(workflow.id);
+              else renderAdminWorkflows();
+            }}, 600);
           }});
         }}
         async function deleteAdminWorkflow(workflowId, ticketCount = 0) {{

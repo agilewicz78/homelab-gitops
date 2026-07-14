@@ -200,4 +200,22 @@ for (const fragment of requiredAutomationCenter) {
   }
 }
 
+const requiredWorkflowHub = [
+  "renderWorkflowManagement",
+  "workflowAutomationCountSummary",
+  "workflowManagementMetric",
+  "workflowManagementCard",
+  "Zarządzanie procesem",
+  "Szybki przegląd",
+  "Edytuj automatyzacje",
+  "Otwórz Centrum",
+  "Strefa ostrożna",
+  "renderWorkflowManagement(${{w.id}})",
+];
+for (const fragment of requiredWorkflowHub) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing workflow hub fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");
