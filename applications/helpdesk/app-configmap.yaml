@@ -2111,6 +2111,18 @@ data:
                     "after": new_value,
                 })
         return changes
+    def workflow_audit_labels():
+        return {
+            "workflow_key": "Klucz workflow",
+            "name": "Nazwa",
+            "category": "Kategoria",
+            "subcategory": "Podkategoria",
+            "is_default": "Domyślny",
+            "is_active": "Aktywny",
+            "steps": "Statusy workflow",
+            "operator_emails": "Operatorzy workflow",
+            "automations": "Reguły automatyzacji",
+        }
     def workflow_automation_audit_snapshot(item):
         if not item:
             return {}
@@ -7761,6 +7773,22 @@ data:
             </section>
           `;
         }}
+        function workflowChangeHistoryLabel(key) {{
+          const map = {{
+            workflow_key: "Klucz workflow",
+            name: "Nazwa",
+            category: "Kategoria",
+            subcategory: "Podkategoria",
+            is_default: "Domyślny",
+            is_active: "Aktywny",
+            steps: "Statusy workflow",
+            operator_emails: "Operatorzy workflow",
+            automations: "Reguły automatyzacji",
+            event_type: "Zdarzenie",
+            actions: "Akcje",
+          }};
+          return map[key] || key;
+        }}
         function workflowChangeHistoryValue(value) {{
           if (value === true) return "tak";
           if (value === false) return "nie";
@@ -7773,13 +7801,22 @@ data:
           if (typeof value === "object") return JSON.stringify(value, null, 2);
           return String(value);
         }}
-        function workflowChangeHistoryDetails(details) {{
+        function workflowChangeHistoryDetails(details, action = "") {{
           const source = details || {{}};
           const changes = Array.isArray(source.changes) ? source.changes : [];
           if (changes.length) {{
+            if (action === "workflow_created" || action === "workflow_automation_created") {{
+              const rows = changes.map(change => `
+                <tr>
+                  <td>${{esc(change.label || workflowChangeHistoryLabel(change.field || "Pole"))}}</td>
+                  <td><pre style="white-space:pre-wrap;margin:0">${{esc(workflowChangeHistoryValue(change.after))}}</pre></td>
+                </tr>
+              `).join("");
+              return `<table><thead><tr><th>Co ustawiono</th><th>Wartość początkowa</th></tr></thead><tbody>${{rows}}</tbody></table>`;
+            }}
             const rows = changes.map(change => `
               <tr>
-                <td>${{esc(change.label || change.field || "Pole")}}</td>
+                <td>${{esc(change.label || workflowChangeHistoryLabel(change.field || "Pole"))}}</td>
                 <td><pre style="white-space:pre-wrap;margin:0">${{esc(workflowChangeHistoryValue(change.before))}}</pre></td>
                 <td><pre style="white-space:pre-wrap;margin:0">${{esc(workflowChangeHistoryValue(change.after))}}</pre></td>
               </tr>
@@ -7789,7 +7826,7 @@ data:
           const snapshot = source.after || source.before || source.automation || source.raw || {{}};
           if (snapshot && typeof snapshot === "object" && Object.keys(snapshot).length) {{
             const rows = Object.entries(snapshot).slice(0, 12).map(([key, value]) => `
-              <tr><td>${{esc(key)}}</td><td colspan="2"><pre style="white-space:pre-wrap;margin:0">${{esc(workflowChangeHistoryValue(value))}}</pre></td></tr>
+              <tr><td>${{esc(workflowChangeHistoryLabel(key))}}</td><td colspan="2"><pre style="white-space:pre-wrap;margin:0">${{esc(workflowChangeHistoryValue(value))}}</pre></td></tr>
             `).join("");
             return `<table><thead><tr><th>Pole</th><th colspan="2">Wartość</th></tr></thead><tbody>${{rows}}</tbody></table>`;
           }}
@@ -7820,7 +7857,7 @@ data:
                 </div>
                 <span class="pill">${{esc(item.action || "")}}</span>
               </div>
-              <div style="margin-top:12px">${{workflowChangeHistoryDetails(item.details || {{}})}}</div>
+              <div style="margin-top:12px">${{workflowChangeHistoryDetails(item.details || {{}}, item.action || "")}}</div>
             </section>
           `).join("");
           appEl.innerHTML = `
@@ -11809,8 +11846,26 @@ data:
             """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
         replace_workflow_operators(cur, workflow_id, operator_emails)
         replace_workflow_automations(cur, workflow_id, data.get("automations") or [])
-        audit_details = dict(data)
-        audit_details["operator_emails"] = operator_emails
+        after_snapshot = {
+            "workflow_key": data["workflow_key"],
+            "name": data["name"],
+            "category": data["category"],
+            "subcategory": data["subcategory"],
+            "is_default": bool(data["is_default"]),
+            "is_active": bool(data["is_active"]),
+            "steps": data["steps"],
+            "operator_emails": sorted(operator_emails),
+            "automations": [
+                workflow_automation_audit_snapshot(item)
+                for item in workflow_automation_entries(cur, workflow_id)
+            ],
+        }
+        audit_details = {
+            "workflow_key": data["workflow_key"],
+            "workflow_name": data["name"],
+            "after": after_snapshot,
+            "changes": workflow_audit_changes({}, after_snapshot, workflow_audit_labels()),
+        }
         log_audit(cur, user, "workflow_created", "workflow", workflow_id, audit_details)
         conn.commit()
         cur.close()
@@ -11915,15 +11970,7 @@ data:
             "workflow_name": data["name"],
             "before": before_snapshot,
             "after": after_snapshot,
-            "changes": workflow_audit_changes(before_snapshot, after_snapshot, {
-                "name": "Nazwa",
-                "category": "Kategoria",
-                "subcategory": "Podkategoria",
-                "is_default": "Domyślny",
-                "is_active": "Aktywny",
-                "steps": "Statusy workflow",
-                "operator_emails": "Operatorzy workflow",
-            }),
+            "changes": workflow_audit_changes(before_snapshot, after_snapshot, workflow_audit_labels()),
         }
         log_audit(cur, user, "workflow_updated", "workflow", workflow_id, audit_details)
         conn.commit()

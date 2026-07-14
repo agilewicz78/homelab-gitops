@@ -263,11 +263,15 @@ for (const fragment of requiredAutomationDashboard) {
 
 const requiredWorkflowChangeHistory = [
   "renderWorkflowChangeHistory",
+  "workflowChangeHistoryLabel",
   "workflowChangeHistoryValue",
   "workflowChangeHistoryDetails",
   "/change-history",
   "Historia zmian workflow",
   "Historia zmian",
+  "Co ustawiono",
+  "Wartość początkowa",
+  "Reguły automatyzacji",
   "Otwórz historię",
   "Kto, kiedy i co zmienił",
   "Utworzono regułę automatyzacji",
