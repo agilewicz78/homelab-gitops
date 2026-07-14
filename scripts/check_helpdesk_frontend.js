@@ -218,4 +218,23 @@ for (const fragment of requiredWorkflowHub) {
   }
 }
 
+const requiredAutomationStarterPacks = [
+  "workflowAutomationStarterPacks",
+  "workflowAutomationStarterPackCard",
+  "applyWorkflowAutomationTemplatePack",
+  "workflowAutomationCloneTemplateRule",
+  "workflowAutomationUniqueRuleName",
+  "Pakiety startowe",
+  "Dodaj cały pakiet",
+  "Codzienna obsługa zgłoszeń",
+  "Kontrola jakości przed zmianą statusu",
+  "Szybka ścieżka dla krytycznych zgłoszeń",
+  "reguł dodanych jako wersje robocze",
+];
+for (const fragment of requiredAutomationStarterPacks) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing automation starter pack fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");

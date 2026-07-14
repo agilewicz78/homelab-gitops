@@ -331,7 +331,7 @@ def main() -> None:
     assert "Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie." in text
     assert '"knowledge_article_changed"' in text
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
-    assert "2026-07-14-workflow-hub-v1" in deployment_text
+    assert "2026-07-14-automation-starter-packs-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
