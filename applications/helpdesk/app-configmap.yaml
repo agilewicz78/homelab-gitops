@@ -7775,6 +7775,9 @@ data:
         }}
         function workflowChangeHistoryLabel(key) {{
           const map = {{
+            id: "ID",
+            automation_id: "ID reguły",
+            automation_name: "Nazwa reguły",
             workflow_key: "Klucz workflow",
             name: "Nazwa",
             category: "Kategoria",
@@ -7788,6 +7791,28 @@ data:
             actions: "Akcje",
           }};
           return map[key] || key;
+        }}
+        function workflowChangeHistoryAutomationContext(details, action = "") {{
+          if (!String(action || "").startsWith("workflow_automation_")) return "";
+          const source = details || {{}};
+          const before = source.before && typeof source.before === "object" ? source.before : {{}};
+          const after = source.after && typeof source.after === "object" ? source.after : {{}};
+          const automation = source.automation && typeof source.automation === "object" ? source.automation : {{}};
+          const ruleName = source.automation_name || after.name || before.name || automation.name || "Reguła workflow";
+          const ruleId = source.automation_id || after.id || before.id || automation.id || "";
+          const eventType = after.event_type || before.event_type || automation.event_type || "";
+          const previousName = before.name && after.name && before.name !== after.name ? before.name : "";
+          const meta = [
+            ruleId ? `ID reguły: ${{esc(ruleId)}}` : "",
+            eventType ? `Zdarzenie: ${{esc(workflowAutomationRuleEventLabel(eventType))}}` : "",
+            previousName ? `Poprzednia nazwa: ${{esc(previousName)}}` : "",
+          ].filter(Boolean).join(" · ");
+          return `
+            <div class="panel-soft" style="margin-top:12px">
+              <strong>Reguła automatyzacji: ${{esc(ruleName)}}</strong>
+              ${{meta ? `<div class="attachment-upload-hint">${{meta}}</div>` : ""}}
+            </div>
+          `;
         }}
         function workflowChangeHistoryValue(value) {{
           if (value === true) return "tak";
@@ -7857,6 +7882,7 @@ data:
                 </div>
                 <span class="pill">${{esc(item.action || "")}}</span>
               </div>
+              ${{workflowChangeHistoryAutomationContext(item.details || {{}}, item.action || "")}}
               <div style="margin-top:12px">${{workflowChangeHistoryDetails(item.details || {{}}, item.action || "")}}</div>
             </section>
           `).join("");
