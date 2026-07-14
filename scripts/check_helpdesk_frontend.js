@@ -181,6 +181,8 @@ const requiredAutomationCenter = [
   "workflowAutomationCenterRiskBadge",
   "workflowAutomationCenterStatusOptions",
   "workflowAutomationCenterSampleForm(data)",
+  "workflowAutomationCenterDraftRule",
+  "createWorkflowAutomationRuleFromCenterSample",
   "workflowAutomationCenterSummary(data)",
   "workflowAutomationCenterRuleCard(rule, idx)",
   "workflowAutomationCenterRecentExecutions(data)",
@@ -188,6 +190,7 @@ const requiredAutomationCenter = [
   'id="wacOperatorAddedComment"',
   'id="wacOperatorAddedAttachment"',
   "Centrum automatyzacji",
+  "Utwórz regułę z tej symulacji",
   "Podsumowanie Centrum automatyzacji",
   "Co zrobi?",
 ];
