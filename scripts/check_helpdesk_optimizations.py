@@ -343,7 +343,12 @@ def main() -> None:
     assert "workflowChangeHistoryAutomationContext" in text
     assert '"after": after_snapshot' in text
     assert "workflow_audit_changes({}, after_snapshot, workflow_audit_labels())" in text
-    assert "2026-07-14-workflow-history-rule-context-v1" in deployment_text
+    assert "/api/operator-center" in text
+    assert "def api_operator_center" in text
+    assert "operatorCenterTicketSection" in text
+    assert "currentView.name === \"operator-center\"" in text
+    assert "loadNotifications()" in text
+    assert "2026-07-14-operator-work-center-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
