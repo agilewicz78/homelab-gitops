@@ -333,7 +333,11 @@ def main() -> None:
     assert "helpdesk.incoprp.local/app-config-revision:" in deployment_text
     assert "/automation-dashboard" in text
     assert "api_admin_workflow_automation_dashboard" in text
-    assert "2026-07-14-automation-dashboard-v1" in deployment_text
+    assert "/change-history" in text
+    assert "api_admin_workflow_change_history" in text
+    assert "workflow_audit_changes" in text
+    assert "workflow_automation_audit_snapshot" in text
+    assert "2026-07-14-workflow-change-history-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
