@@ -2165,6 +2165,7 @@ data:
             "staff_comment_added",
             "attachment_added",
             "status_changed",
+            "ticket_assigned",
         }
         valid_roles = {"user", "staff", "operator", "admin", "*", "any", ""}
         valid_visibility = {"public", "internal", "*", "any", ""}
@@ -5196,6 +5197,7 @@ data:
         }}
         let workflowAutomationEditor = [];
         let workflowAutomationEditorWorkflow = null;
+        let workflowAutomationCenterCurrentData = null;
         function automationSelectOptions(options, selected) {{
           return options.map(o => {{
             const value = typeof o === "string" ? o : o.value;
@@ -6034,8 +6036,11 @@ data:
             eventOptions: automationSelectOptions([
               {{ value: "ticket_created", label: "Utworzono zgłoszenie" }},
               {{ value: "comment_added", label: "Dodano komentarz/notatkę" }},
+              {{ value: "user_comment_added", label: "Komentarz użytkownika" }},
+              {{ value: "staff_comment_added", label: "Komentarz operatora/admina" }},
               {{ value: "attachment_added", label: "Dodano załącznik" }},
               {{ value: "status_changed", label: "Zmieniono status" }},
+              {{ value: "ticket_assigned", label: "Przypisano zgłoszenie" }},
             ], rule.event_type || "comment_added"),
             roleOptions: automationSelectOptions([
               {{ value: "*", label: "dowolna" }},
@@ -6999,6 +7004,83 @@ data:
             operator_added_attachment: checked("wacOperatorAddedAttachment"),
           }};
         }}
+        function workflowAutomationCenterRoleCondition(sample) {{
+          const eventType = sample.event_type || "comment_added";
+          const role = sample.actor_role || "*";
+          if (eventType === "user_comment_added") return "user";
+          if (eventType === "staff_comment_added") return "staff";
+          return role === "staff" ? "staff" : role || "*";
+        }}
+        function workflowAutomationCenterInheritedCondition(workflowValue, sampleValue) {{
+          const workflowScope = String(workflowValue || "*");
+          const value = String(sampleValue || "*");
+          if (workflowScope !== "*" && workflowScope === value) return "*";
+          return value || "*";
+        }}
+        function workflowAutomationCenterDefaultAction(sample) {{
+          const eventType = sample.event_type || "comment_added";
+          if (eventType !== "status_changed" && sample.event_new_status) {{
+            return {{
+              action_type: "change_status",
+              action_value: sample.event_new_status,
+              is_active: true,
+              action_order: 1,
+            }};
+          }}
+          return {{
+            action_type: "add_history",
+            action_value: "Reguła utworzona z symulacji Centrum automatyzacji. Uzupełnij akcje przed aktywacją.",
+            is_active: true,
+            action_order: 1,
+          }};
+        }}
+        function workflowAutomationCenterDraftRule(workflow, sample) {{
+          workflow = workflow || {{}};
+          sample = sample || {{}};
+          const eventType = sample.event_type || "comment_added";
+          const isCommentEvent = ["comment_added", "user_comment_added", "staff_comment_added"].includes(eventType);
+          const defaultAction = workflowAutomationCenterDefaultAction(sample);
+          return {{
+            id: null,
+            name: `Z symulacji: ${{workflowAutomationRuleEventLabel(eventType)}}`,
+            event_type: eventType,
+            condition_status: sample.current_status || "",
+            condition_to_status: eventType === "status_changed" ? (sample.event_new_status || "") : "",
+            condition_role: workflowAutomationCenterRoleCondition(sample),
+            condition_comment_visibility: isCommentEvent ? (sample.comment_visibility || "*") : "*",
+            assigned_state: sample.assigned_state || "*",
+            condition_priority: sample.priority || "*",
+            condition_category: workflowAutomationCenterInheritedCondition(workflow.category, sample.category),
+            condition_subcategory: workflowAutomationCenterInheritedCondition(workflow.subcategory, sample.subcategory),
+            condition_sla_state: sample.sla_state || "*",
+            condition_status_operator: "eq",
+            condition_to_status_operator: "eq",
+            condition_role_operator: "eq",
+            condition_comment_visibility_operator: "eq",
+            assigned_state_operator: "eq",
+            condition_priority_operator: "eq",
+            condition_category_operator: "eq",
+            condition_subcategory_operator: "eq",
+            condition_sla_state_operator: "eq",
+            action_type: defaultAction.action_type,
+            action_status: defaultAction.action_value,
+            actions: [defaultAction],
+            is_active: false,
+            stop_processing: true,
+            priority: 100,
+          }};
+        }}
+        function createWorkflowAutomationRuleFromCenterSample() {{
+          const data = workflowAutomationCenterCurrentData || {{}};
+          const workflow = data.workflow || {{}};
+          const workflowId = Number(workflow.id || 0);
+          if (!workflowId) {{
+            alert("Nie udało się ustalić workflow dla szkicu reguły.");
+            return;
+          }}
+          const draftRule = workflowAutomationCenterDraftRule(workflow, workflowAutomationCenterSampleValues());
+          renderAdminWorkflowForm(workflowId, draftRule);
+        }}
         function workflowAutomationCenterSampleForm(data) {{
           const workflow = data.workflow || {{}};
           const sample = data.sample || {{}};
@@ -7060,9 +7142,11 @@ data:
               </div>
               <div class="actions" style="margin-top:12px">
                 <button onclick="renderWorkflowAutomationCenter(${{Number(workflow.id || 0)}}, workflowAutomationCenterSampleValues()); return false;">Uruchom symulację</button>
+                <button class="btn-secondary" onclick="createWorkflowAutomationRuleFromCenterSample(); return false;">Utwórz regułę z tej symulacji</button>
                 <button class="btn-secondary" onclick="renderAdminWorkflowForm(${{Number(workflow.id || 0)}}); return false;">Edytuj workflow</button>
                 <button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{Number(workflow.id || 0)}}); return false;">Otwórz log</button>
               </div>
+              <div class="attachment-upload-hint">Nowa reguła otworzy się jako nieaktywny szkic w kreatorze. Przed zapisem możesz zmienić akcje i uruchomić test.</div>
             </section>
           `;
         }}
@@ -7188,6 +7272,7 @@ data:
             appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Centrum automatyzacji</h2><p class="error">${{esc(data.error || data.message || "Nie udało się pobrać Centrum automatyzacji.")}}</p></section>`;
             return;
           }}
+          workflowAutomationCenterCurrentData = data;
           const workflow = data.workflow || {{}};
           const rules = (data.rules || []).map((rule, idx) => workflowAutomationCenterRuleCard(rule, idx)).join("");
           appEl.innerHTML = `
@@ -7491,7 +7576,7 @@ data:
             </button>
           `;
         }}
-        async function renderAdminWorkflowForm(workflowId = null) {{
+        async function renderAdminWorkflowForm(workflowId = null, draftAutomationRule = null) {{
           const me = await loadMe();
           if (!me || !isAdmin(me)) return;
           const metaRes = await api("/api/meta");
@@ -7672,6 +7757,10 @@ data:
           document.getElementById("workflowSubcategorySelect").addEventListener("change", (e) => {{
             if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.subcategory = e.target.value;
           }});
+          if (draftAutomationRule && editing) {{
+            setWorkflowFormStage(4, true);
+            openWorkflowAutomationRuleForm(null, draftAutomationRule);
+          }}
           document.getElementById("workflowForm").addEventListener("submit", async (e) => {{
             e.preventDefault();
             for (let stage = 1; stage <= 4; stage += 1) {{
