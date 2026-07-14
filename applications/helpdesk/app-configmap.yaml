@@ -473,6 +473,15 @@ data:
             if status != "Zamknięte":
                 return status
         return "Nowe"
+    def resolution_feedback_reopen_status_for_workflow(workflow_key):
+        statuses = workflow_statuses(workflow_key)
+        for preferred in ("W trakcie", "Otwarte", "Nowe"):
+            if preferred in statuses:
+                return preferred
+        for status in statuses:
+            if status not in ("Rozwiązane", "Zamknięte"):
+                return status
+        return "Nowe"
     def workflow_key_from_name(name):
         value = clean(name).lower()
         replacements = {
@@ -994,6 +1003,26 @@ data:
                 """)
                 cur.execute("""
                     ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS resolution_feedback_decision TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS resolution_feedback_comment TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS resolution_feedback_by_email TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS resolution_feedback_by_name TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS resolution_feedback_at TIMESTAMP
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
                     ADD COLUMN IF NOT EXISTS workflow_key TEXT
                 """)
                 cur.execute("""
@@ -1412,6 +1441,7 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_workflow_automations_event ON workflow_automations (workflow_id, event_type, priority, id)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_automation_actions_lookup ON workflow_automation_actions (automation_id, is_active, action_order)",
                     "CREATE INDEX IF NOT EXISTS idx_ticket_status_history_resolution ON ticket_status_history (new_status, created_at, ticket_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_resolution_feedback_at ON tickets (resolution_feedback_decision, resolution_feedback_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_audit_log_created ON audit_log (created_at DESC, id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_audit_log_action_created ON audit_log (action, created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_audit_log_actor_created ON audit_log (lower(actor_email), created_at DESC)",
@@ -3178,6 +3208,7 @@ data:
         .incident-update-internal { border-left: 3px solid #64748b; }
         .knowledge-card { border-left: 5px solid #38bdf8; }
         .knowledge-solution { white-space: pre-wrap; line-height: 1.65; }
+        .resolution-feedback-panel { margin-top: 12px; border-left: 4px solid #22c55e; }
     </style>
         </head>
         <body>
@@ -3965,6 +3996,8 @@ data:
             sla_first_response_warning: "SLA reakcji blisko terminu",
             sla_resolution_overdue: "SLA rozwiązania przekroczone",
             sla_resolution_warning: "SLA rozwiązania blisko terminu",
+            resolution_feedback_accepted: "Rozwiązanie potwierdzone",
+            resolution_feedback_rejected: "Rozwiązanie odrzucone",
             workflow_rule_notification: "Automatyzacja workflow"
           }};
           return map[type] || "Powiadomienie";
@@ -4171,6 +4204,8 @@ data:
             "ticket_link_changed",
             "ticket_closed",
             "ticket_reopened",
+            "resolution_feedback_accepted",
+            "resolution_feedback_rejected",
             "incident_created",
             "incident_updated",
             "incident_update",
@@ -4543,7 +4578,7 @@ data:
         function userPortalNextStep(ticket) {{
           const status = ticket.status || "";
           if (status === "Zamknięte") return "Zgłoszenie jest zamknięte. Możesz wrócić do historii, jeżeli chcesz sprawdzić rozwiązanie.";
-          if (status === "Rozwiązane") return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź komentarze i daj znać, jeżeli problem nadal występuje.";
+          if (status === "Rozwiązane") return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź rozwiązanie i potwierdź, czy problem faktycznie zniknął.";
           if (status === "Oczekuje na użytkownika") return "Czekamy na Twoją odpowiedź. Dodaj publiczny komentarz albo załącznik, żeby operator mógł iść dalej.";
           if (Number(ticket.active_incident_count || 0) > 0) return "Sprawa jest obsługiwana w ramach incydentu zbiorczego. Aktualizacje będą pojawiać się w komentarzach.";
           if (!ticket.assigned_to_name) return "Zgłoszenie czeka na przypisanie operatora. Nie musisz tworzyć kolejnego zgłoszenia.";
@@ -4676,6 +4711,65 @@ data:
           textarea.scrollIntoView({{ behavior: "smooth", block: "center" }});
           textarea.focus();
         }}
+        function resolutionFeedbackPanel(ticket) {{
+          const decision = ticket.resolution_feedback_decision || "";
+          if (decision === "accepted") {{
+            return `
+              <div class="panel-soft resolution-feedback-panel">
+                <strong>Rozwiązanie potwierdzone przez użytkownika.</strong>
+                <div class="attachment-upload-hint">
+                  ${{esc(ticket.resolution_feedback_by_name || "Użytkownik")}} · ${{esc(ticket.resolution_feedback_at || "")}}
+                  ${{ticket.resolution_feedback_comment ? " · " + esc(ticket.resolution_feedback_comment) : ""}}
+                </div>
+              </div>
+            `;
+          }}
+          if (ticket.status !== "Rozwiązane") return "";
+          const rejectedHint = decision === "rejected"
+            ? `<p class="muted">Wcześniej zgłoszono, że rozwiązanie nie pomogło. Jeżeli operator poprawił rozwiązanie, możesz ocenić je ponownie.</p>`
+            : "";
+          return `
+            <div class="panel-soft resolution-feedback-panel">
+              <strong>Czy problem został rozwiązany?</strong>
+              <p class="muted">Twoja odpowiedź zamyka pętlę obsługi. Jeśli wszystko działa, zgłoszenie zostanie zamknięte. Jeśli nadal jest problem, wróci do operatora.</p>
+              ${{rejectedHint}}
+              <label>Dodatkowy komentarz opcjonalny przy potwierdzeniu, wymagany przy odrzuceniu</label>
+              <textarea id="resolutionFeedbackComment" placeholder="Np. Działa po restarcie usługi albo: problem nadal występuje na laptopie..."></textarea>
+              <div class="form-actions">
+                <button type="button" onclick="submitResolutionFeedback(${{Number(ticket.id)}}, 'accepted')">Tak, działa</button>
+                <button type="button" class="btn-danger" onclick="submitResolutionFeedback(${{Number(ticket.id)}}, 'rejected')">Nie, nadal mam problem</button>
+              </div>
+            </div>
+          `;
+        }}
+        async function submitResolutionFeedback(ticketId, decision) {{
+          const comment = document.getElementById("resolutionFeedbackComment")?.value || "";
+          if (decision === "rejected" && comment.trim().length < 5) {{
+            alert("Napisz krótko, co nadal nie działa. Operator od razu dostanie tę informację.");
+            return;
+          }}
+          const accepted = decision === "accepted";
+          const message = accepted
+            ? "Potwierdzić rozwiązanie i zamknąć zgłoszenie?"
+            : "Odesłać zgłoszenie do operatora z Twoim komentarzem?";
+          if (!confirm(message)) return;
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${{ticketId}}/resolution-feedback`, {{
+            method: "POST",
+            body: JSON.stringify({{ decision, comment }})
+          }});
+          const data = res ? await res.json().catch(() => ({{}})) : {{}};
+          if (!res || !res.ok) {{
+            suppressNextLiveRefresh = false;
+            alert(data.error || "Nie udało się zapisać oceny rozwiązania.");
+            return;
+          }}
+          showToast(
+            accepted ? "Dziękujemy za potwierdzenie rozwiązania" : "Zgłoszenie wróciło do operatora",
+            data.ticket_status ? `Aktualny status: ${{data.ticket_status}}` : ""
+          );
+          await renderTicket(ticketId);
+        }}
         function userPortalTicketStatusPanel(ticket, data) {{
           const incidents = data?.incidents || [];
           const hasIncident = incidents.some(i => i.status !== "resolved");
@@ -4702,6 +4796,7 @@ data:
                 </div>
                 ${{hasIncident ? `<div class="attachment-upload-hint" style="margin-top:6px">To zgłoszenie jest częścią aktywnego incydentu. Publiczne komunikaty incydentu pojawią się w komentarzach.</div>` : ""}}
               </div>
+              ${{resolutionFeedbackPanel(ticket)}}
             </section>
           `;
         }}
@@ -14662,7 +14757,12 @@ data:
                    COALESCE(t.workflow_key, 'default') AS workflow_key,
                    COALESCE(t.workflow_name, %s) AS workflow_name,
                    t.first_response_due_at,
-                   t.first_response_at
+                   t.first_response_at,
+                   COALESCE(t.resolution_feedback_decision, '') AS resolution_feedback_decision,
+                   COALESCE(t.resolution_feedback_comment, '') AS resolution_feedback_comment,
+                   COALESCE(t.resolution_feedback_by_email, '') AS resolution_feedback_by_email,
+                   COALESCE(t.resolution_feedback_by_name, '') AS resolution_feedback_by_name,
+                   t.resolution_feedback_at
             FROM tickets t
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
@@ -14760,7 +14860,7 @@ data:
             if status == "Zamknięte":
                 return "Zgłoszenie jest zamknięte. Rozwiązanie i historia pozostają w szczegółach zgłoszenia."
             if status == "Rozwiązane":
-                return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź komentarze i daj znać, jeżeli problem nadal występuje."
+                return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź rozwiązanie i potwierdź, czy problem faktycznie zniknął."
             if status == "Oczekuje na użytkownika":
                 return "Czekamy na Twoją odpowiedź. Dodaj publiczny komentarz albo załącznik."
             if active_incident_count > 0:
@@ -16573,6 +16673,11 @@ data:
             "first_response_due_at": str(row[22]) if row[22] else "",
             "first_response_at": str(row[23]) if row[23] else "",
             "first_response_state": first_response_state(row[22], row[23], row[9]),
+            "resolution_feedback_decision": row[24] or "",
+            "resolution_feedback_comment": row[25] or "",
+            "resolution_feedback_by_email": row[26] or "",
+            "resolution_feedback_by_name": row[27] or "",
+            "resolution_feedback_at": str(row[28]) if row[28] else "",
             "sla_state": sla_state(row[14], row[9]),
         }
         comments = [
@@ -16722,6 +16827,134 @@ data:
                 "subcategories": SUBCATEGORIES,
             },
         })
+    @app.post("/api/tickets/<int:ticket_id>/resolution-feedback")
+    @api_login_required
+
+    # Decyzja użytkownika po statusie Rozwiązane: potwierdza zamknięcie albo odsyła sprawę do operatora.
+    def api_ticket_resolution_feedback(user, ticket_id):
+        if is_staff(user):
+            return jsonify({"error": "Ocena rozwiązania jest akcją użytkownika zgłaszającego."}), 403
+        if not can_view_ticket(user, ticket_id):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        decision = clean(payload.get("decision")).lower()
+        comment = clean(payload.get("comment"))
+        if decision not in ("accepted", "rejected"):
+            return jsonify({"error": "Nieprawidłowa decyzja. Użyj accepted albo rejected."}), 400
+        if decision == "rejected" and len(comment) < 5:
+            return jsonify({"error": "Przy odrzuceniu rozwiązania opisz krótko, co nadal nie działa."}), 400
+
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT status, COALESCE(workflow_key, 'default'), title, COALESCE(resolution_summary, '')
+            FROM tickets
+            WHERE id = %s
+        """, (ticket_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        old_status, workflow_key, title, resolution_summary = row
+        if old_status != "Rozwiązane":
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Ocenę rozwiązania można zapisać tylko dla zgłoszenia w statusie Rozwiązane."}), 400
+
+        if decision == "accepted":
+            target_status = "Zamknięte"
+            feedback_comment = comment or "Użytkownik potwierdził, że problem został rozwiązany."
+            cur.execute("""
+                UPDATE tickets
+                SET status = 'Zamknięte',
+                    updated_at = NOW(),
+                    closed_at = NOW(),
+                    closed_by_email = %s,
+                    resolution_summary = COALESCE(NULLIF(resolution_summary, ''), %s),
+                    resolution_feedback_decision = %s,
+                    resolution_feedback_comment = %s,
+                    resolution_feedback_by_email = %s,
+                    resolution_feedback_by_name = %s,
+                    resolution_feedback_at = NOW()
+                WHERE id = %s
+            """, (
+                user["email"],
+                "Rozwiązanie potwierdzone przez użytkownika.",
+                decision,
+                feedback_comment,
+                user["email"],
+                user["name"],
+                ticket_id,
+            ))
+            event_type = "resolution_feedback_accepted"
+            event_text = f"Użytkownik potwierdził rozwiązanie zgłoszenia #{ticket_id}. Status zmieniono z Rozwiązane na Zamknięte."
+            notification_text = f"Użytkownik potwierdził rozwiązanie zgłoszenia #{ticket_id}: {title}."
+        else:
+            target_status = resolution_feedback_reopen_status_for_workflow(workflow_key)
+            feedback_comment = comment
+            cur.execute("""
+                UPDATE tickets
+                SET status = %s,
+                    updated_at = NOW(),
+                    closed_at = NULL,
+                    closed_by_email = NULL,
+                    resolution_feedback_decision = %s,
+                    resolution_feedback_comment = %s,
+                    resolution_feedback_by_email = %s,
+                    resolution_feedback_by_name = %s,
+                    resolution_feedback_at = NOW()
+                WHERE id = %s
+            """, (
+                target_status,
+                decision,
+                feedback_comment,
+                user["email"],
+                user["name"],
+                ticket_id,
+            ))
+            event_type = "resolution_feedback_rejected"
+            event_text = f"Użytkownik odrzucił rozwiązanie zgłoszenia #{ticket_id}. Status zmieniono z Rozwiązane na {target_status}."
+            notification_text = f"Użytkownik zgłosił, że rozwiązanie zgłoszenia #{ticket_id} nie działa: {title}."
+
+        comment_prefix = "Potwierdzenie rozwiązania" if decision == "accepted" else "Rozwiązanie nie pomogło"
+        cur.execute("""
+            INSERT INTO comments (ticket_id, author, author_email, content, visibility)
+            VALUES (%s, %s, %s, %s, 'public')
+        """, (ticket_id, user["name"], user["email"], f"{comment_prefix}: {feedback_comment}"))
+        add_ticket_status_history(
+            cur,
+            ticket_id,
+            user,
+            old_status,
+            target_status,
+            source="user_resolution_feedback",
+        )
+        add_ticket_event(cur, ticket_id, user, event_type, event_text)
+        add_ticket_event(cur, ticket_id, user, "comment_added", "Dodano publiczny komentarz z oceną rozwiązania.")
+        log_audit(cur, user, event_type, "ticket", ticket_id, {
+            "decision": decision,
+            "old_status": old_status,
+            "new_status": target_status,
+            "comment": feedback_comment,
+        })
+        create_ticket_notifications(
+            cur,
+            ticket_id,
+            event_type,
+            notification_text,
+            actor_email=user["email"],
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(event_text, event_type, ticket_id)
+        return jsonify({
+            "status": "ok",
+            "ticket_status": target_status,
+            "decision": decision,
+        })
+
     @app.post("/api/tickets/<int:ticket_id>/close")
     @api_login_required
     def api_close_ticket(user, ticket_id):
