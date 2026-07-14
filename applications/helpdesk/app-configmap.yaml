@@ -5198,6 +5198,7 @@ data:
         let workflowAutomationEditor = [];
         let workflowAutomationEditorWorkflow = null;
         let workflowAutomationCenterCurrentData = null;
+        let workflowAutomationLastStarterPack = null;
         function automationSelectOptions(options, selected) {{
           return options.map(o => {{
             const value = typeof o === "string" ? o : o.value;
@@ -5707,6 +5708,44 @@ data:
           sessionStorage.setItem("helpdesk_workflow_automation_view", normalized);
           renderWorkflowAutomationRules();
         }}
+        function workflowAutomationStarterPackActivationPanel() {{
+          const pack = workflowAutomationLastStarterPack;
+          if (!pack || !Array.isArray(pack.rules) || !pack.rules.length) return "";
+          const rows = pack.rules.map(item => `
+            <div class="panel-soft" style="margin-top:8px">
+              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div>
+                  <strong>${{esc(item.name)}}</strong><br>
+                  <span class="muted">Szkic reguły z pakietu: ${{esc(pack.title)}}. Najpierw uruchom test, potem aktywuj tylko pasujące reguły.</span>
+                </div>
+                <div class="actions">
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{Number(item.index)}}, null, 4); return false;">Testuj i aktywuj</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="openWorkflowAutomationRuleForm(${{Number(item.index)}}); return false;">Edytuj warunki</button>
+                </div>
+              </div>
+            </div>
+          `).join("");
+          return `
+            <section class="card" id="workflowStarterPackActivationPanel" style="border-color:rgba(34,197,94,.45)">
+              <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+                <div>
+                  <h3>Bezpieczna aktywacja pakietu</h3>
+                  <p class="muted">Dodano pakiet <strong>${{esc(pack.title)}}</strong>. Reguły są wersjami roboczymi, więc nie wykonają się, dopóki ich nie aktywujesz.</p>
+                </div>
+                <button type="button" class="btn-secondary btn-small" onclick="dismissWorkflowAutomationStarterPackActivation(); return false;">Ukryj panel</button>
+              </div>
+              <div class="grid two" style="margin-top:10px">
+                <div class="panel-soft"><strong>1. Sprawdź reguły</strong><br><span class="muted">Otwórz test i zobacz, czy symulacja pasuje do procesu.</span></div>
+                <div class="panel-soft"><strong>2. Aktywuj wybrane</strong><br><span class="muted">Włącz tylko te reguły, które dają oczekiwany efekt.</span></div>
+              </div>
+              ${{rows}}
+            </section>
+          `;
+        }}
+        function dismissWorkflowAutomationStarterPackActivation() {{
+          workflowAutomationLastStarterPack = null;
+          renderWorkflowAutomationRules();
+        }}
         function workflowAutomationRuleListItem(rule, idx) {{
           const activeBadge = rule.is_active !== false
             ? `<span class="status-badge status-new">Aktywna</span>`
@@ -5766,7 +5805,8 @@ data:
               ? workflowAutomationRuleDiagramCard(rule, idx)
               : workflowAutomationRuleListItem(rule, idx))
             .join("");
-          box.innerHTML = rules || `<p class="muted">Brak reguł automatyzacji. Kliknij „Dodaj regułę automatyzacji”, aby utworzyć pierwszą regułę.</p>`;
+          const activationPanel = workflowAutomationStarterPackActivationPanel();
+          box.innerHTML = activationPanel + (rules || `<p class="muted">Brak reguł automatyzacji. Kliknij „Dodaj regułę automatyzacji”, aby utworzyć pierwszą regułę.</p>`);
           const listButton = document.getElementById("workflowAutomationListViewButton");
           const diagramButton = document.getElementById("workflowAutomationDiagramViewButton");
           if (listButton) listButton.setAttribute("aria-pressed", viewMode === "list" ? "true" : "false");
@@ -6028,21 +6068,54 @@ data:
             alert("Nie udało się otworzyć listy szablonów reguł workflow: " + (err && err.message ? err.message : err));
           }}
         }}
-        function applyWorkflowAutomationTemplatePack(packId) {{
+        async function applyWorkflowAutomationTemplatePack(packId) {{
           const pack = workflowAutomationStarterPacks().find(item => item.id === packId);
           if (!pack) return;
+          const workflowId = workflowAutomationEditorWorkflow && workflowAutomationEditorWorkflow.id;
           const added = [];
           const baseIndex = workflowAutomationEditor.length;
-          pack.templates.forEach((template, offset) => {{
+          const draftRules = pack.templates.map((template, offset) => {{
             const rule = workflowAutomationCloneTemplateRule(template);
             rule.priority = ((baseIndex + offset + 1) * 10);
-            workflowAutomationEditor.push(rule);
-            added.push(rule.name);
+            return rule;
           }});
+          if (workflowId) {{
+            for (const rule of draftRules) {{
+              const res = await api(`/api/admin/workflows/${{workflowId}}/automations`, {{
+                method: "POST",
+                body: JSON.stringify(rule),
+              }});
+              if (!res || !res.ok) {{
+                const data = res ? await res.json().catch(() => ({{}})) : {{}};
+                alert(data.error || "Nie udało się zapisać reguły z pakietu automatyzacji.");
+                await refreshWorkflowAutomationRulesFromApi(workflowId);
+                return;
+              }}
+              const data = await res.json().catch(() => ({{}}));
+              workflowAutomationEditor = Array.isArray(data.automations) ? data.automations : workflowAutomationEditor;
+            }}
+            if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
+            draftRules.forEach(rule => {{
+              const index = workflowAutomationEditor.findIndex(item => item.name === rule.name && item.is_active === false);
+              if (index >= 0) added.push({{ index, name: rule.name }});
+            }});
+          }} else {{
+            draftRules.forEach((rule, offset) => {{
+              workflowAutomationEditor.push(rule);
+              added.push({{ index: baseIndex + offset, name: rule.name }});
+            }});
+            if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
+          }}
+          workflowAutomationLastStarterPack = {{
+            id: pack.id,
+            title: pack.title,
+            rules: added,
+          }};
           if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
           closeWorkflowAutomationRuleForm();
           renderWorkflowAutomationRules();
-          showToast("Dodano pakiet automatyzacji", `${{added.length}} reguł dodanych jako wersje robocze.`);
+          document.getElementById("workflowStarterPackActivationPanel")?.scrollIntoView({{ behavior: "smooth", block: "start" }});
+          showToast("Dodano pakiet automatyzacji", `${{added.length}} reguł dodanych jako wersje robocze. Przetestuj je przed aktywacją.`);
         }}
         function applyWorkflowAutomationTemplate(templateId) {{
           const template = workflowAutomationRuleTemplates().find(t => t.id === templateId);
@@ -6061,6 +6134,7 @@ data:
           const data = await res.json();
           workflowAutomationEditor = Array.isArray(data.automations) ? data.automations : [];
           if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
+          workflowAutomationLastStarterPack = null;
           renderWorkflowAutomationRules();
         }}
         let workflowAutomationEditingIndex = null;
@@ -6592,7 +6666,7 @@ data:
             </button>
           `;
         }}
-        function openWorkflowAutomationRuleForm(idx = null, presetRule = null) {{
+        function openWorkflowAutomationRuleForm(idx = null, presetRule = null, initialStage = 1) {{
           workflowAutomationEditingIndex = idx === null || idx === undefined ? null : Number(idx);
           const sourceRule = presetRule
             ? {{ ...workflowAutomationEmptyRule(), ...presetRule, id: null }}
@@ -6818,7 +6892,7 @@ data:
           workflowAutomationActiveConditionKeys = workflowAutomationInitialConditionKeys(sourceRule, opts);
           renderWorkflowAutomationActionsForm();
           renderWorkflowAutomationConditionBuilder();
-          setWorkflowAutomationRuleFormStage(1, true);
+          setWorkflowAutomationRuleFormStage(initialStage, true);
           const form = document.getElementById("workflowAutomationRuleForm");
           const updatePreview = () => {{
             const previewRule = workflowAutomationRuleFromForm(form);
@@ -7009,6 +7083,7 @@ data:
           }} else {{
             workflowAutomationEditor.splice(idx, 1);
           }}
+          workflowAutomationLastStarterPack = null;
           renderWorkflowAutomationRules();
         }}
         function removeWorkflowAutomationRule(idx) {{
@@ -7955,6 +8030,7 @@ data:
           workflow.meta = meta;
           workflowAutomationEditorWorkflow = workflow;
           workflowAutomationEditor = workflowDefaultAutomationRules(workflow);
+          workflowAutomationLastStarterPack = null;
           renderWorkflowAutomationRules();
           setWorkflowFormStage(draftAutomationRule && editing ? 4 : initialStage, true);
           document.getElementById("workflowCategorySelect").addEventListener("change", (e) => {{
