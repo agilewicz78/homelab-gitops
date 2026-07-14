@@ -336,8 +336,11 @@ def main() -> None:
     assert "/change-history" in text
     assert "api_admin_workflow_change_history" in text
     assert "workflow_audit_changes" in text
+    assert "workflow_audit_labels" in text
     assert "workflow_automation_audit_snapshot" in text
-    assert "2026-07-14-workflow-change-history-v1" in deployment_text
+    assert '"after": after_snapshot' in text
+    assert "workflow_audit_changes({}, after_snapshot, workflow_audit_labels())" in text
+    assert "2026-07-14-workflow-created-snapshot-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
