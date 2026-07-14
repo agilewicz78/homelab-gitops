@@ -338,9 +338,12 @@ def main() -> None:
     assert "workflow_audit_changes" in text
     assert "workflow_audit_labels" in text
     assert "workflow_automation_audit_snapshot" in text
+    assert '"automation_id": automation_id' in text
+    assert '"automation_name": item.get("name")' in text
+    assert "workflowChangeHistoryAutomationContext" in text
     assert '"after": after_snapshot' in text
     assert "workflow_audit_changes({}, after_snapshot, workflow_audit_labels())" in text
-    assert "2026-07-14-workflow-created-snapshot-v1" in deployment_text
+    assert "2026-07-14-workflow-history-rule-context-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
