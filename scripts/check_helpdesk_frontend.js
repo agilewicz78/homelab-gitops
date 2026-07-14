@@ -284,6 +284,27 @@ for (const fragment of requiredOperatorCenter) {
   }
 }
 
+const requiredUserPortal = [
+  "renderUserPortal",
+  "userPortalMetric",
+  "userPortalTicketCard",
+  "userPortalTicketStatusPanel",
+  "userPortalNextStep",
+  "/api/user-portal",
+  "Portal użytkownika",
+  "Co się teraz dzieje?",
+  "Moje aktywne zgłoszenia",
+  "Czekają na moją odpowiedź",
+  "Polecane artykuły",
+  "renderUserPortal(true)",
+  "Widok odświeża się przez WebSocket",
+];
+for (const fragment of requiredUserPortal) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing user portal fragment: ${fragment}`);
+  }
+}
+
 const requiredWorkflowChangeHistory = [
   "renderWorkflowChangeHistory",
   "workflowChangeHistoryLabel",

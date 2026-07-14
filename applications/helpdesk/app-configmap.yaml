@@ -4066,6 +4066,7 @@ data:
           return false;
         }}
         function canViewDashboard(user) {{ return userHasPermission(user, "dashboard.operator"); }}
+        function canViewUserPortal(user) {{ return !!user && userHasPermission(user, "tickets.view_own"); }}
         function canViewOperatorCenter(user) {{ return canViewDashboard(user); }}
         function canViewReports(user) {{ return userHasPermission(user, "reports.view"); }}
         function canViewSlaCalendar(user) {{ return userHasPermission(user, "sla.view") || userHasPermission(user, "sla.manage"); }}
@@ -4211,6 +4212,10 @@ data:
           }}
           if (currentView.name === "home") {{
             await renderHome(loadStatusFilters(), true);
+          }}
+          if (currentView.name === "user-portal") {{
+            if (!shouldSuppress) showToast("Portal użytkownika odświeżony", liveEvent.message || "");
+            await renderUserPortal(true);
           }}
           if (currentView.name === "operator-center") {{
             if (!shouldSuppress) showToast("Centrum operatora odświeżone", liveEvent.message || "");
@@ -4496,6 +4501,7 @@ data:
           // Po odebraniu uprawnienia w ekranie Uprawnienia pozycja znika z menu,
           // a po ponownym nadaniu pojawia się po odświeżeniu danych użytkownika.
           const moduleLinks = [];
+          if (canViewUserPortal(data)) moduleLinks.push(`<a href="#" onclick="renderUserPortal();return false;">Portal użytkownika</a>`);
           moduleLinks.push(`<a href="#" onclick="renderKnowledgeArticles();return false;">Baza wiedzy</a>`);
           if (canViewOperatorCenter(data)) moduleLinks.push(`<a href="#" onclick="renderOperatorCenter();return false;">Centrum operatora</a>`);
           if (canViewDashboard(data)) moduleLinks.push(`<a href="#" onclick="renderDashboard();return false;">Dashboard</a>`);
@@ -4523,6 +4529,235 @@ data:
           notificationPanel.classList.add("hidden");
           notificationCount.classList.add("hidden");
           window.location.href = "/login";
+        }}
+        function userPortalMetric(label, value, hint, action = "") {{
+          const click = action ? ` onclick="${{action}}"` : "";
+          return `
+            <div class="dashboard-card"${{click}}>
+              <div class="num">${{Number(value || 0)}}</div>
+              <div class="label">${{esc(label)}}</div>
+              ${{hint ? `<div class="muted">${{esc(hint)}}</div>` : ""}}
+            </div>
+          `;
+        }}
+        function userPortalNextStep(ticket) {{
+          const status = ticket.status || "";
+          if (status === "Zamknięte") return "Zgłoszenie jest zamknięte. Możesz wrócić do historii, jeżeli chcesz sprawdzić rozwiązanie.";
+          if (status === "Rozwiązane") return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź komentarze i daj znać, jeżeli problem nadal występuje.";
+          if (status === "Oczekuje na użytkownika") return "Czekamy na Twoją odpowiedź. Dodaj publiczny komentarz albo załącznik, żeby operator mógł iść dalej.";
+          if (Number(ticket.active_incident_count || 0) > 0) return "Sprawa jest obsługiwana w ramach incydentu zbiorczego. Aktualizacje będą pojawiać się w komentarzach.";
+          if (!ticket.assigned_to_name) return "Zgłoszenie czeka na przypisanie operatora. Nie musisz tworzyć kolejnego zgłoszenia.";
+          if (!ticket.first_response_at) return "Operator ma zgłoszenie w kolejce i powinien udzielić pierwszej odpowiedzi zgodnie z SLA.";
+          return `Zgłoszenie obsługuje ${{ticket.assigned_to_name}}. Kolejne informacje pojawią się w komentarzach i powiadomieniach.`;
+        }}
+        function userPortalTicketSignals(ticket) {{
+          const signals = [];
+          if (ticket.next_step) signals.push(ticket.next_step);
+          if (ticket.sla_due_at) signals.push(`SLA rozwiązania: ${{ticket.sla_due_at}}`);
+          if (ticket.first_response_due_at && !ticket.first_response_at) signals.push(`SLA reakcji: ${{ticket.first_response_due_at}}`);
+          if (Number(ticket.active_incident_count || 0) > 0) signals.push("Powiązany aktywny incydent");
+          return signals.length
+            ? `<div class="attachment-upload-hint">${{signals.map(esc).join(" · ")}}</div>`
+            : "";
+        }}
+        function userPortalTicketCard(ticket) {{
+          return `
+            <button class="notification-card" onclick="renderTicket(${{Number(ticket.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(ticket.id)}} · ${{esc(ticket.title || "Bez tytułu")}}</div>
+                <div>
+                  <span class="pill ${{priorityClass(ticket.priority)}}">${{esc(ticket.priority || "-")}}</span>
+                  <span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status || "-")}}</span>
+                  <span class="sla-badge ${{slaClass(ticket.sla_state)}}">${{slaLabel(ticket.sla_state)}}</span>
+                </div>
+                <div class="notification-meta">
+                  ${{esc(ticket.category || "-")}} / ${{esc(ticket.subcategory || "Inne")}} ·
+                  Operator: ${{esc(ticket.assigned_to_name || "jeszcze nieprzypisane")}} ·
+                  Aktualizacja: ${{esc(ticket.updated_at || "")}}
+                </div>
+                ${{userPortalTicketSignals(ticket)}}
+              </div>
+            </button>
+          `;
+        }}
+        function userPortalTicketSection(title, items, emptyText, actionHtml = "") {{
+          const rows = (items || []).map(userPortalTicketCard).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>${{esc(title)}}</strong>
+                  <div class="attachment-upload-hint">${{esc(emptyText)}}</div>
+                </div>
+                ${{actionHtml}}
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">${{esc(emptyText)}}</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function userPortalIncidentList(items) {{
+          const rows = (items || []).map(item => `
+            <button class="notification-card" onclick="renderTicket(${{Number(item.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(item.id)}} · ${{esc(item.title || "Zgłoszenie")}}</div>
+                <div class="notification-meta">
+                  ${{esc(item.incident_severity || "SEV")}} · Incydent #${{Number(item.incident_id)}} · ${{esc(item.incident_title || "")}} ·
+                  status: ${{esc(incidentStatusLabel(item.incident_status || ""))}}
+                </div>
+                <div class="attachment-upload-hint">${{esc(item.next_step || userPortalNextStep(item))}}</div>
+              </div>
+            </button>
+          `).join("");
+          return `
+            <section class="card">
+              <h3>Incydenty dotyczące moich zgłoszeń</h3>
+              <p class="muted">Jeżeli problem dotyczy wielu osób, operator może obsługiwać go jako jeden incydent zbiorczy.</p>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak aktywnych incydentów powiązanych z Twoimi zgłoszeniami.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function userPortalKnowledgeList(items) {{
+          const rows = (items || []).map(article => `
+            <button class="notification-card" onclick="renderKnowledgeArticle(${{Number(article.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(article.id)}} · ${{esc(article.title || "Artykuł")}}</div>
+                <div class="notification-meta">${{esc(article.category || "-")}} / ${{esc(article.subcategory || "Inne")}} · aktualizacja: ${{esc(article.updated_at || "")}}</div>
+                <div class="attachment-upload-hint">${{esc(article.problem || "")}}</div>
+              </div>
+            </button>
+          `).join("");
+          return `
+            <section class="card knowledge-card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Polecane artykuły</strong>
+                  <div class="attachment-upload-hint">Najświeższe instrukcje z bazy wiedzy, dopasowane do Twoich ostatnich kategorii zgłoszeń.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderKnowledgeArticles()">Otwórz bazę wiedzy</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak opublikowanych artykułów w bazie wiedzy.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function userPortalNotificationList(items, unreadCount) {{
+          const rows = (items || []).map(item => `
+            <div class="notification-card ${{item.is_read ? "" : "unread"}}">
+              <button class="notification-open" onclick="openNotification(${{Number(item.id)}}, ${{item.ticket_id || "null"}}); return false;">
+                ${{item.ticket_id ? `<div class="notification-ticket">#${{Number(item.ticket_id)}} · ${{esc(item.ticket_title || "Zgłoszenie")}}</div>` : ""}}
+                <div class="notification-message">${{esc(item.message || "")}}</div>
+                <div class="notification-meta">${{esc(notificationTypeLabel(item.type || ""))}} · ${{esc(item.created_at || "")}}</div>
+              </button>
+            </div>
+          `).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Powiadomienia</strong>
+                  <div class="attachment-upload-hint">Nieprzeczytane: ${{Number(unreadCount || 0)}}. Ten sam licznik działa w prawym górnym rogu.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="toggleNotifications()">Otwórz panel</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak powiadomień.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+        function focusUserCommentBox() {{
+          const textarea = document.querySelector("#commentForm textarea");
+          if (!textarea) return;
+          textarea.scrollIntoView({{ behavior: "smooth", block: "center" }});
+          textarea.focus();
+        }}
+        function userPortalTicketStatusPanel(ticket, data) {{
+          const incidents = data?.incidents || [];
+          const hasIncident = incidents.some(i => i.status !== "resolved");
+          const enrichedTicket = Object.assign({{}}, ticket, {{ active_incident_count: hasIncident ? incidents.length : 0 }});
+          const nextStep = userPortalNextStep(enrichedTicket);
+          const primaryAction = ticket.status === "Oczekuje na użytkownika" && ticket.status !== "Zamknięte"
+            ? `<button class="btn-secondary btn-small" onclick="focusUserCommentBox()">Odpowiedz w komentarzu</button>`
+            : `<button class="btn-secondary btn-small" onclick="renderUserPortal()">Otwórz portal użytkownika</button>`;
+          return `
+            <section class="card user-ticket-next-step">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Co się teraz dzieje?</h3>
+                  <div class="attachment-upload-hint">Proste podsumowanie dla osoby zgłaszającej.</div>
+                </div>
+                ${{primaryAction}}
+              </div>
+              <div class="panel-soft">
+                <strong>${{esc(nextStep)}}</strong>
+                <div class="attachment-upload-hint" style="margin-top:8px">
+                  Operator: ${{esc(ticket.assigned_to_name || "jeszcze nieprzypisane")}} ·
+                  Pierwsza reakcja: ${{esc(ticket.first_response_at || ticket.first_response_due_at || "brak terminu")}} ·
+                  SLA rozwiązania: ${{esc(ticket.sla_due_at || "brak terminu")}}
+                </div>
+                ${{hasIncident ? `<div class="attachment-upload-hint" style="margin-top:6px">To zgłoszenie jest częścią aktywnego incydentu. Publiczne komunikaty incydentu pojawią się w komentarzach.</div>` : ""}}
+              </div>
+            </section>
+          `;
+        }}
+        async function renderUserPortal(fromLive = false) {{
+          currentView = {{ name: "user-portal", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          if (!canViewUserPortal(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Portal użytkownika wymaga dostępu do własnych zgłoszeń.</p></section>`;
+            return;
+          }}
+          if (!fromLive) {{
+            appEl.innerHTML = `<section class="card"><h2>Portal użytkownika</h2><p class="muted">Ładuję Twoje zgłoszenia, powiadomienia i podpowiedzi...</p></section>`;
+          }}
+          const res = await api("/api/user-portal");
+          if (!res) return;
+          const data = await res.json().catch(() => ({{}}));
+          if (!res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Nie udało się pobrać portalu użytkownika</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`;
+            return;
+          }}
+          const summary = data.summary || {{}};
+          const sections = data.sections || {{}};
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+              <h2>Portal użytkownika</h2>
+              <p class="muted">Jedno miejsce do sprawdzenia, co dzieje się z Twoimi zgłoszeniami. Widok odświeża się przez WebSocket i korzysta z powiadomień Helpdesku.</p>
+              <div class="actions">
+                <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+                <button class="btn-secondary" onclick="renderHome()">Moje zgłoszenia</button>
+                <button class="btn-secondary" onclick="renderKnowledgeArticles()">Baza wiedzy</button>
+                <button class="btn-secondary" onclick="toggleNotifications()">Powiadomienia</button>
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie odświeżenie: ${{esc(data.generated_at || "")}}</div>
+            </section>
+            <section class="dashboard-grid">
+              ${{userPortalMetric("Otwarte", summary.open_tickets, "Twoje aktywne zgłoszenia.", "renderHome([])")}}
+              ${{userPortalMetric("Czeka na mnie", summary.waiting_for_user, "Zgłoszenia wymagające Twojej odpowiedzi.", "renderUserPortal()")}}
+              ${{userPortalMetric("Obsługiwane", summary.waiting_for_support, "Sprawy po stronie helpdesku.", "renderHome([])")}}
+              ${{userPortalMetric("Incydenty", summary.active_incident_tickets, "Twoje zgłoszenia w aktywnych incydentach.", "renderUserPortal()")}}
+              ${{userPortalMetric("Powiadomienia", summary.unread_notifications, "Nieprzeczytane komunikaty.", "toggleNotifications()")}}
+            </section>
+            <div class="grid">
+              ${{userPortalTicketSection("Czekają na moją odpowiedź", sections.waiting_for_user || [], "Nie masz zgłoszeń, które wymagają Twojej odpowiedzi.")}}
+              ${{userPortalTicketSection("Moje aktywne zgłoszenia", sections.active_tickets || [], "Brak aktywnych zgłoszeń.", `<button class="btn-secondary btn-small" onclick="renderNewTicket()">Nowe zgłoszenie</button>`)}}
+            </div>
+            <div class="grid">
+              ${{userPortalIncidentList(sections.incident_tickets || [])}}
+              ${{userPortalTicketSection("Ostatnio zamknięte", sections.recent_closed || [], "Brak ostatnio zamkniętych zgłoszeń.")}}
+            </div>
+            <div class="grid">
+              ${{userPortalKnowledgeList(data.knowledge_articles || [])}}
+              ${{userPortalNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
+            </div>
+          `;
         }}
         function operatorCenterMetric(label, value, hint, action = "") {{
           const click = action ? ` onclick="${{action}}"` : "";
@@ -9555,6 +9790,7 @@ data:
             </section>
             <section class="card">
               <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+              ${{canViewUserPortal(me) ? `<button class="btn-secondary" onclick="renderUserPortal()">Portal użytkownika</button>` : ""}}
               <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
               <button class="btn-secondary" onclick="renderKnowledgeArticles()">Baza wiedzy</button>
               ${{canViewOperatorCenter(me) ? `<button class="btn-secondary" onclick="renderOperatorCenter()">Centrum operatora</button>` : ""}}
@@ -9613,6 +9849,10 @@ data:
           appEl.innerHTML = `
             <section class="card">
               <h2>Nowe zgłoszenie</h2>
+              <div class="panel-soft" style="margin-bottom:14px">
+                <strong>Zanim wyślesz zgłoszenie</strong>
+                <div class="attachment-upload-hint">Wpisz tytuł i opis problemu. Helpdesk spróbuje od razu podpowiedzieć pasujące artykuły z bazy wiedzy. Jeżeli instrukcja pomoże, możesz oszczędzić sobie czekania na operatora.</div>
+              </div>
               <form id="ticketForm">
                 <label>Tytuł problemu</label>
                 <input id="new-ticket-title" name="title" required placeholder="Np. Outlook nie odbiera poczty">
@@ -9751,7 +9991,7 @@ data:
             }}
           }}
           showToast("Zgłoszenie zostało utworzone", files.length ? `Dodano załączniki: ${{files.length}}` : "");
-          await renderHome();
+          await renderTicket(ticketId);
         }}
         async function renderTicket(id, fromLive = false) {{
           currentView = {{ name: "ticket", ticketId: Number(id) }};
@@ -10106,6 +10346,7 @@ data:
                   <button class="btn-secondary btn-small" onclick="downloadAttachment(${{a.id}})">Pobierz</button>
                 </div>`).join("")}}</div>`
             : `<p class="muted">Brak załączników.</p>`;
+          const userTicketStatusPanel = !canWorkTickets(me) ? userPortalTicketStatusPanel(t, data) : "";
           appEl.innerHTML = `
             <section class="card ticket-summary-card">
               <div class="ticket-top-actions">
@@ -10141,6 +10382,7 @@ data:
               <div class="ticket-description">${{esc(t.description)}}</div>
               ${{isClosed ? `<div class="readonly-box"><strong>Zgłoszenie zamknięte — tylko do odczytu.</strong><br><span>Nie można zmieniać statusu, przypisania, komentarzy, załączników, obserwatorów ani powiązań.</span></div>` : ""}}
             </section>
+            ${{userTicketStatusPanel}}
             <div class="ticket-layout">
               <main class="ticket-main-column">
                 <section class="card" id="commentsSection">
@@ -14487,6 +14729,239 @@ data:
                 "total_pages": total_pages,
             },
         })
+
+    @app.get("/api/user-portal")
+    @api_login_required
+
+    # Prosty portal dla zgłaszającego: moje sprawy, następny krok, incydenty, wiedza i powiadomienia.
+    def api_user_portal(user):
+        if not has_permission(user, "tickets.view_own"):
+            return api_forbidden("Brak uprawnienia do portalu użytkownika.", "tickets.view_own")
+        conn = get_conn()
+        cur = conn.cursor()
+        visible_ticket_sql = """
+          (
+            lower(t.requester_email) = lower(%s)
+            OR EXISTS (
+              SELECT 1
+              FROM ticket_watchers tw
+              WHERE tw.ticket_id = t.id
+                AND lower(tw.user_email) = lower(%s)
+            )
+          )
+        """
+        visible_params = [user["email"], user["email"]]
+        open_ticket_sql = "t.status NOT IN ('Rozwiązane', 'Zamknięte')"
+
+        def user_portal_next_step(row):
+            status = row[8] or ""
+            assigned_to_name = row[12] or ""
+            active_incident_count = int(row[17] or 0)
+            if status == "Zamknięte":
+                return "Zgłoszenie jest zamknięte. Rozwiązanie i historia pozostają w szczegółach zgłoszenia."
+            if status == "Rozwiązane":
+                return "Operator oznaczył sprawę jako rozwiązaną. Sprawdź komentarze i daj znać, jeżeli problem nadal występuje."
+            if status == "Oczekuje na użytkownika":
+                return "Czekamy na Twoją odpowiedź. Dodaj publiczny komentarz albo załącznik."
+            if active_incident_count > 0:
+                return "Sprawa jest częścią aktywnego incydentu. Publiczne aktualizacje trafią do komentarzy."
+            if not assigned_to_name:
+                return "Zgłoszenie czeka na przypisanie operatora."
+            if not row[15]:
+                return "Operator ma zgłoszenie w kolejce i powinien udzielić pierwszej odpowiedzi zgodnie z SLA."
+            return f"Zgłoszenie obsługuje {assigned_to_name}. Kolejne informacje pojawią się w komentarzach."
+
+        def serialize_user_ticket(row):
+            ticket_sla_state = sla_state(row[13], row[8])
+            return {
+                "id": row[0],
+                "title": row[1],
+                "requester_name": row[2],
+                "requester_email": row[3],
+                "department": row[4],
+                "category": row[5],
+                "subcategory": row[6] or "Inne",
+                "priority": row[7],
+                "status": row[8],
+                "created_at": str(row[9]),
+                "updated_at": str(row[10]),
+                "assigned_to_email": row[11] or "",
+                "assigned_to_name": row[12] or "",
+                "sla_due_at": str(row[13]) if row[13] else "",
+                "first_response_due_at": str(row[14]) if row[14] else "",
+                "first_response_at": str(row[15]) if row[15] else "",
+                "workflow_name": row[16] or WORKFLOWS["default"]["name"],
+                "active_incident_count": int(row[17] or 0),
+                "sla_state": ticket_sla_state,
+                "first_response_state": first_response_state(row[14], row[15], row[8]),
+                "next_step": user_portal_next_step(row),
+            }
+
+        def user_ticket_rows(where_extra="", params=None, limit=6):
+            cur.execute(f"""
+                SELECT
+                  t.id, t.title, t.requester_name, t.requester_email, t.department,
+                  t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+                  t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+                  COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+                  t.sla_due_at, t.first_response_due_at, t.first_response_at,
+                  COALESCE(t.workflow_name, %s) AS workflow_name,
+                  (
+                    SELECT COUNT(*)
+                    FROM incident_tickets it
+                    JOIN incidents i ON i.id = it.incident_id
+                    WHERE it.ticket_id = t.id
+                      AND i.status <> 'resolved'
+                  ) AS active_incident_count
+                FROM tickets t
+                LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+                WHERE {visible_ticket_sql}
+                  {where_extra}
+                ORDER BY
+                  CASE WHEN t.status = 'Oczekuje na użytkownika' THEN 1 ELSE 2 END,
+                  CASE
+                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at < NOW() THEN 1
+                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours' THEN 2
+                    ELSE 3
+                  END,
+                  t.updated_at DESC,
+                  t.id DESC
+                LIMIT %s
+            """, tuple([WORKFLOWS["default"]["name"]] + visible_params + list(params or []) + [limit]))
+            return [serialize_user_ticket(row) for row in cur.fetchall()]
+
+        cur.execute(f"""
+            SELECT
+              COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql}) AS open_tickets,
+              COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status = 'Oczekuje na użytkownika') AS waiting_for_user,
+              COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status <> 'Oczekuje na użytkownika') AS waiting_for_support,
+              COUNT(DISTINCT t.id) FILTER (WHERE i.id IS NOT NULL) AS active_incident_tickets,
+              COUNT(DISTINCT t.id) FILTER (WHERE t.status IN ('Rozwiązane', 'Zamknięte')) AS closed_tickets
+            FROM tickets t
+            LEFT JOIN incident_tickets it ON it.ticket_id = t.id
+            LEFT JOIN incidents i ON i.id = it.incident_id AND i.status <> 'resolved'
+            WHERE {visible_ticket_sql}
+        """, tuple(visible_params))
+        summary_row = cur.fetchone()
+
+        active_tickets = user_ticket_rows(f"AND {open_ticket_sql}", [], 6)
+        waiting_for_user = user_ticket_rows("AND t.status = %s", ["Oczekuje na użytkownika"], 5)
+        recent_closed = user_ticket_rows("AND t.status IN ('Rozwiązane', 'Zamknięte')", [], 4)
+
+        cur.execute(f"""
+            SELECT
+              t.id, t.title, t.requester_name, t.requester_email, t.department,
+              t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+              t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              t.sla_due_at, t.first_response_due_at, t.first_response_at,
+              COALESCE(t.workflow_name, %s) AS workflow_name,
+              1 AS active_incident_count,
+              i.id, i.title, i.severity, i.status, i.updated_at
+            FROM tickets t
+            JOIN incident_tickets it ON it.ticket_id = t.id
+            JOIN incidents i ON i.id = it.incident_id AND i.status <> 'resolved'
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE {visible_ticket_sql}
+            ORDER BY
+              CASE i.severity WHEN 'SEV1' THEN 1 WHEN 'SEV2' THEN 2 WHEN 'SEV3' THEN 3 ELSE 4 END,
+              i.updated_at DESC,
+              t.updated_at DESC
+            LIMIT %s
+        """, tuple([WORKFLOWS["default"]["name"]] + visible_params + [5]))
+        incident_tickets = []
+        for row in cur.fetchall():
+            item = serialize_user_ticket(row)
+            item.update({
+                "incident_id": row[18],
+                "incident_title": row[19],
+                "incident_severity": row[20],
+                "incident_status": row[21],
+                "incident_updated_at": str(row[22]) if row[22] else "",
+            })
+            incident_tickets.append(item)
+
+        cur.execute(f"""
+            WITH user_categories AS (
+              SELECT COALESCE(NULLIF(t.category, ''), '') AS category
+              FROM tickets t
+              WHERE {visible_ticket_sql}
+              GROUP BY 1
+              ORDER BY COUNT(*) DESC, category ASC
+              LIMIT 3
+            )
+            SELECT
+              ka.id, ka.title, ka.problem, ka.solution, ka.category, ka.subcategory, ka.updated_at
+            FROM knowledge_articles ka
+            WHERE ka.status = 'published'
+            ORDER BY
+              CASE
+                WHEN lower(COALESCE(ka.category, '')) IN (SELECT lower(category) FROM user_categories) THEN 0
+                ELSE 1
+              END,
+              ka.updated_at DESC,
+              ka.id DESC
+            LIMIT 5
+        """, tuple(visible_params))
+        knowledge_articles = [{
+            "id": row[0],
+            "title": row[1],
+            "problem": row[2],
+            "solution": row[3],
+            "category": row[4],
+            "subcategory": row[5],
+            "updated_at": str(row[6]) if row[6] else "",
+        } for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM notifications
+            WHERE lower(user_email) = lower(%s)
+              AND is_read = FALSE
+        """, (user["email"],))
+        unread_notifications = cur.fetchone()[0] or 0
+        cur.execute("""
+            SELECT
+              n.id, n.ticket_id, n.type, n.message, n.is_read, n.created_at,
+              COALESCE(t.title, '')
+            FROM notifications n
+            LEFT JOIN tickets t ON t.id = n.ticket_id
+            WHERE lower(n.user_email) = lower(%s)
+            ORDER BY n.is_read ASC, n.created_at DESC
+            LIMIT 5
+        """, (user["email"],))
+        notifications = [{
+            "id": row[0],
+            "ticket_id": row[1],
+            "type": row[2],
+            "message": row[3],
+            "is_read": bool(row[4]),
+            "created_at": str(row[5]),
+            "ticket_title": row[6],
+        } for row in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        return jsonify({
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "summary": {
+                "open_tickets": summary_row[0] or 0,
+                "waiting_for_user": summary_row[1] or 0,
+                "waiting_for_support": summary_row[2] or 0,
+                "active_incident_tickets": summary_row[3] or 0,
+                "closed_tickets": summary_row[4] or 0,
+                "unread_notifications": unread_notifications,
+            },
+            "sections": {
+                "active_tickets": active_tickets,
+                "waiting_for_user": waiting_for_user,
+                "recent_closed": recent_closed,
+                "incident_tickets": incident_tickets,
+            },
+            "knowledge_articles": knowledge_articles,
+            "notifications": notifications,
+        })
+
     @app.get("/api/operator-center")
     @api_login_required
 
