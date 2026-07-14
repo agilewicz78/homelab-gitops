@@ -347,8 +347,15 @@ def main() -> None:
     assert "def api_operator_center" in text
     assert "operatorCenterTicketSection" in text
     assert "currentView.name === \"operator-center\"" in text
+    assert "/api/user-portal" in text
+    assert "def api_user_portal" in text
+    assert "visible_ticket_sql" in text
+    assert "function renderUserPortal" in text
+    assert "function userPortalTicketStatusPanel" in text
+    assert "currentView.name === \"user-portal\"" in text
+    assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-14-operator-work-center-v1" in deployment_text
+    assert "2026-07-14-user-portal-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
