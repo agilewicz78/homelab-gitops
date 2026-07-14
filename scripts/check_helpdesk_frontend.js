@@ -174,4 +174,27 @@ for (const fragment of requiredFriendlyConditionBuilder) {
   }
 }
 
+const requiredAutomationCenter = [
+  "/automation-center",
+  "renderWorkflowAutomationCenter",
+  "workflowAutomationCenterSampleValues",
+  "workflowAutomationCenterRiskBadge",
+  "workflowAutomationCenterStatusOptions",
+  "workflowAutomationCenterSampleForm(data)",
+  "workflowAutomationCenterSummary(data)",
+  "workflowAutomationCenterRuleCard(rule, idx)",
+  "workflowAutomationCenterRecentExecutions(data)",
+  'id="wacEventType"',
+  'id="wacOperatorAddedComment"',
+  'id="wacOperatorAddedAttachment"',
+  "Centrum automatyzacji",
+  "Podsumowanie Centrum automatyzacji",
+  "Co zrobi?",
+];
+for (const fragment of requiredAutomationCenter) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing automation center fragment: ${fragment}`);
+  }
+}
+
 console.log("Helpdesk frontend syntax check passed");

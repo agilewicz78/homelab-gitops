@@ -2652,6 +2652,213 @@ data:
     def workflow_automation_matches(item, current_status, user, visibility=None, assigned_to_email=None, event_new_status=None, ticket_context=None):
         matched, _reason = workflow_automation_match_result(item, current_status, user, visibility, assigned_to_email, event_new_status, ticket_context=ticket_context)
         return matched
+    WORKFLOW_EVENT_LABELS = {
+        "ticket_created": "utworzono zgłoszenie",
+        "comment_added": "dodano komentarz lub notatkę",
+        "user_comment_added": "użytkownik dodał komentarz",
+        "staff_comment_added": "operator lub admin dodał komentarz",
+        "attachment_added": "dodano załącznik",
+        "status_changed": "zmieniono status",
+        "ticket_assigned": "przypisano zgłoszenie",
+    }
+    WORKFLOW_ACTION_LABELS = {
+        "change_status": "zmień status",
+        "change_priority": "zmień priorytet",
+        "add_workflow_watchers": "dodaj operatorów workflow jako obserwatorów",
+        "add_system_comment": "dodaj komentarz systemowy",
+        "notify": "wyślij powiadomienie",
+        "add_history": "dodaj wpis do historii",
+        "require_comment": "wymagaj komentarza",
+        "require_attachment": "wymagaj załącznika",
+    }
+    def workflow_wildcard_value(value):
+        return clean(value) in ("", "*", "any")
+    def workflow_event_label(event_type):
+        return WORKFLOW_EVENT_LABELS.get(event_type or "", event_type or "zdarzenie")
+    def workflow_action_label(action_type):
+        return WORKFLOW_ACTION_LABELS.get(action_type or "change_status", action_type or "akcja")
+    def workflow_condition_text(label, operator, value, any_text):
+        operator = normalize_workflow_condition_operator(operator)
+        value = clean(value)
+        if operator == "empty":
+            return f"{label}: jest puste"
+        if operator == "not_empty":
+            return f"{label}: nie jest puste"
+        if workflow_wildcard_value(value):
+            return f"{label}: {any_text}"
+        return f"{label}: {workflow_condition_operator_label(operator)} {value}"
+    def workflow_automation_action_summary(action):
+        action_type = action.get("action_type") or "change_status"
+        value = clean(action.get("action_value") or action.get("action_status"))
+        if action_type == "change_status":
+            return f"zmieni status na „{value or '—'}”"
+        if action_type == "change_priority":
+            return f"zmieni priorytet na „{value or '—'}”"
+        if action_type == "add_system_comment":
+            return f"doda komentarz systemowy: „{value or 'Reguła workflow została wykonana.'}”"
+        return workflow_action_label(action_type)
+    def workflow_automation_action_summaries(item):
+        actions = item.get("actions") or [{
+            "action_type": item.get("action_type") or "change_status",
+            "action_value": item.get("action_status"),
+            "is_active": True,
+            "action_order": 1,
+        }]
+        active_actions = [a for a in actions if a.get("is_active") is not False]
+        active_actions.sort(key=lambda a: int(a.get("action_order") or 1))
+        return [workflow_automation_action_summary(a) for a in active_actions]
+    def workflow_automation_condition_summary(item, workflow_category="*", workflow_subcategory="*"):
+        event_type = item.get("event_type") or "comment_added"
+        parts = [
+            f"Zdarzenie: {workflow_event_label(event_type)}",
+            workflow_condition_text("Status bieżący", item.get("condition_status_operator"), item.get("condition_status"), "dowolny"),
+        ]
+        if event_type == "status_changed" or not workflow_wildcard_value(item.get("condition_to_status")):
+            parts.append(workflow_condition_text("Status docelowy", item.get("condition_to_status_operator"), item.get("condition_to_status"), "dowolny"))
+        parts.append(workflow_condition_text("Rola wykonawcy", item.get("condition_role_operator"), item.get("condition_role"), "dowolna"))
+        if event_type in ("comment_added", "user_comment_added", "staff_comment_added"):
+            parts.append(workflow_condition_text("Typ komentarza", item.get("condition_comment_visibility_operator"), item.get("condition_comment_visibility"), "dowolny"))
+        parts.append(workflow_condition_text("Przypisanie", item.get("assigned_state_operator"), item.get("assigned_state"), "dowolne"))
+        parts.append(workflow_condition_text("Priorytet", item.get("condition_priority_operator"), item.get("condition_priority"), "dowolny"))
+        if workflow_category and workflow_category != "*" and workflow_wildcard_value(item.get("condition_category")):
+            parts.append(f"Kategoria: {workflow_category} (z workflow)")
+        else:
+            parts.append(workflow_condition_text("Kategoria", item.get("condition_category_operator"), item.get("condition_category"), "dowolna"))
+        if workflow_subcategory and workflow_subcategory != "*" and workflow_wildcard_value(item.get("condition_subcategory")):
+            parts.append(f"Podkategoria: {workflow_subcategory} (z workflow)")
+        else:
+            parts.append(workflow_condition_text("Podkategoria", item.get("condition_subcategory_operator"), item.get("condition_subcategory"), "dowolna"))
+        parts.append(workflow_condition_text("SLA", item.get("condition_sla_state_operator"), item.get("condition_sla_state"), "dowolne"))
+        return "; ".join(parts)
+    def workflow_rule_is_broad(item, workflow_category="*", workflow_subcategory="*"):
+        fields = [
+            "condition_status", "condition_to_status", "condition_role",
+            "condition_comment_visibility", "assigned_state",
+            "condition_priority", "condition_sla_state",
+        ]
+        broad = all(workflow_wildcard_value(item.get(field)) for field in fields)
+        category_broad = workflow_category == "*" and workflow_wildcard_value(item.get("condition_category"))
+        subcategory_broad = workflow_subcategory == "*" and workflow_wildcard_value(item.get("condition_subcategory"))
+        return broad and category_broad and subcategory_broad
+    def workflow_automation_risk(item, workflow_category="*", workflow_subcategory="*"):
+        if item.get("is_active") is False:
+            return {"level": "low", "reasons": ["Reguła jest nieaktywna, więc nie wpływa na zgłoszenia."]}
+        actions = [a for a in (item.get("actions") or []) if a.get("is_active") is not False]
+        action_types = {a.get("action_type") or "change_status" for a in actions}
+        reasons = []
+        level = "low"
+        if workflow_rule_is_broad(item, workflow_category, workflow_subcategory) and action_types.intersection({"change_status", "change_priority"}):
+            level = "high"
+            reasons.append("Reguła ma bardzo szeroki zakres i zmienia status lub priorytet.")
+        elif action_types.intersection({"change_status", "change_priority"}):
+            level = "medium"
+            reasons.append("Reguła modyfikuje status lub priorytet zgłoszenia.")
+        if item.get("stop_processing") is not False and actions:
+            if level == "low":
+                level = "medium"
+            reasons.append("Po wykonaniu zatrzymuje kolejne pasujące reguły.")
+        if action_types.intersection({"require_comment", "require_attachment"}):
+            if level == "low":
+                reasons.append("Reguła waliduje pracę operatora i może zablokować przejście.")
+            else:
+                reasons.append("Zawiera wymaganie komentarza lub załącznika.")
+        if not reasons:
+            reasons.append("Nie wykryto typowych ryzyk; reguła wykonuje akcje pomocnicze albo ma wąski zakres.")
+        return {"level": level, "reasons": reasons}
+    def workflow_simulation_user(actor_role):
+        actor_role = clean(actor_role) or "user"
+        if actor_role == "admin":
+            roles = ["user", "admin"]
+        elif actor_role in ("operator", "staff"):
+            roles = ["user", "operator"]
+        else:
+            roles = ["user"]
+            actor_role = "user"
+        return {
+            "email": f"{actor_role}@simulation.local",
+            "name": f"Symulacja {actor_role}",
+            "roles": roles,
+            "role": role_label(roles),
+        }
+    def workflow_rule_event_matches(item, event_type, user):
+        event_type = clean(event_type) or "comment_added"
+        event_aliases = [event_type]
+        if event_type == "comment_added":
+            event_aliases.append(workflow_comment_event_type(user))
+        if event_type in ("user_comment_added", "staff_comment_added"):
+            event_aliases.append("comment_added")
+        return item.get("event_type") in event_aliases
+    def workflow_automation_actions_preview(item, matched, current_status, event_new_status, steps, sample):
+        actions = [a for a in (item.get("actions") or [])]
+        actions.sort(key=lambda a: int(a.get("action_order") or 1))
+        missing_requirements = []
+        if matched:
+            if any(a.get("is_active") is not False and a.get("action_type") == "require_comment" for a in actions) and not sample.get("operator_added_comment"):
+                missing_requirements.append("comment")
+            if any(a.get("is_active") is not False and a.get("action_type") == "require_attachment" for a in actions) and not sample.get("operator_added_attachment"):
+                missing_requirements.append("attachment")
+        blocked = bool(missing_requirements)
+        effective_status = event_new_status or current_status
+        previews = []
+        for action in actions:
+            action_type = action.get("action_type") or "change_status"
+            value = clean(action.get("action_value"))
+            preview = {
+                "action_type": action_type,
+                "action_value": value,
+                "would_execute": bool(matched and action.get("is_active") is not False and not blocked),
+                "would_block_operation": False,
+                "result": "nie zostanie wykonana, bo reguła nie pasuje" if not matched else "wykona się",
+            }
+            if action.get("is_active") is False:
+                preview["would_execute"] = False
+                preview["result"] = "pominięta — akcja nieaktywna"
+            elif action_type == "require_comment":
+                if not matched:
+                    preview["result"] = "nie zostanie sprawdzona, bo reguła nie pasuje"
+                elif sample.get("operator_added_comment"):
+                    preview["result"] = "spełniona — operator dodał komentarz"
+                else:
+                    preview["would_execute"] = False
+                    preview["would_block_operation"] = True
+                    preview["result"] = "zablokowałaby operację — brakuje komentarza"
+            elif action_type == "require_attachment":
+                if not matched:
+                    preview["result"] = "nie zostanie sprawdzona, bo reguła nie pasuje"
+                elif sample.get("operator_added_attachment"):
+                    preview["result"] = "spełniona — operator dodał załącznik"
+                else:
+                    preview["would_execute"] = False
+                    preview["would_block_operation"] = True
+                    preview["result"] = "zablokowałaby operację — brakuje załącznika"
+            elif blocked:
+                preview["would_execute"] = False
+                preview["result"] = "nie wykona się, bo wcześniejsza walidacja blokuje operację"
+            elif action_type == "change_status":
+                if not value:
+                    preview["would_execute"] = False
+                    preview["result"] = "pominięta — brak statusu docelowego"
+                elif steps and value not in steps:
+                    preview["would_execute"] = False
+                    preview["result"] = "pominięta — status nie istnieje w workflow"
+                elif value == effective_status:
+                    preview["would_execute"] = False
+                    preview["result"] = "pominięta — status już ma tę wartość"
+                elif matched:
+                    preview["result"] = f"zmieniłaby status z „{effective_status}” na „{value}”"
+                    effective_status = value
+            elif action_type == "change_priority" and matched:
+                preview["result"] = f"zmieniłaby priorytet zgłoszenia na „{value or '—'}”"
+            elif action_type == "add_workflow_watchers" and matched:
+                preview["result"] = "dodałaby operatorów workflow jako obserwatorów"
+            elif action_type == "add_system_comment" and matched:
+                preview["result"] = f"dodałaby komentarz systemowy: „{value or 'Reguła workflow została wykonana.'}”"
+            elif action_type == "notify" and matched:
+                preview["result"] = "wysłałaby powiadomienie"
+            elif action_type == "add_history" and matched:
+                preview["result"] = "dodałaby wpis do historii zgłoszenia"
+            previews.append(preview)
+        return previews, missing_requirements, effective_status
     def workflow_automation_candidates_for_event(cur, workflow_key, event_type, current_status, user, visibility=None, assigned_to_email=None, event_new_status=None):
         workflow_id = workflow_id_by_key(cur, workflow_key)
         if not workflow_id:
@@ -5192,6 +5399,7 @@ data:
             staff_comment_added: "operator/admin dodał komentarz",
             attachment_added: "dodano załącznik",
             status_changed: "zmieniono status",
+            ticket_assigned: "przypisano zgłoszenie",
           }};
           return eventLabels[eventType] || eventType || "zdarzenie";
         }}
@@ -6758,6 +6966,250 @@ data:
             return `<li><strong>${{esc(workflowRuleExecutionActionLabel(type))}}</strong> — ${{esc(result)}}${{details ? `<div class="muted" style="margin-top:4px">${{details}}</div>` : ""}}</li>`;
           }}).join("")}}</ol>`;
         }}
+        function workflowAutomationCenterRiskBadge(risk) {{
+          const level = risk?.level || "low";
+          const cls = level === "high" ? "status-closed" : level === "medium" ? "status-wait" : "status-new";
+          const label = level === "high" ? "Wysokie ryzyko" : level === "medium" ? "Średnie ryzyko" : "Niskie ryzyko";
+          return `<span class="status-badge ${{cls}}">${{esc(label)}}</span>`;
+        }}
+        function workflowAutomationCenterStatusOptions(steps, selected, includeEmpty = true) {{
+          const values = includeEmpty ? [""] : [];
+          for (const step of steps || []) {{
+            const value = typeof step === "string" ? step : (step.step_name || "");
+            if (value && !values.includes(value)) values.push(value);
+          }}
+          if (selected && !values.includes(selected)) values.push(selected);
+          return values.map(v => `<option value="${{esc(v)}}" ${{v === selected ? "selected" : ""}}>${{v ? esc(v) : "— brak zmiany —"}}</option>`).join("");
+        }}
+        function workflowAutomationCenterSampleValues() {{
+          const value = id => document.getElementById(id)?.value || "";
+          const checked = id => document.getElementById(id)?.checked ? "1" : "0";
+          return {{
+            event_type: value("wacEventType"),
+            current_status: value("wacCurrentStatus"),
+            event_new_status: value("wacEventNewStatus"),
+            actor_role: value("wacActorRole"),
+            comment_visibility: value("wacCommentVisibility"),
+            assigned_state: value("wacAssignedState"),
+            priority: value("wacPriority"),
+            category: value("wacCategory"),
+            subcategory: value("wacSubcategory"),
+            sla_state: value("wacSlaState"),
+            operator_added_comment: checked("wacOperatorAddedComment"),
+            operator_added_attachment: checked("wacOperatorAddedAttachment"),
+          }};
+        }}
+        function workflowAutomationCenterSampleForm(data) {{
+          const workflow = data.workflow || {{}};
+          const sample = data.sample || {{}};
+          const steps = data.steps || [];
+          const eventOptions = [
+            {{ value: "ticket_created", label: "Utworzenie zgłoszenia" }},
+            {{ value: "comment_added", label: "Dodanie komentarza/notatki" }},
+            {{ value: "user_comment_added", label: "Komentarz użytkownika" }},
+            {{ value: "staff_comment_added", label: "Komentarz operatora/admina" }},
+            {{ value: "attachment_added", label: "Dodanie załącznika" }},
+            {{ value: "status_changed", label: "Zmiana statusu" }},
+            {{ value: "ticket_assigned", label: "Przypisanie zgłoszenia" }},
+          ];
+          const roleOptions = [
+            {{ value: "user", label: "Użytkownik" }},
+            {{ value: "operator", label: "Operator" }},
+            {{ value: "admin", label: "Administrator" }},
+          ];
+          const visibilityOptions = [
+            {{ value: "public", label: "Komentarz publiczny" }},
+            {{ value: "internal", label: "Notatka wewnętrzna" }},
+            {{ value: "*", label: "Dowolny typ" }},
+          ];
+          const assignedOptions = [
+            {{ value: "unassigned", label: "Nieprzypisane" }},
+            {{ value: "assigned", label: "Przypisane" }},
+            {{ value: "*", label: "Dowolne" }},
+          ];
+          const priorityOptions = ["Niski", "Normalny", "Wysoki", "Krytyczny", "*"].map(v => {{ return {{ value: v, label: v === "*" ? "Dowolny" : v }}; }});
+          const slaOptions = [
+            {{ value: "ok", label: "SLA OK" }},
+            {{ value: "warning", label: "Blisko SLA" }},
+            {{ value: "overdue", label: "SLA przekroczone" }},
+            {{ value: "done", label: "SLA zakończone" }},
+            {{ value: "none", label: "Brak SLA" }},
+            {{ value: "*", label: "Dowolne" }},
+          ];
+          const scope = `${{workflow.category === "*" ? "dowolna kategoria" : workflow.category || "—"}} / ${{workflow.subcategory === "*" ? "dowolna podkategoria" : workflow.subcategory || "—"}}`;
+          return `
+            <section class="card">
+              <h3>Symulacja na przykładowym zgłoszeniu</h3>
+              <p class="muted">Zmień dane testowe i sprawdź, które reguły workflow uruchomiłyby się dla takiego zgłoszenia. Zakres workflow: <strong>${{esc(scope)}}</strong>.</p>
+              <div class="grid two">
+                <div><label>Zdarzenie</label><select id="wacEventType">${{automationSelectOptions(eventOptions, sample.event_type || "comment_added")}}</select></div>
+                <div><label>Rola wykonawcy</label><select id="wacActorRole">${{automationSelectOptions(roleOptions, sample.actor_role || "operator")}}</select></div>
+                <div><label>Status bieżący</label><select id="wacCurrentStatus">${{workflowAutomationCenterStatusOptions(steps, sample.current_status || "", false)}}</select></div>
+                <div><label>Status docelowy</label><select id="wacEventNewStatus">${{workflowAutomationCenterStatusOptions(steps, sample.event_new_status || "", true)}}</select></div>
+                <div><label>Typ komentarza</label><select id="wacCommentVisibility">${{automationSelectOptions(visibilityOptions, sample.comment_visibility || "public")}}</select></div>
+                <div><label>Przypisanie</label><select id="wacAssignedState">${{automationSelectOptions(assignedOptions, sample.assigned_state || "unassigned")}}</select></div>
+                <div><label>Priorytet</label><select id="wacPriority">${{automationSelectOptions(priorityOptions, sample.priority || "Normalny")}}</select></div>
+                <div><label>Stan SLA</label><select id="wacSlaState">${{automationSelectOptions(slaOptions, sample.sla_state || "ok")}}</select></div>
+                <div><label>Kategoria testowego zgłoszenia</label><input id="wacCategory" value="${{esc(sample.category || "")}}"></div>
+                <div><label>Podkategoria testowego zgłoszenia</label><input id="wacSubcategory" value="${{esc(sample.subcategory || "")}}"></div>
+              </div>
+              <div class="panel-soft" style="margin-top:12px">
+                <label><input id="wacOperatorAddedComment" type="checkbox" ${{sample.operator_added_comment ? "checked" : ""}}> Operator dodał komentarz w obecnym kroku</label>
+                <label><input id="wacOperatorAddedAttachment" type="checkbox" ${{sample.operator_added_attachment ? "checked" : ""}}> Operator dodał załącznik w obecnym kroku</label>
+                <div class="attachment-upload-hint">Te dwa pola pomagają przetestować reguły typu „wymagaj komentarza” i „wymagaj załącznika”.</div>
+              </div>
+              <div class="actions" style="margin-top:12px">
+                <button onclick="renderWorkflowAutomationCenter(${{Number(workflow.id || 0)}}, workflowAutomationCenterSampleValues()); return false;">Uruchom symulację</button>
+                <button class="btn-secondary" onclick="renderAdminWorkflowForm(${{Number(workflow.id || 0)}}); return false;">Edytuj workflow</button>
+                <button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{Number(workflow.id || 0)}}); return false;">Otwórz log</button>
+              </div>
+            </section>
+          `;
+        }}
+        function workflowAutomationCenterSummary(data) {{
+          const summary = data.summary || {{}};
+          const risk = summary.risk_counts || {{}};
+          return `
+            <section class="card">
+              <h3>Podsumowanie Centrum automatyzacji</h3>
+              <div class="grid two">
+                <div class="panel-soft"><strong>${{Number(summary.rules_total || 0)}}</strong><br><span class="muted">Wszystkie reguły</span></div>
+                <div class="panel-soft"><strong>${{Number(summary.active_rules || 0)}}</strong><br><span class="muted">Aktywne reguły</span></div>
+                <div class="panel-soft"><strong>${{Number(summary.matched_rules || 0)}}</strong><br><span class="muted">Pasują do symulacji</span></div>
+                <div class="panel-soft"><strong>${{Number(risk.high || 0)}} / ${{Number(risk.medium || 0)}} / ${{Number(risk.low || 0)}}</strong><br><span class="muted">Ryzyko: wysokie / średnie / niskie</span></div>
+              </div>
+            </section>
+          `;
+        }}
+        function workflowAutomationCenterRuleCard(rule, idx) {{
+          const simulation = rule.simulation || {{}};
+          const matched = !!simulation.matched;
+          const matchBadge = matched
+            ? `<span class="status-badge status-new">Zadziała w symulacji</span>`
+            : `<span class="status-badge status-closed">Nie zadziała</span>`;
+          const activeBadge = rule.is_active !== false
+            ? `<span class="status-badge status-new">Aktywna</span>`
+            : `<span class="status-badge status-closed">Nieaktywna</span>`;
+          const stopBadge = rule.stop_processing !== false
+            ? `<span class="status-badge status-wait">Stop po wykonaniu</span>`
+            : `<span class="status-badge status-open">Kontynuuje kolejne reguły</span>`;
+          const reasons = (simulation.reasons || []).map(r => `<li>${{esc(r)}}</li>`).join("") || `<li>Brak informacji.</li>`;
+          const actions = (simulation.actions_preview || []).map(a => `
+            <li>
+              <strong>${{esc(workflowAutomationActionSummary({{ action_type: a.action_type, action_value: a.action_value }}))}}</strong><br>
+              <span class="muted">${{esc(a.result || "")}}</span>
+            </li>
+          `).join("") || `<li>Brak akcji.</li>`;
+          const riskReasons = (rule.risk?.reasons || []).map(r => `<li>${{esc(r)}}</li>`).join("");
+          const missing = (simulation.missing_requirements || [])
+            .map(x => x === "comment" ? "komentarz" : x === "attachment" ? "załącznik" : x)
+            .join(", ");
+          return `
+            <section class="card">
+              <div class="workflow-diagram-header">
+                <div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <h4 style="margin:0">${{idx + 1}}. ${{esc(rule.name || "Reguła workflow")}}</h4>
+                    ${{activeBadge}}
+                    ${{matchBadge}}
+                    ${{workflowAutomationCenterRiskBadge(rule.risk)}}
+                    ${{stopBadge}}
+                  </div>
+                  <p class="muted" style="margin:6px 0 0">Priorytet wykonania: ${{Number(rule.priority || 100)}} · Zdarzenie: ${{esc(workflowAutomationRuleEventLabel(rule.event_type))}}</p>
+                </div>
+              </div>
+              <div class="grid two" style="margin-top:12px">
+                <div class="panel-soft">
+                  <strong>Kiedy zadziała?</strong>
+                  <div class="attachment-upload-hint">${{esc(rule.condition_summary || workflowAutomationRuleConditionsText(rule))}}</div>
+                </div>
+                <div class="panel-soft">
+                  <strong>Co zrobi?</strong>
+                  <div class="attachment-upload-hint">${{esc(rule.action_summary || workflowAutomationRuleAfterActionsText(rule))}}</div>
+                </div>
+              </div>
+              <div class="grid two" style="margin-top:12px">
+                <div>
+                  <h4>Wynik symulacji</h4>
+                  <ul class="compact-list">${{reasons}}</ul>
+                  ${{missing ? `<div class="error" style="margin-top:8px">Brak wymagania: ${{esc(missing)}}.</div>` : ""}}
+                  <div class="attachment-upload-hint">Status końcowy w symulacji: ${{esc(simulation.final_status || "—")}}</div>
+                </div>
+                <div>
+                  <h4>Podgląd akcji</h4>
+                  <ol class="compact-list">${{actions}}</ol>
+                </div>
+              </div>
+              <details style="margin-top:10px">
+                <summary>Dlaczego taki poziom ryzyka?</summary>
+                <ul class="compact-list">${{riskReasons || "<li>Brak dodatkowych ostrzeżeń.</li>"}}</ul>
+              </details>
+            </section>
+          `;
+        }}
+        function workflowAutomationCenterRecentExecutions(data) {{
+          const workflowId = Number(data.workflow?.id || 0);
+          const rows = (data.recent_executions || []).map(e => `
+            <li>
+              <strong>${{esc(e.automation_name || "Reguła workflow")}}</strong>
+              ${{e.ticket_id ? `dla <button class="btn-link" onclick="renderTicket(${{Number(e.ticket_id)}})">#${{e.ticket_id}}</button>` : ""}}
+              <span class="muted">· ${{esc(workflowAutomationRuleEventLabel(e.event_type))}} · ${{e.matched ? "dopasowana" : "pominięta"}} · ${{esc(e.created_at || "")}}</span>
+              <div class="attachment-upload-hint">${{esc(workflowRuleExecutionActionSummary(e.actions_executed))}}</div>
+            </li>
+          `).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Ostatnie wykonania</strong>
+                  <div class="attachment-upload-hint">Krótki podgląd realnych wykonań reguł dla tego workflow.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderWorkflowRuleExecutions(${{workflowId}})">Pełny log</button>
+              </div>
+              <ol class="compact-list" style="margin-top:10px">${{rows || `<li class="muted">Brak wpisów logu dla tego workflow.</li>`}}</ol>
+            </section>
+          `;
+        }}
+        async function renderWorkflowAutomationCenter(workflowId, explicitSample = null) {{
+          const me = await loadMe();
+          if (!me || !canManageWorkflow(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Centrum automatyzacji wymaga uprawnienia workflow.manage.</p></section>`;
+            return;
+          }}
+          const params = new URLSearchParams();
+          Object.entries(explicitSample || {{}}).forEach(([key, value]) => {{
+            if (value !== undefined && value !== null) params.set(key, String(value));
+          }});
+          appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Centrum automatyzacji</h2><p class="muted">Ładuję reguły i symulację...</p></section>`;
+          const suffix = params.toString() ? `?${{params.toString()}}` : "";
+          const res = await api(`/api/admin/workflows/${{workflowId}}/automation-center${{suffix}}`);
+          const data = res ? await res.json().catch(() => ({{}})) : {{}};
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button><h2>Centrum automatyzacji</h2><p class="error">${{esc(data.error || data.message || "Nie udało się pobrać Centrum automatyzacji.")}}</p></section>`;
+            return;
+          }}
+          const workflow = data.workflow || {{}};
+          const rules = (data.rules || []).map((rule, idx) => workflowAutomationCenterRuleCard(rule, idx)).join("");
+          appEl.innerHTML = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminWorkflows()">← Workflow</button>
+              <h2>Centrum automatyzacji: ${{esc(workflow.name || "Workflow")}}</h2>
+              <p class="muted">To jest mapa działania workflow: pokazuje zapisane reguły, ich zakres, ryzyko oraz wynik symulacji na przykładowym zgłoszeniu.</p>
+              <div class="actions">
+                <button class="btn-secondary" onclick="renderAdminWorkflowForm(${{Number(workflow.id || 0)}})">Edytuj workflow</button>
+                <button class="btn-secondary" onclick="renderWorkflowRuleExecutions(${{Number(workflow.id || 0)}})">Log automatyzacji</button>
+              </div>
+            </section>
+            ${{workflowAutomationCenterSummary(data)}}
+            ${{workflowAutomationCenterSampleForm(data)}}
+            <section class="card">
+              <h3>Reguły workflow</h3>
+              <p class="muted">Karty są ułożone według priorytetu wykonania. Jeżeli pasują dwie reguły, pierwsza z opcją „Stop po wykonaniu” zatrzyma kolejne.</p>
+            </section>
+            ${{rules || `<section class="card"><p class="muted">Ten workflow nie ma jeszcze reguł automatyzacji.</p></section>`}}
+            ${{workflowAutomationCenterRecentExecutions(data)}}
+          `;
+        }}
         async function exportWorkflowRuleExecutionsCsv(workflowId = "") {{
           try {{
             const filters = workflowRuleExecutionFilterValues(workflowId);
@@ -6952,6 +7404,7 @@ data:
               <td>
                 <div class="actions">
                   <button class="btn-secondary btn-small" onclick="renderAdminWorkflowForm(${{w.id}})">Edytuj</button>
+                  <button class="btn-secondary btn-small" onclick="renderWorkflowAutomationCenter(${{w.id}})">Centrum</button>
                   <button class="btn-secondary btn-small" onclick="renderWorkflowRuleExecutions(${{w.id}})">Log</button>
                   <button class="btn-danger btn-small" onclick="deleteAdminWorkflow(${{w.id}}, ${{w.ticket_count || 0}})">Usuń/dezaktywuj</button>
                 </div>
@@ -10284,6 +10737,183 @@ data:
             "operators": operators,
             "operator_emails": [o["email"] for o in operators],
             "automations": automations,
+        })
+    @app.get("/api/workflows/<int:workflow_id>/automation-center")
+    @app.get("/api/admin/workflows/<int:workflow_id>/automation-center")
+    @api_login_required
+
+    # Centrum automatyzacji: opisuje reguły workflow i symuluje ich działanie.
+    def api_admin_workflow_automation_center(user, workflow_id):
+        if not can_manage_workflow_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania workflow.", "workflow.manage")
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, workflow_key, name, category, subcategory, is_default, is_active, created_at, updated_at
+            FROM workflow_definitions
+            WHERE id = %s
+        """, (workflow_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        steps = workflow_steps_for_id(cur, workflow_id)
+        operators = workflow_operator_entries(cur, workflow_id)
+        automations = workflow_automation_entries(cur, workflow_id)
+        first_step = steps[0] if steps else "Nowe"
+        next_step = steps[1] if len(steps) > 1 else ""
+        workflow_category = row[3] or "*"
+        workflow_subcategory = row[4] or "*"
+        default_category = workflow_category if workflow_category != "*" else (CATEGORIES[0] if CATEGORIES else "*")
+        if workflow_subcategory != "*":
+            default_subcategory = workflow_subcategory
+        elif default_category != "*":
+            default_subcategory = (SUBCATEGORIES.get(default_category) or ["Inne"])[0]
+        else:
+            default_subcategory = "*"
+        sample = {
+            "event_type": clean(request.args.get("event_type")) or "comment_added",
+            "current_status": clean(request.args.get("current_status")) or first_step,
+            "event_new_status": clean(request.args.get("event_new_status")) or "",
+            "actor_role": clean(request.args.get("actor_role")) or "operator",
+            "comment_visibility": clean(request.args.get("comment_visibility")) or "public",
+            "assigned_state": clean(request.args.get("assigned_state")) or "unassigned",
+            "priority": clean(request.args.get("priority")) or "Normalny",
+            "category": clean(request.args.get("category")) or default_category,
+            "subcategory": clean(request.args.get("subcategory")) or default_subcategory,
+            "sla_state": clean(request.args.get("sla_state")) or "ok",
+            "operator_added_comment": str(request.args.get("operator_added_comment", "")).lower() in ("1", "true", "yes", "on"),
+            "operator_added_attachment": str(request.args.get("operator_added_attachment", "")).lower() in ("1", "true", "yes", "on"),
+        }
+        if sample["event_type"] == "status_changed" and not sample["event_new_status"]:
+            sample["event_new_status"] = next_step or sample["current_status"]
+        sample_user = workflow_simulation_user(sample["actor_role"])
+        assigned_to_email = "operator@simulation.local" if sample["assigned_state"] == "assigned" else None
+        ticket_context = {
+            "priority": sample["priority"],
+            "category": sample["category"],
+            "subcategory": sample["subcategory"],
+            "sla_state": sample["sla_state"],
+        }
+        rules = []
+        matched_rules = 0
+        for item in automations:
+            matched = False
+            reasons = []
+            if item.get("is_active") is False:
+                reasons.append("Reguła jest nieaktywna.")
+            elif not workflow_rule_event_matches(item, sample["event_type"], sample_user):
+                reasons.append(f"Zdarzenie nie pasuje: reguła czeka na „{workflow_event_label(item.get('event_type'))}”.")
+            else:
+                matched, reason = workflow_automation_match_result(
+                    item,
+                    sample["current_status"],
+                    sample_user,
+                    sample["comment_visibility"],
+                    assigned_to_email,
+                    sample["event_new_status"],
+                    ticket_context=ticket_context,
+                )
+                reasons.append(reason)
+            previews, missing_requirements, final_status = workflow_automation_actions_preview(
+                item,
+                matched,
+                sample["current_status"],
+                sample["event_new_status"],
+                steps,
+                sample,
+            )
+            if matched:
+                matched_rules += 1
+            risk = workflow_automation_risk(item, workflow_category, workflow_subcategory)
+            enriched = dict(item)
+            enriched.update({
+                "condition_summary": workflow_automation_condition_summary(item, workflow_category, workflow_subcategory),
+                "action_summary": "; ".join(workflow_automation_action_summaries(item)) or "brak aktywnych akcji",
+                "risk": risk,
+                "simulation": {
+                    "matched": matched,
+                    "reasons": reasons,
+                    "actions_preview": previews,
+                    "missing_requirements": missing_requirements,
+                    "blocked_by_validation": bool(missing_requirements),
+                    "final_status": final_status,
+                },
+            })
+            rules.append(enriched)
+        cur.execute("""
+            SELECT
+                wre.id,
+                wre.automation_id,
+                COALESCE(wa.name, 'Reguła usunięta') AS automation_name,
+                wre.ticket_id,
+                COALESCE(t.title, '') AS ticket_title,
+                COALESCE(wre.event_type, '') AS event_type,
+                COALESCE(wre.matched, TRUE) AS matched,
+                COALESCE(wre.reason, '') AS reason,
+                COALESCE(wre.actions_executed, '[]') AS actions_executed,
+                COALESCE(wre.created_at, NOW()) AS created_at
+            FROM workflow_rule_executions wre
+            LEFT JOIN workflow_automations wa ON wa.id = wre.automation_id
+            LEFT JOIN tickets t ON t.id = wre.ticket_id
+            WHERE wre.workflow_id = %s
+            ORDER BY wre.id DESC
+            LIMIT 5
+        """, (workflow_id,))
+        recent_executions = []
+        for r in cur.fetchall():
+            actions_raw = r[8] or "[]"
+            if isinstance(actions_raw, str):
+                try:
+                    actions = json.loads(actions_raw)
+                except Exception:
+                    actions = actions_raw
+            else:
+                actions = actions_raw
+            recent_executions.append({
+                "id": r[0],
+                "automation_id": r[1],
+                "automation_name": r[2],
+                "ticket_id": r[3],
+                "ticket_title": r[4],
+                "event_type": r[5],
+                "matched": bool(r[6]),
+                "reason": r[7],
+                "actions_executed": actions,
+                "created_at": str(r[9]),
+            })
+        cur.close()
+        conn.close()
+        risk_counts = {
+            "high": sum(1 for r in rules if r["risk"]["level"] == "high"),
+            "medium": sum(1 for r in rules if r["risk"]["level"] == "medium"),
+            "low": sum(1 for r in rules if r["risk"]["level"] == "low"),
+        }
+        return jsonify({
+            "workflow": {
+                "id": row[0],
+                "workflow_key": row[1],
+                "name": row[2],
+                "category": workflow_category,
+                "subcategory": workflow_subcategory,
+                "is_default": bool(row[5]),
+                "is_active": bool(row[6]),
+                "created_at": str(row[7]),
+                "updated_at": str(row[8]),
+            },
+            "steps": [{"step_name": step} for step in steps],
+            "operators": operators,
+            "rules": rules,
+            "sample": sample,
+            "recent_executions": recent_executions,
+            "summary": {
+                "rules_total": len(rules),
+                "active_rules": sum(1 for r in rules if r.get("is_active") is not False),
+                "matched_rules": matched_rules,
+                "risk_counts": risk_counts,
+                "recent_executions": len(recent_executions),
+            },
         })
     def normalize_workflow_payload(payload, existing_key=None):
         name = clean(payload.get("name"))
