@@ -5903,6 +5903,78 @@ data:
           ];
           return templates;
         }}
+        function workflowAutomationTemplateById() {{
+          return new Map(workflowAutomationRuleTemplates().map(template => [template.id, template]));
+        }}
+        function workflowAutomationStarterPacks() {{
+          const workflow = workflowAutomationEditorWorkflow || {{}};
+          const statuses = workflowStatuses(workflow);
+          const hasWaitingUser = statuses.includes("Oczekuje na użytkownika");
+          const hasWaitingVendor = statuses.includes("Oczekuje na dostawcę");
+          const templates = workflowAutomationTemplateById();
+          return [
+            {{
+              id: "daily_triage",
+              title: "Codzienna obsługa zgłoszeń",
+              description: "Dobry pakiet na start: reaguje na odpowiedź użytkownika, przenosi nowe zgłoszenie do pracy i pilnuje krytycznych tematów.",
+              templateIds: [
+                ...(hasWaitingUser ? ["user_replied_reopen"] : []),
+                "operator_started",
+                "critical_created",
+              ],
+            }},
+            {{
+              id: "quality_gate",
+              title: "Kontrola jakości przed zmianą statusu",
+              description: hasWaitingUser || hasWaitingVendor
+                ? "Wymusza komentarz przy statusach oczekiwania oraz komentarz i załącznik przy rozwiązaniu."
+                : "Wymusza komentarz i załącznik przy rozwiązaniu zgłoszenia.",
+              templateIds: [
+                ...(hasWaitingUser ? ["require_comment_waiting_user"] : []),
+                ...(hasWaitingVendor ? ["waiting_vendor_requires_comment"] : []),
+                "require_comment_attachment_resolved",
+              ],
+            }},
+            {{
+              id: "critical_alerting",
+              title: "Szybka ścieżka dla krytycznych zgłoszeń",
+              description: "Dodaje obserwatorów workflow, komentarz systemowy i powiadomienie dla zgłoszeń krytycznych.",
+              templateIds: ["critical_created"],
+            }},
+          ].map(pack => ({{
+            ...pack,
+            templates: pack.templateIds.map(id => templates.get(id)).filter(Boolean),
+          }})).filter(pack => pack.templates.length);
+        }}
+        function workflowAutomationUniqueRuleName(baseName) {{
+          const existing = new Set(workflowAutomationEditor.map(rule => String(rule.name || "").trim()).filter(Boolean));
+          if (!existing.has(baseName)) return baseName;
+          let suffix = 2;
+          while (existing.has(`${{baseName}} (${{suffix}})`)) suffix += 1;
+          return `${{baseName}} (${{suffix}})`;
+        }}
+        function workflowAutomationCloneTemplateRule(template) {{
+          const rule = JSON.parse(JSON.stringify(template.rule));
+          rule.id = null;
+          rule.is_active = false;
+          rule.name = workflowAutomationUniqueRuleName(rule.name || template.title || "Reguła z szablonu");
+          rule.priority = ((workflowAutomationEditor.length + 1) * 10);
+          return rule;
+        }}
+        function workflowAutomationStarterPackCard(pack) {{
+          const summaries = pack.templates
+            .map(template => `<li>${{esc(template.title)}} — ${{esc(workflowAutomationRuleReadableDescription(template.rule))}}</li>`)
+            .join("");
+          return `
+            <div class="card" style="padding:14px;margin:10px 0;border-color:rgba(56,189,248,.38)">
+              <h4 style="margin:0 0 6px">${{esc(pack.title)}}</h4>
+              <p class="muted" style="margin:0 0 8px">${{esc(pack.description)}}</p>
+              <div class="attachment-upload-hint" style="margin-bottom:8px">Doda ${{pack.templates.length}} reguł jako wersje robocze. Po dodaniu przetestuj je i aktywuj tylko te, które pasują do procesu.</div>
+              <ul class="compact-list">${{summaries}}</ul>
+              <button type="button" class="workflow-template-pack-use" data-pack-id="${{esc(pack.id)}}">Dodaj cały pakiet</button>
+            </div>
+          `;
+        }}
         function openWorkflowAutomationTemplatePicker() {{
           const modal = document.getElementById("workflowAutomationRuleModal");
           if (!modal) {{
@@ -5911,6 +5983,8 @@ data:
           }}
           try {{
             const templates = workflowAutomationRuleTemplates();
+            const starterPacks = workflowAutomationStarterPacks();
+            const packCards = starterPacks.map(workflowAutomationStarterPackCard).join("");
             const cards = templates.map(t => `
               <div class="card" style="padding:12px;margin:10px 0">
                 <h4 style="margin:0 0 6px">${{esc(t.title)}}</h4>
@@ -5924,13 +5998,25 @@ data:
                 <div class="modal-header">
                   <div>
                     <h2>Dodaj regułę z szablonu</h2>
-                    <p class="muted">Szablon otworzy formularz reguły z uzupełnionymi polami. Przed zapisem możesz zmienić statusy, warunki i akcje oraz użyć testu reguły.</p>
+                    <p class="muted">Najprościej zacząć od pakietu startowego. Pakiet dodaje kilka reguł jako wersje robocze, a pojedynczy szablon otwiera formularz jednej reguły.</p>
                   </div>
                   <button type="button" class="btn-secondary btn-small" data-template-close="1">✕</button>
                 </div>
-                ${{cards}}
+                <section class="card" style="padding:14px">
+                  <h3>Pakiety startowe</h3>
+                  <p class="muted">To gotowe zestawy reguł dla najczęstszych scenariuszy. Nie aktywują się automatycznie — najpierw zobaczysz je jako szkice.</p>
+                  ${{packCards}}
+                </section>
+                <details class="card" style="padding:14px;margin-top:12px">
+                  <summary>Pojedyncze szablony reguł</summary>
+                  <div class="attachment-upload-hint" style="margin:8px 0 12px">Użyj, gdy chcesz dodać tylko jedną konkretną automatyzację i od razu dopracować jej warunki.</div>
+                  ${{cards}}
+                </details>
               </div>
             `;
+            modal.querySelectorAll(".workflow-template-pack-use").forEach(btn => {{
+              btn.addEventListener("click", () => applyWorkflowAutomationTemplatePack(btn.dataset.packId));
+            }});
             modal.querySelectorAll(".workflow-template-use").forEach(btn => {{
               btn.addEventListener("click", () => applyWorkflowAutomationTemplate(btn.dataset.templateId));
             }});
@@ -5942,12 +6028,26 @@ data:
             alert("Nie udało się otworzyć listy szablonów reguł workflow: " + (err && err.message ? err.message : err));
           }}
         }}
+        function applyWorkflowAutomationTemplatePack(packId) {{
+          const pack = workflowAutomationStarterPacks().find(item => item.id === packId);
+          if (!pack) return;
+          const added = [];
+          const baseIndex = workflowAutomationEditor.length;
+          pack.templates.forEach((template, offset) => {{
+            const rule = workflowAutomationCloneTemplateRule(template);
+            rule.priority = ((baseIndex + offset + 1) * 10);
+            workflowAutomationEditor.push(rule);
+            added.push(rule.name);
+          }});
+          if (workflowAutomationEditorWorkflow) workflowAutomationEditorWorkflow.automations = workflowAutomationEditor;
+          closeWorkflowAutomationRuleForm();
+          renderWorkflowAutomationRules();
+          showToast("Dodano pakiet automatyzacji", `${{added.length}} reguł dodanych jako wersje robocze.`);
+        }}
         function applyWorkflowAutomationTemplate(templateId) {{
           const template = workflowAutomationRuleTemplates().find(t => t.id === templateId);
           if (!template) return;
-          const rule = JSON.parse(JSON.stringify(template.rule));
-          rule.id = null;
-          rule.priority = ((workflowAutomationEditor.length + 1) * 10);
+          const rule = workflowAutomationCloneTemplateRule(template);
           openWorkflowAutomationRuleForm(null, rule);
         }}
         async function refreshWorkflowAutomationRulesFromApi(workflowId) {{
