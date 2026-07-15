@@ -3274,8 +3274,10 @@ data:
           radial-gradient(circle at bottom right, rgba(34,197,94,.12), transparent 35%),
           var(--bg);
         color: var(--text);
+        overflow-x: hidden;
       }
       a { color: inherit; }
+      img, svg, canvas, video { max-width: 100%; height: auto; }
       .page { width: min(1220px, 94vw); margin: 0 auto; padding: 42px 0; }
       header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 24px; }
       h1 { margin: 0 0 8px; font-size: clamp(34px, 5vw, 56px); line-height: 1; letter-spacing: -.05em; }
@@ -3630,12 +3632,94 @@ data:
       .sla-calendar-meta { color: var(--muted); font-size: 13px; margin-top: 6px; line-height: 1.5; }
       .sla-calendar-empty { color: var(--muted); margin: 0; }
       .hidden { display: none; }
-      @media (max-width: 980px) { .operator-cockpit-shell, .operator-board, .operator-queues { grid-template-columns: 1fr; } .operator-sidebar { position: static; } }
-      @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
+      @media (max-width: 1100px) {
+        .page { width: min(100% - 28px, 1220px); padding: 30px 0; }
+      }
+      @media (max-width: 980px) {
+        .operator-cockpit-shell,
+        .operator-board,
+        .operator-queues,
+        .ticket-layout,
+        .resolution-time-grid { grid-template-columns: 1fr; }
+        .operator-sidebar {
+          position: static;
+          grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+          align-items: stretch;
+        }
+        .operator-sidebar-title { grid-column: 1 / -1; }
+        .ticket-side-column { position: static; }
+        .operator-side-panel { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+      }
+      @media (max-width: 860px) {
+        header,
+        .topbar,
+        .ticket-top-actions,
+        .ticket-section-title,
+        .switch-row,
+        .attachment-item,
+        .watcher-item {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .header-actions,
+        .notification-wrapper { align-items: stretch; justify-content: stretch; }
+        .badge,
+        .live-panel { width: 100%; min-width: 0; white-space: normal; }
+        .grid,
+        .filter-grid { grid-template-columns: 1fr; }
+        .notification-card { grid-template-columns: 1fr; }
+        .notification-item-actions { justify-content: flex-start; }
+        table { font-size: 14px; }
+      }
       @media (max-width: 720px) {
+        .page { width: min(100% - 20px, 1220px); padding: 20px 0; }
+        .card,
+        .operator-hero,
+        .modal-card { padding: 16px; border-radius: 18px; }
+        h1 { font-size: clamp(30px, 12vw, 42px); }
+        .subtitle { font-size: 15px; }
+        table {
+          display: block;
+          width: 100%;
+          overflow-x: auto;
+          white-space: nowrap;
+          -webkit-overflow-scrolling: touch;
+        }
+        th, td { padding: 10px; }
+        .notification-panel {
+          position: fixed;
+          top: 74px;
+          left: 10px;
+          right: 10px;
+          width: auto;
+          max-height: calc(100vh - 94px);
+          overflow: auto;
+        }
+        .notification-panel-header,
+        .modal-header { flex-direction: column; align-items: stretch; }
+        .operator-command-row .quick-search { flex-basis: 100%; }
         .workflow-diagram-lane { flex-direction: column; overflow-x: visible; }
         .workflow-diagram-node { flex-basis: auto; min-height: 0; }
         .workflow-diagram-arrow { min-height: 28px; transform: rotate(90deg); }
+      }
+      @media (max-width: 560px) {
+        .stats,
+        .dashboard-grid,
+        .operator-summary-strip,
+        .module-nav,
+        .operator-sidebar { grid-template-columns: 1fr; }
+        .operator-command-row button,
+        .actions button,
+        .form-actions button,
+        .modal-actions button,
+        .notification-panel-actions button,
+        .status-filter-actions button { width: 100%; }
+        .workflow-wizard-steps { grid-template-columns: 1fr; }
+        .workflow-wizard-actions,
+        .modal-actions { flex-direction: column; align-items: stretch; }
+        .pagination { align-items: stretch; }
+        .pagination-pages { justify-content: flex-start; }
+        .toast { left: 10px; right: 10px; bottom: 10px; min-width: 0; max-width: none; }
       }
     """
     SPA_HTML = f"""
