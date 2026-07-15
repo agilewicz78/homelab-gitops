@@ -351,6 +351,7 @@ const requiredIncidentCenterV2 = [
   "toggleIncidentTask",
   "deleteIncidentTask",
   "resolve_linked_tickets",
+  "ticket_resolution_rejected",
   "resolved_linked_ticket_count",
   "/api/incidents/${{incidentId}}/tasks",
   "/api/incidents/${{incidentId}}/tasks/${{taskId}}/toggle",
