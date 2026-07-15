@@ -1365,6 +1365,22 @@ data:
                     );
                 """)
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS incident_tasks (
+                        id SERIAL PRIMARY KEY,
+                        incident_id INTEGER REFERENCES incidents(id) ON DELETE CASCADE,
+                        title TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'open',
+                        owner_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        owner_name TEXT,
+                        created_by_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        created_by_name TEXT,
+                        completed_by_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        completed_by_name TEXT,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        completed_at TIMESTAMP
+                    );
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS knowledge_articles (
                         id SERIAL PRIMARY KEY,
                         title TEXT NOT NULL,
@@ -1429,6 +1445,8 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_incidents_severity_updated ON incidents (severity, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_incident_tickets_ticket_id ON incident_tickets (ticket_id, incident_id)",
                     "CREATE INDEX IF NOT EXISTS idx_incident_updates_incident_id ON incident_updates (incident_id, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_incident_tasks_incident_id ON incident_tasks (incident_id, status, id DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_incident_tasks_owner_status ON incident_tasks (lower(owner_email), status, id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_status_updated ON knowledge_articles (status, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_category ON knowledge_articles (category, subcategory, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_feedback_article_helpful ON knowledge_article_feedback (article_id, helpful)",
@@ -9549,6 +9567,99 @@ data:
           }}
           return `${{value}} powiązanych zgłoszeń`;
         }}
+        function incidentTaskStatusLabel(status) {{
+          return status === "done" ? "Wykonane" : "Otwarte";
+        }}
+        function incidentTimelineTypeLabel(type) {{
+          const labels = {{
+            created: "Utworzono incydent",
+            status: "Zmiana statusu",
+            update: "Aktualizacja",
+            investigation: "Analiza",
+            mitigation: "Działanie naprawcze",
+            resolution: "Rozwiązanie",
+            ticket_linked: "Powiązano zgłoszenie",
+            ticket_unlinked: "Odłączono zgłoszenie",
+            task: "Dodano zadanie",
+            task_done: "Zamknięto zadanie",
+            task_reopened: "Ponownie otwarto zadanie",
+            task_deleted: "Usunięto zadanie"
+          }};
+          return labels[type] || type || "Aktualizacja";
+        }}
+        function incidentCommandMetric(label, value, hint) {{
+          return `
+            <div class="dashboard-card">
+              <div class="num">${{esc(value)}}</div>
+              <div class="label"><strong>${{esc(label)}}</strong><br>${{esc(hint)}}</div>
+            </div>
+          `;
+        }}
+        function incidentCommandCenter(incident, data) {{
+          const summary = data.task_summary || {{ total: 0, open: 0, done: 0 }};
+          const tickets = data.tickets || [];
+          const updates = data.updates || [];
+          const publicUpdates = updates.filter(update => update.is_public).length;
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Centrum dowodzenia</h3>
+                  <p class="muted">Szybki obraz incydentu: zasięg, komunikacja i postęp działań.</p>
+                </div>
+                <span class="pill">${{esc(incident.severity)}} · ${{esc(incidentStatusLabel(incident.status))}}</span>
+              </div>
+              <section class="dashboard-grid">
+                ${{incidentCommandMetric("Zgłoszenia", tickets.length, "Podpięte tickety użytkowników.")}}
+                ${{incidentCommandMetric("Otwarte zadania", summary.open || 0, "Rzeczy, które nadal trzeba zrobić.")}}
+                ${{incidentCommandMetric("Wykonane zadania", `${{summary.done || 0}}/${{summary.total || 0}}`, "Postęp checklisty działań.")}}
+                ${{incidentCommandMetric("Publiczne komunikaty", publicUpdates, "Aktualizacje widoczne w powiązanych zgłoszeniach.")}}
+              </section>
+            </section>
+          `;
+        }}
+        function incidentTaskList(tasks, incidentId) {{
+          if (!tasks.length) {{
+            return `<p class="muted">Brak zadań. Dodaj pierwsze działanie, żeby zespół wiedział, co jest do zrobienia.</p>`;
+          }}
+          return tasks.map(task => {{
+            const done = task.status === "done";
+            const nextStatus = done ? "open" : "done";
+            const owner = task.owner_name || task.owner_email || "Bez właściciela";
+            const completed = done && task.completed_by_name
+              ? ` · zamknął: ${{esc(task.completed_by_name)}}`
+              : "";
+            return `
+              <div class="watcher-item">
+                <div>
+                  <strong>${{esc(task.title)}}</strong>
+                  <div class="watcher-meta">
+                    <span class="pill">${{esc(incidentTaskStatusLabel(task.status))}}</span>
+                    · właściciel: ${{esc(owner)}}
+                    · dodał: ${{esc(task.created_by_name || "System")}}
+                    ${{completed}}
+                  </div>
+                </div>
+                <div class="form-actions">
+                  <button class="btn-secondary btn-small" onclick="toggleIncidentTask(${{incidentId}}, ${{task.id}}, '${{nextStatus}}')">${{done ? "Otwórz" : "Zamknij"}}</button>
+                  <button class="btn-secondary btn-small" onclick="deleteIncidentTask(${{incidentId}}, ${{task.id}})">Usuń</button>
+                </div>
+              </div>
+            `;
+          }}).join("");
+        }}
+        function incidentTimelineList(items) {{
+          if (!items.length) {{
+            return `<p class="muted">Brak wpisów na osi czasu.</p>`;
+          }}
+          return items.map(item => `
+            <div class="event-item ${{item.is_public ? "incident-update-public" : "incident-update-internal"}}">
+              <strong>${{esc(item.actor || item.created_by_name || "System")}} · ${{esc(incidentTimelineTypeLabel(item.type || item.update_type))}}</strong>
+              <span class="muted"> · ${{esc(item.created_at)}} · ${{item.is_public ? "komunikat publiczny" : "notatka wewnętrzna"}}</span>
+              <div>${{esc(item.message)}}</div>
+            </div>
+          `).join("");
+        }}
         async function renderIncidents(filter = incidentListFilter) {{
           incidentListFilter = filter || "active";
           currentView = {{ name: "incidents", ticketId: null }};
@@ -9574,6 +9685,7 @@ data:
                 <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
                 <span class="chip">${{i.ticket_count}} zgłoszeń</span>
                 <span class="chip">${{i.department_count}} działów</span>
+                <span class="chip">Zadania: ${{i.done_task_count || 0}}/${{i.task_count || 0}}</span>
               </div>
               <p>${{esc(i.summary)}}</p>
               ${{i.impact ? `<p class="muted"><strong>Wpływ:</strong> ${{esc(i.impact)}}</p>` : ""}}
@@ -9644,6 +9756,9 @@ data:
           const commanderOptions = (data.meta?.commanders || []).map(c =>
             `<option value="${{esc(c.email)}}" ${{c.email === i.commander_email ? "selected" : ""}}>${{esc(c.name)}} · ${{esc(c.email)}}</option>`
           ).join("");
+          const ownerOptions = (data.meta?.commanders || []).map(c =>
+            `<option value="${{esc(c.email)}}">${{esc(c.name)}} · ${{esc(c.email)}}</option>`
+          ).join("");
           const tickets = (data.tickets || []).length ? data.tickets.map(t => `
             <div class="watcher-item">
               <div>
@@ -9658,13 +9773,8 @@ data:
               <button class="btn-secondary btn-small" onclick="unlinkIncidentTicket(${{i.id}}, ${{t.id}})">Odłącz</button>
             </div>
           `).join("") : `<p class="muted">Nie powiązano jeszcze żadnych zgłoszeń.</p>`;
-          const updates = (data.updates || []).length ? data.updates.map(u => `
-            <div class="event-item ${{u.is_public ? "incident-update-public" : "incident-update-internal"}}">
-              <strong>${{esc(u.created_by_name)}} · ${{esc(u.update_type)}}</strong>
-              <span class="muted"> · ${{esc(u.created_at)}} · ${{u.is_public ? "komunikat publiczny" : "notatka wewnętrzna"}}</span>
-              <div>${{esc(u.message)}}</div>
-            </div>
-          `).join("") : `<p class="muted">Brak komunikatów.</p>`;
+          const taskList = incidentTaskList(data.tasks || [], i.id);
+          const timeline = incidentTimelineList(data.timeline || data.updates || []);
           appEl.innerHTML = `
             <section class="card incident-card ${{incidentSeverityClass(i.severity)}}">
               <div class="ticket-section-title">
@@ -9682,6 +9792,7 @@ data:
               <p>${{esc(i.summary)}}</p>
               ${{i.impact ? `<p><strong>Wpływ:</strong> ${{esc(i.impact)}}</p>` : ""}}
             </section>
+            ${{incidentCommandCenter(i, data)}}
             <div class="grid">
               <section class="card">
                 <h3>Dowodzenie incydentem</h3>
@@ -9716,6 +9827,20 @@ data:
                   <button id="incidentUpdateSubmit" type="submit">Opublikuj w ${{(data.tickets || []).length}} zgłoszeniach</button>
                 </form>
               </section>
+              <section class="card">
+                <div class="ticket-section-title">
+                  <h3>Checklist działań</h3>
+                  <span class="counter">${{(data.task_summary || {{}}).done || 0}}/${{(data.task_summary || {{}}).total || 0}}</span>
+                </div>
+                <div class="watcher-list">${{taskList}}</div>
+                <form id="incidentTaskForm">
+                  <label>Nowe zadanie</label>
+                  <textarea name="title" required placeholder="Np. Zweryfikować usługę po naprawie"></textarea>
+                  <label>Właściciel</label>
+                  <select name="owner_email"><option value="">Bez właściciela</option>${{ownerOptions}}</select>
+                  <button type="submit">Dodaj zadanie</button>
+                </form>
+              </section>
             </div>
             <section class="card">
               <div class="ticket-section-title"><h3>Powiązane zgłoszenia</h3><span class="counter">${{(data.tickets || []).length}}</span></div>
@@ -9726,8 +9851,8 @@ data:
               </form>
             </section>
             <section class="card">
-              <div class="ticket-section-title"><h3>Oś czasu incydentu</h3><span class="counter">${{(data.updates || []).length}} wpisów</span></div>
-              <div class="timeline">${{updates}}</div>
+              <div class="ticket-section-title"><h3>Oś czasu incydentu</h3><span class="counter">${{(data.timeline || data.updates || []).length}} wpisów</span></div>
+              <div class="timeline">${{timeline}}</div>
             </section>
           `;
           document.getElementById("incidentEditForm")?.addEventListener("submit", async (event) => {{
@@ -9778,6 +9903,10 @@ data:
             showToast("Dodano komunikat do incydentu #" + i.id, details);
             await renderIncident(i.id);
           }});
+          document.getElementById("incidentTaskForm")?.addEventListener("submit", async (event) => {{
+            event.preventDefault();
+            await submitIncidentTask(i.id, event.target);
+          }});
           document.getElementById("incidentTicketForm")?.addEventListener("submit", async (event) => {{
             event.preventDefault();
             const payload = Object.fromEntries(new FormData(event.target).entries());
@@ -9790,6 +9919,51 @@ data:
             showToast("Powiązano zgłoszenie z incydentem #" + i.id);
             await renderIncident(i.id);
           }});
+        }}
+        async function submitIncidentTask(incidentId, form) {{
+          const payload = Object.fromEntries(new FormData(form).entries());
+          payload.title = String(payload.title || "").trim();
+          if (!payload.title) {{
+            alert("Podaj treść zadania.");
+            return;
+          }}
+          const res = await api(`/api/incidents/${{incidentId}}/tasks`, {{
+            method: "POST",
+            body: JSON.stringify(payload)
+          }});
+          if (!res || !res.ok) {{
+            const err = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(err.error || "Nie udało się dodać zadania.");
+            return;
+          }}
+          form.reset();
+          showToast("Dodano zadanie do incydentu #" + incidentId);
+          await renderIncident(incidentId);
+        }}
+        async function toggleIncidentTask(incidentId, taskId, status) {{
+          const targetStatus = status === "open" ? "open" : "done";
+          const res = await api(`/api/incidents/${{incidentId}}/tasks/${{taskId}}/toggle`, {{
+            method: "POST",
+            body: JSON.stringify({{ status: targetStatus }})
+          }});
+          if (!res || !res.ok) {{
+            const err = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(err.error || "Nie udało się zaktualizować zadania.");
+            return;
+          }}
+          showToast(targetStatus === "done" ? "Zamknięto zadanie" : "Ponownie otwarto zadanie");
+          await renderIncident(incidentId);
+        }}
+        async function deleteIncidentTask(incidentId, taskId) {{
+          if (!confirm("Usunąć zadanie z checklisty incydentu?")) return;
+          const res = await api(`/api/incidents/${{incidentId}}/tasks/${{taskId}}`, {{ method: "DELETE" }});
+          if (!res || !res.ok) {{
+            const err = res ? await res.json().catch(() => ({{}})) : {{}};
+            alert(err.error || "Nie udało się usunąć zadania.");
+            return;
+          }}
+          showToast("Usunięto zadanie z incydentu");
+          await renderIncident(incidentId);
         }}
         async function unlinkIncidentTicket(incidentId, ticketId) {{
           if (!confirm("Odłączyć zgłoszenie od incydentu?")) return;
@@ -13965,10 +14139,13 @@ data:
               COALESCE(i.commander_name, i.commander_email, ''),
               i.created_at, i.updated_at, i.resolved_at,
               COUNT(DISTINCT it.ticket_id) AS ticket_count,
-              COUNT(DISTINCT NULLIF(t.department, '')) AS department_count
+              COUNT(DISTINCT NULLIF(t.department, '')) AS department_count,
+              COUNT(DISTINCT task.id) AS task_count,
+              COUNT(DISTINCT task.id) FILTER (WHERE task.status = 'done') AS done_task_count
             FROM incidents i
             LEFT JOIN incident_tickets it ON it.incident_id = i.id
             LEFT JOIN tickets t ON t.id = it.ticket_id
+            LEFT JOIN incident_tasks task ON task.incident_id = i.id
             {where_sql}
             GROUP BY i.id
             ORDER BY
@@ -13990,6 +14167,8 @@ data:
             "resolved_at": str(row[10]) if row[10] else "",
             "ticket_count": row[11],
             "department_count": row[12],
+            "task_count": row[13],
+            "done_task_count": row[14],
         } for row in cur.fetchall()]
         cur.execute("""
             SELECT first_name, last_name, email, roles
@@ -14276,6 +14455,44 @@ data:
             "created_at": str(update[5]),
         } for update in cur.fetchall()]
         cur.execute("""
+            SELECT
+              id, title, status,
+              COALESCE(owner_email, ''),
+              COALESCE(owner_name, owner_email, ''),
+              COALESCE(created_by_name, created_by_email, 'System'),
+              COALESCE(completed_by_name, completed_by_email, ''),
+              created_at, completed_at
+            FROM incident_tasks
+            WHERE incident_id = %s
+            ORDER BY
+              CASE status WHEN 'open' THEN 1 ELSE 2 END,
+              id DESC
+        """, (incident_id,))
+        tasks = [{
+            "id": task[0],
+            "title": task[1],
+            "status": task[2],
+            "owner_email": task[3],
+            "owner_name": task[4],
+            "created_by_name": task[5],
+            "completed_by_name": task[6],
+            "created_at": str(task[7]),
+            "completed_at": str(task[8]) if task[8] else "",
+        } for task in cur.fetchall()]
+        task_summary = {
+            "total": len(tasks),
+            "open": sum(1 for task in tasks if task["status"] != "done"),
+            "done": sum(1 for task in tasks if task["status"] == "done"),
+        }
+        timeline = [{
+            "id": update["id"],
+            "type": update["update_type"],
+            "message": update["message"],
+            "is_public": update["is_public"],
+            "actor": update["created_by_name"],
+            "created_at": update["created_at"],
+        } for update in updates]
+        cur.execute("""
             SELECT first_name, last_name, email, roles
             FROM users
             WHERE roles IS NOT NULL
@@ -14293,6 +14510,9 @@ data:
             "incident": incident,
             "tickets": tickets,
             "updates": updates,
+            "tasks": tasks,
+            "task_summary": task_summary,
+            "timeline": timeline,
             "meta": {
                 "severities": INCIDENT_SEVERITIES,
                 "statuses": INCIDENT_STATUSES,
@@ -14477,6 +14697,207 @@ data:
             "linked_ticket_count": len(ticket_ids),
             "public_comments_created": public_comments_created,
         }), 201
+
+    @app.post("/api/incidents/<int:incident_id>/tasks")
+    @api_login_required
+    @api_staff_required
+    def api_add_incident_task(user, incident_id):
+        payload = request.get_json(silent=True) or {}
+        title = clean(payload.get("title"))
+        owner_email = clean(payload.get("owner_email")).lower()
+        if not title:
+            return jsonify({"error": "Treść zadania jest wymagana."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT title FROM incidents WHERE id = %s", (incident_id,))
+        incident_row = cur.fetchone()
+        if not incident_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        resolved_owner_email, owner_name = incident_commander(cur, owner_email)
+        if owner_email and not resolved_owner_email:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Właściciel zadania musi być operatorem lub administratorem."}), 400
+        cur.execute("""
+            INSERT INTO incident_tasks (
+              incident_id, title, status, owner_email, owner_name,
+              created_by_email, created_by_name
+            )
+            VALUES (%s, %s, 'open', %s, %s, %s, %s)
+            RETURNING id, created_at
+        """, (
+            incident_id, title, resolved_owner_email, owner_name,
+            user["email"], user["name"],
+        ))
+        task_id, created_at = cur.fetchone()
+        cur.execute("""
+            INSERT INTO incident_updates (
+              incident_id, update_type, message, is_public,
+              created_by_email, created_by_name
+            )
+            VALUES (%s, 'task', %s, FALSE, %s, %s)
+        """, (
+            incident_id,
+            f"Dodano zadanie: {title}",
+            user["email"],
+            user["name"],
+        ))
+        cur.execute(
+            "UPDATE incidents SET updated_at = NOW() WHERE id = %s",
+            (incident_id,),
+        )
+        log_audit(cur, user, "incident_task_created", "incident", incident_id, {
+            "task_id": task_id,
+            "title": title,
+            "owner_email": resolved_owner_email,
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} dodał zadanie do incydentu #{incident_id}: {title}",
+            "incident_updated",
+            None,
+            staff_only=True,
+        )
+        return jsonify({
+            "status": "ok",
+            "task": {
+                "id": task_id,
+                "title": title,
+                "status": "open",
+                "owner_email": resolved_owner_email or "",
+                "owner_name": owner_name or "",
+                "created_by_name": user["name"],
+                "created_at": str(created_at),
+            },
+        }), 201
+
+    @app.post("/api/incidents/<int:incident_id>/tasks/<int:task_id>/toggle")
+    @api_login_required
+    @api_staff_required
+    def api_toggle_incident_task(user, incident_id, task_id):
+        payload = request.get_json(silent=True) or {}
+        target_status = clean(payload.get("status")) or "done"
+        if target_status not in ("open", "done"):
+            return jsonify({"error": "Nieprawidłowy status zadania."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT i.title, task.title, task.status
+            FROM incident_tasks task
+            JOIN incidents i ON i.id = task.incident_id
+            WHERE task.incident_id = %s AND task.id = %s
+        """, (incident_id, task_id))
+        task_row = cur.fetchone()
+        if not task_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono zadania incydentu."}), 404
+        if target_status == "done":
+            cur.execute("""
+                UPDATE incident_tasks
+                SET status = 'done',
+                    completed_by_email = %s,
+                    completed_by_name = %s,
+                    completed_at = NOW()
+                WHERE incident_id = %s AND id = %s
+            """, (user["email"], user["name"], incident_id, task_id))
+            update_type = "task_done"
+            message = f"Zamknięto zadanie: {task_row[1]}"
+        else:
+            cur.execute("""
+                UPDATE incident_tasks
+                SET status = 'open',
+                    completed_by_email = NULL,
+                    completed_by_name = NULL,
+                    completed_at = NULL
+                WHERE incident_id = %s AND id = %s
+            """, (incident_id, task_id))
+            update_type = "task_reopened"
+            message = f"Ponownie otwarto zadanie: {task_row[1]}"
+        cur.execute("""
+            INSERT INTO incident_updates (
+              incident_id, update_type, message, is_public,
+              created_by_email, created_by_name
+            )
+            VALUES (%s, %s, %s, FALSE, %s, %s)
+        """, (
+            incident_id, update_type, message,
+            user["email"], user["name"],
+        ))
+        cur.execute(
+            "UPDATE incidents SET updated_at = NOW() WHERE id = %s",
+            (incident_id,),
+        )
+        log_audit(cur, user, "incident_task_toggled", "incident", incident_id, {
+            "task_id": task_id,
+            "status": target_status,
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} zaktualizował zadanie incydentu #{incident_id}: {task_row[1]}",
+            "incident_updated",
+            None,
+            staff_only=True,
+        )
+        return jsonify({"status": "ok", "task_status": target_status})
+
+    @app.delete("/api/incidents/<int:incident_id>/tasks/<int:task_id>")
+    @api_login_required
+    @api_staff_required
+    def api_delete_incident_task(user, incident_id, task_id):
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT i.title, task.title
+            FROM incident_tasks task
+            JOIN incidents i ON i.id = task.incident_id
+            WHERE task.incident_id = %s AND task.id = %s
+        """, (incident_id, task_id))
+        task_row = cur.fetchone()
+        if not task_row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nie znaleziono zadania incydentu."}), 404
+        cur.execute("""
+            DELETE FROM incident_tasks
+            WHERE incident_id = %s AND id = %s
+        """, (incident_id, task_id))
+        cur.execute("""
+            INSERT INTO incident_updates (
+              incident_id, update_type, message, is_public,
+              created_by_email, created_by_name
+            )
+            VALUES (%s, 'task_deleted', %s, FALSE, %s, %s)
+        """, (
+            incident_id,
+            f"Usunięto zadanie: {task_row[1]}",
+            user["email"],
+            user["name"],
+        ))
+        cur.execute(
+            "UPDATE incidents SET updated_at = NOW() WHERE id = %s",
+            (incident_id,),
+        )
+        log_audit(cur, user, "incident_task_deleted", "incident", incident_id, {
+            "task_id": task_id,
+            "title": task_row[1],
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} usunął zadanie incydentu #{incident_id}: {task_row[1]}",
+            "incident_updated",
+            None,
+            staff_only=True,
+        )
+        return jsonify({"status": "ok"})
 
     @app.post("/api/incidents/<int:incident_id>/tickets")
     @api_login_required

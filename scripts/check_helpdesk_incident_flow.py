@@ -23,6 +23,10 @@ class Cursor:
         self.rowcount = 1
         self.comment_inserts = []
         self.incident_ticket_inserts = []
+        self.incident_task_inserts = []
+        self.incident_task_updates = []
+        self.incident_task_deletes = []
+        self.incident_update_inserts = []
         self.incident_timestamp_updates = 0
         self.ticket_timestamp_updates = 0
 
@@ -34,6 +38,14 @@ class Cursor:
             self.comment_inserts.append(params)
         elif "INSERT INTO incident_tickets" in self.last_query:
             self.incident_ticket_inserts.append(params)
+        elif "INSERT INTO incident_tasks" in self.last_query:
+            self.incident_task_inserts.append(params)
+        elif "UPDATE incident_tasks" in self.last_query:
+            self.incident_task_updates.append((self.last_query, params))
+        elif "DELETE FROM incident_tasks" in self.last_query:
+            self.incident_task_deletes.append(params)
+        elif "INSERT INTO incident_updates" in self.last_query:
+            self.incident_update_inserts.append(params)
         elif "UPDATE incidents SET updated_at = NOW()" in self.last_query:
             self.incident_timestamp_updates += 1
         elif "UPDATE tickets SET updated_at = NOW()" in self.last_query:
@@ -42,8 +54,12 @@ class Cursor:
     def fetchone(self):
         if "INSERT INTO incidents" in self.last_query:
             return (7,)
+        if "INSERT INTO incident_tasks" in self.last_query:
+            return (55, "2026-06-11 18:30:00")
         if "SELECT title FROM incidents" in self.last_query:
             return ("Mail outage",)
+        if "FROM incident_tasks task JOIN incidents i" in self.last_query:
+            return ("Mail outage", "Check mail queue", "open")
         if "SELECT title, severity" in self.last_query:
             return ("Mail outage", "SEV1")
         if "SELECT title FROM tickets" in self.last_query:
@@ -132,6 +148,9 @@ def main():
         load_functions(
             "api_create_incident",
             "api_add_incident_update",
+            "api_add_incident_task",
+            "api_toggle_incident_task",
+            "api_delete_incident_task",
             "api_link_incident_ticket",
         ),
         namespace,
@@ -191,6 +210,36 @@ def main():
     assert body["public_comments_created"] == 0
     assert len(internal_cursor.comment_inserts) == 0
     assert events[-1][1]["ticket_ids"] is None
+
+    Request.payload = {"title": "Check mail queue", "owner_email": ""}
+    body, status = namespace["api_add_incident_task"](user, 7)
+    task_cursor = connections[-1].cursor_value
+    assert status == 201
+    assert body["task"]["id"] == 55
+    assert body["task"]["status"] == "open"
+    assert len(task_cursor.incident_task_inserts) == 1
+    assert task_cursor.incident_task_inserts[0][1] == "Check mail queue"
+    assert task_cursor.incident_timestamp_updates == 1
+    assert task_cursor.incident_update_inserts[-1][1] == "Dodano zadanie: Check mail queue"
+    assert events[-1][1]["staff_only"] is True
+
+    Request.payload = {"status": "done"}
+    body = namespace["api_toggle_incident_task"](user, 7, 55)
+    toggle_cursor = connections[-1].cursor_value
+    assert body["status"] == "ok"
+    assert body["task_status"] == "done"
+    assert len(toggle_cursor.incident_task_updates) == 1
+    assert "SET status = 'done'" in toggle_cursor.incident_task_updates[0][0]
+    assert toggle_cursor.incident_update_inserts[-1][1] == "task_done"
+    assert toggle_cursor.incident_timestamp_updates == 1
+
+    Request.payload = {}
+    body = namespace["api_delete_incident_task"](user, 7, 55)
+    delete_cursor = connections[-1].cursor_value
+    assert body["status"] == "ok"
+    assert len(delete_cursor.incident_task_deletes) == 1
+    assert delete_cursor.incident_update_inserts[-1][1] == "Usunięto zadanie: Check mail queue"
+    assert delete_cursor.incident_timestamp_updates == 1
 
     Request.payload = {"ticket_id": 103}
     body, status = namespace["api_link_incident_ticket"](user, 7)
