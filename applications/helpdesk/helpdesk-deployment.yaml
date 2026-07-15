@@ -27,7 +27,7 @@ spec:
         app: helpdesk
       annotations:
         # Zmiana rewizji wymusza odtworzenie poda po aktualizacji kodu w ConfigMap.
-        helpdesk.incoprp.local/app-config-revision: "2026-07-15-fluid-width-layout-v1"
+        helpdesk.incoprp.local/app-config-revision: "2026-07-15-operator-cockpit-dashboard-v1"
 
     spec:
       # Pod-level securityContext:
