@@ -303,7 +303,12 @@ def main() -> None:
     assert "function ticketAssistantDiagnosis" in text
     assert "function ticketAssistantPriorityHint" in text
     assert "function ticketAssistantWorkflowHint" in text
-    assert "Asystent zgłoszenia" in text
+    assert "function renderTicketContextPanel" in text
+    assert "Panel kontekstu zgłoszenia" in text
+    assert "Sytuacja" in text
+    assert "Powiązany incydent" in text
+    assert "Możliwe incydenty" in text
+    assert "Powiązane zgłoszenia" in text
     assert "Krótka diagnoza" in text
     assert "Sugerowany priorytet" in text
     assert "Sugerowany workflow" in text
@@ -457,6 +462,17 @@ def main() -> None:
     assert "function userPortalTicketStatusPanel" in text
     assert "function resolutionFeedbackPanel" in text
     assert "async function submitResolutionFeedback" in text
+    assert "function renderTicketContextPanel" in text
+    assert "function ticketContextSituationPanel" in text
+    assert "function ticketContextCurrentIncidentList" in text
+    assert "function ticketContextLinkedTicketList" in text
+    assert "Panel kontekstu zgłoszenia" in text
+    assert "Powiązany incydent" in text
+    assert "Możliwe incydenty" in text
+    assert "Powiązane zgłoszenia" in text
+    assert "ticketContextPanelHtml" in text
+    assert "currentIncidents: data.incidents || []" in text
+    assert "linkedTickets: data.linked_tickets || []" in text
     assert '@app.post("/api/tickets/<int:ticket_id>/resolution-feedback")' in text
     assert "def api_ticket_resolution_feedback" in text
     assert "resolution_feedback_reopen_status_for_workflow" in text
@@ -478,7 +494,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-admin-content-without-duplicate-nav-v1" in deployment_text
+    assert "2026-07-15-ticket-context-panel-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

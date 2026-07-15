@@ -3286,6 +3286,15 @@ data:
       .badge strong { color: var(--green); }
       .card { background: linear-gradient(180deg, rgba(17,24,39,.96), rgba(15,23,42,.96)); border: 1px solid var(--border); border-radius: 22px; padding: 22px; box-shadow: 0 20px 40px rgba(0,0,0,.25); margin-bottom: 18px; }
       .panel-soft { background: rgba(15,23,42,.55); border: 1px solid rgba(148,163,184,.18); border-radius: 16px; padding: 12px; }
+      .ticket-context-card { border-left: 5px solid #38bdf8; }
+      .ticket-context-grid { display: grid; gap: 8px; margin-top: 10px; }
+      .ticket-context-row { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; padding: 8px 0; border-bottom: 1px solid rgba(148,163,184,.14); }
+      .ticket-context-row:last-child { border-bottom: 0; }
+      .ticket-context-label { color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .07em; text-transform: uppercase; }
+      .ticket-context-value { text-align: right; font-weight: 800; line-height: 1.35; }
+      .ticket-context-mini { color: var(--muted); font-size: 12px; font-weight: 500; margin-top: 3px; }
+      .ticket-context-card details { margin-top: 12px; }
+      .ticket-context-card summary { cursor: pointer; color: var(--text); }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
       .stat .num { font-size: 32px; font-weight: 800; }
@@ -5117,33 +5126,116 @@ data:
             `).join("")}}</div>
           `;
         }}
-        function renderTicketAssistantPanel(ticket, articles = [], similarTickets = [], incidents = [], options = {{}}) {{
-          const total = articles.length + similarTickets.length + incidents.length;
+        function ticketContextSituationPanel(ticket) {{
+          const firstResponseText = ticket.first_response_at
+            ? `reakcja: ${{ticket.first_response_at}}`
+            : (ticket.first_response_due_at || "brak terminu");
+          const resolutionText = ticket.sla_due_at || "brak terminu";
           return `
-            <section class="card ticket-assistant-card">
+            <div class="panel-soft">
+              <strong>Sytuacja</strong>
+              <div class="ticket-context-grid">
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">Status</span>
+                  <span class="ticket-context-value"><span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status || "-")}}</span></span>
+                </div>
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">Priorytet</span>
+                  <span class="ticket-context-value"><span class="pill ${{priorityClass(ticket.priority)}}">${{esc(ticket.priority || "-")}}</span></span>
+                </div>
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">SLA reakcji</span>
+                  <span class="ticket-context-value">
+                    <span class="sla-badge ${{slaClass(ticket.first_response_state)}}">${{slaLabel(ticket.first_response_state)}}</span>
+                    <div class="ticket-context-mini">${{esc(firstResponseText)}}</div>
+                  </span>
+                </div>
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">SLA rozwiązania</span>
+                  <span class="ticket-context-value">
+                    <span class="sla-badge ${{slaClass(ticket.sla_state)}}">${{slaLabel(ticket.sla_state)}}</span>
+                    <div class="ticket-context-mini">${{esc(resolutionText)}}</div>
+                  </span>
+                </div>
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">Operator</span>
+                  <span class="ticket-context-value">${{esc(ticket.assigned_to_name || "Nieprzypisane")}}</span>
+                </div>
+              </div>
+            </div>
+          `;
+        }}
+        function ticketContextCurrentIncidentList(incidents = [], limit = 3) {{
+          if (!incidents.length) return `<p class="muted">Brak powiązanego incydentu.</p>`;
+          const visible = incidents.slice(0, limit);
+          return `
+            <div class="watcher-list">${{visible.map(i => `
+              <div class="watcher-item incident-relation ${{incidentSeverityClass(i.severity)}}">
+                <div>
+                  <strong>Incydent #${{i.id}} · ${{esc(i.title)}}</strong>
+                  <div class="watcher-meta">
+                    <span class="pill">${{esc(i.severity)}}</span>
+                    · <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
+                    · ${{incidentTicketCountLabel(i.affected_ticket_count)}}
+                  </div>
+                  ${{i.latest_public_update ? `<div class="ticket-context-mini">Ostatni komunikat: ${{esc(i.latest_public_update)}}</div>` : ""}}
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderIncident(${{i.id}})">Otwórz</button>
+              </div>
+            `).join("")}}</div>
+            ${{incidents.length > limit ? `<p class="muted">I jeszcze ${{incidents.length - limit}} powiązanych incydentów.</p>` : ""}}
+          `;
+        }}
+        function ticketContextLinkedTicketList(linkedTickets = [], limit = 3) {{
+          if (!linkedTickets.length) return `<p class="muted">Brak bezpośrednio powiązanych zgłoszeń.</p>`;
+          const visible = linkedTickets.slice(0, limit);
+          return `
+            <div class="watcher-list">${{visible.map(l => `
+              <div class="watcher-item">
+                <div>
+                  <strong><a href="#" onclick="renderTicket(${{l.id}}); return false;">#${{l.id}} · ${{esc(l.title)}}</a></strong>
+                  <div class="watcher-meta">
+                    <span class="pill ${{statusClass(l.status)}}">${{esc(l.status)}}</span>
+                    ${{l.assigned_to_name ? " · " + esc(l.assigned_to_name) : ""}}
+                    ${{l.requester_name ? " · zgłaszający: " + esc(l.requester_name) : ""}}
+                  </div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderTicket(${{l.id}})">Otwórz</button>
+              </div>
+            `).join("")}}</div>
+            ${{linkedTickets.length > limit ? `<p class="muted">I jeszcze ${{linkedTickets.length - limit}} powiązanych zgłoszeń.</p>` : ""}}
+          `;
+        }}
+        function renderTicketContextPanel(ticket, articles = [], similarTickets = [], incidents = [], options = {{}}) {{
+          const currentIncidents = options.currentIncidents || [];
+          const linkedTickets = options.linkedTickets || [];
+          const total = articles.length + similarTickets.length + incidents.length + currentIncidents.length + linkedTickets.length;
+          return `
+            <section class="card ticket-assistant-card ticket-context-card">
               <div class="ticket-section-title">
                 <div>
-                  <h3>Asystent zgłoszenia</h3>
-                  <div class="attachment-upload-hint">Jedno miejsce na podobne tickety, możliwe incydenty, wiedzę i szybkie decyzje operatora.</div>
+                  <h3>Panel kontekstu zgłoszenia</h3>
+                  <div class="attachment-upload-hint">Etap 1: sytuacja, powiązania, podobne zgłoszenia i pasujące artykuły w jednym miejscu.</div>
                 </div>
                 <span class="counter">${{total}}</span>
               </div>
-              <div class="panel-soft">
-                <strong>Krótka diagnoza</strong>
-                <div class="attachment-upload-hint" style="margin-top:6px">${{esc(ticketAssistantDiagnosis(ticket, articles, similarTickets, incidents))}}</div>
-              </div>
-              <div class="ticket-summary-grid" style="margin-top:12px">
-                <div class="ticket-summary-item"><span class="label">Sugerowany priorytet</span><span class="value">${{esc(ticketAssistantPriorityHint(ticket, similarTickets, incidents))}}</span></div>
-                <div class="ticket-summary-item"><span class="label">Sugerowany workflow</span><span class="value">${{esc(ticketAssistantWorkflowHint(ticket, articles, similarTickets))}}</span></div>
-              </div>
+              ${{ticketContextSituationPanel(ticket)}}
               ${{options.canCreateIncident ? `
                 <div class="form-actions">
                   <button type="button" onclick="openIncidentFromTicketsModal()">Utwórz incydent z powiązanych zgłoszeń</button>
                 </div>
               ` : ""}}
               <details open>
+                <summary><strong>Powiązany incydent</strong> · ${{currentIncidents.length}}</summary>
+                ${{ticketContextCurrentIncidentList(currentIncidents)}}
+              </details>
+              <details open>
                 <summary><strong>Możliwe incydenty</strong> · ${{incidents.length}}</summary>
                 ${{ticketAssistantIncidentList(ticket, incidents)}}
+              </details>
+              <details open>
+                <summary><strong>Powiązane zgłoszenia</strong> · ${{linkedTickets.length}}</summary>
+                ${{ticketContextLinkedTicketList(linkedTickets)}}
               </details>
               <details open>
                 <summary><strong>Podobne zgłoszenia</strong> · ${{similarTickets.length}}</summary>
@@ -5153,8 +5245,22 @@ data:
                 <summary><strong>Artykuły bazy wiedzy</strong> · ${{articles.length}}</summary>
                 ${{ticketAssistantArticleList(articles)}}
               </details>
+              <details>
+                <summary><strong>Sugestie operatora</strong></summary>
+                <div class="panel-soft" style="margin-top:10px">
+                  <strong>Krótka diagnoza</strong>
+                  <div class="attachment-upload-hint" style="margin-top:6px">${{esc(ticketAssistantDiagnosis(ticket, articles, similarTickets, incidents))}}</div>
+                </div>
+                <div class="ticket-summary-grid" style="margin-top:12px">
+                  <div class="ticket-summary-item"><span class="label">Sugerowany priorytet</span><span class="value">${{esc(ticketAssistantPriorityHint(ticket, similarTickets, incidents))}}</span></div>
+                  <div class="ticket-summary-item"><span class="label">Sugerowany workflow</span><span class="value">${{esc(ticketAssistantWorkflowHint(ticket, articles, similarTickets))}}</span></div>
+                </div>
+              </details>
             </section>
           `;
+        }}
+        function renderTicketAssistantPanel(ticket, articles = [], similarTickets = [], incidents = [], options = {{}}) {{
+          return renderTicketContextPanel(ticket, articles, similarTickets, incidents, options);
         }}
         function userPortalTicketStatusPanel(ticket, data) {{
           const incidents = data?.incidents || [];
@@ -11097,9 +11203,11 @@ data:
           const knowledgeSuggestions = data.suggestions?.articles || [];
           const suggestedTickets = data.suggestions?.tickets || [];
           const suggestedIncidents = data.suggestions?.incidents || [];
-          const ticketAssistantPanelHtml = canWorkTickets(me) && !isClosed
-            ? renderTicketAssistantPanel(t, knowledgeSuggestions, suggestedTickets, suggestedIncidents, {{
-                canCreateIncident: !!(incidentCreationContext && !hasActiveIncident)
+          const ticketContextPanelHtml = canWorkTickets(me)
+            ? renderTicketContextPanel(t, knowledgeSuggestions, suggestedTickets, suggestedIncidents, {{
+                canCreateIncident: !!(incidentCreationContext && !hasActiveIncident),
+                currentIncidents: data.incidents || [],
+                linkedTickets: data.linked_tickets || []
               }})
             : "";
           const visibleKnowledgeSuggestions = canWorkTickets(me) ? [] : knowledgeSuggestions;
@@ -11332,7 +11440,7 @@ data:
                 ${{statusPanel}}
                 ${{assignmentPanel}}
                 ${{reopenPanel}}
-                ${{ticketAssistantPanelHtml}}
+                ${{ticketContextPanelHtml}}
                 ${{ticketKnowledgePanel}}
                 ${{linkedTicketsPanel}}
                 ${{watcherPanel}}

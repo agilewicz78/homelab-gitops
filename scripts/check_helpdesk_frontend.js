@@ -374,21 +374,32 @@ for (const fragment of requiredUserPortal) {
 }
 
 const requiredTicketAssistant = [
+  "renderTicketContextPanel",
   "renderTicketAssistantPanel",
+  "ticketContextSituationPanel",
+  "ticketContextCurrentIncidentList",
+  "ticketContextLinkedTicketList",
   "ticketAssistantDiagnosis",
   "ticketAssistantPriorityHint",
   "ticketAssistantWorkflowHint",
   "ticketAssistantArticleList",
   "ticketAssistantIncidentList",
   "ticketAssistantSimilarTicketList",
-  "ticketAssistantPanelHtml",
-  "Asystent zgłoszenia",
+  "ticketContextPanelHtml",
+  "Panel kontekstu zgłoszenia",
+  "Etap 1: sytuacja, powiązania, podobne zgłoszenia i pasujące artykuły",
+  "Sytuacja",
+  "Powiązany incydent",
+  "Możliwe incydenty",
+  "Powiązane zgłoszenia",
   "Krótka diagnoza",
   "Sugerowany priorytet",
   "Sugerowany workflow",
-  "Możliwe incydenty",
+  "Sugestie operatora",
   "Podobne zgłoszenia",
   "Artykuły bazy wiedzy",
+  "currentIncidents: data.incidents || []",
+  "linkedTickets: data.linked_tickets || []",
 ];
 for (const fragment of requiredTicketAssistant) {
   if (!text.includes(fragment)) {
