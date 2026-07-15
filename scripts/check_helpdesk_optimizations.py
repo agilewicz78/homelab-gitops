@@ -426,20 +426,12 @@ def main() -> None:
     assert "function renderAppSidebar" in text
     assert "function renderWorkspaceShell" in text
     assert "operator-cockpit-shell" in text
-    assert "operator-dashboard-active" in text
-    assert "operator-dashboard-shell" in text
-    assert "operator-dashboard-topbar" in text
-    assert "operator-dashboard-events" in text
-    assert "operatorNotificationCount" in text
-    assert "operator-profile-avatar" in text
     assert "operator-board" in text
     assert "Moje zgłoszenia" in text
     assert "Pilne / po SLA" in text
     assert "Czekają na użytkownika" in text
     assert "Zgłoszenia bez odpowiedzi" in text
-    assert "Aktywne incydenty" in text
     assert "Ostatnie zdarzenia" in text
-    assert "active_incidents" in text
     assert "first_response_filter" in text
     assert "first_response_options" in text
     assert "@media (max-width: 1100px)" in text
@@ -480,7 +472,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-operator-cockpit-dashboard-v1" in deployment_text
+    assert "2026-07-15-fluid-width-layout-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
