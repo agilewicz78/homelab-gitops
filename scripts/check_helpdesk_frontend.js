@@ -313,6 +313,29 @@ for (const fragment of requiredUserPortal) {
   }
 }
 
+const requiredTicketAssistant = [
+  "renderTicketAssistantPanel",
+  "ticketAssistantDiagnosis",
+  "ticketAssistantPriorityHint",
+  "ticketAssistantWorkflowHint",
+  "ticketAssistantArticleList",
+  "ticketAssistantIncidentList",
+  "ticketAssistantSimilarTicketList",
+  "ticketAssistantPanelHtml",
+  "Asystent zgłoszenia",
+  "Krótka diagnoza",
+  "Sugerowany priorytet",
+  "Sugerowany workflow",
+  "Możliwe incydenty",
+  "Podobne zgłoszenia",
+  "Artykuły bazy wiedzy",
+];
+for (const fragment of requiredTicketAssistant) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing ticket assistant fragment: ${fragment}`);
+  }
+}
+
 const requiredWorkflowChangeHistory = [
   "renderWorkflowChangeHistory",
   "workflowChangeHistoryLabel",
