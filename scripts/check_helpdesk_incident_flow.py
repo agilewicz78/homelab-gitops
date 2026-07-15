@@ -56,6 +56,14 @@ class Cursor:
             return (7,)
         if "INSERT INTO incident_tasks" in self.last_query:
             return (55, "2026-06-11 18:30:00")
+        if "SELECT status FROM incidents" in self.last_query:
+            return ("monitoring",)
+        if "COUNT(*) AS task_count" in self.last_query:
+            return (2, 1)
+        if "COUNT(*) AS linked_ticket_count" in self.last_query:
+            return (2, 1)
+        if "SELECT COUNT(*) FROM incident_updates" in self.last_query:
+            return (0,)
         if "SELECT title FROM incidents" in self.last_query:
             return ("Mail outage",)
         if "FROM incident_tasks task JOIN incidents i" in self.last_query:
@@ -143,10 +151,13 @@ def main():
         "publish_event": lambda *args, **kwargs: events.append((args, kwargs)),
         "incident_commander": lambda cur, email: (None, None),
         "INCIDENT_SEVERITIES": ["SEV1", "SEV2", "SEV3", "SEV4"],
+        "INCIDENT_STATUSES": ["investigating", "identified", "monitoring", "resolved"],
     }
     exec(
         load_functions(
+            "incident_resolution_check",
             "api_create_incident",
+            "api_update_incident",
             "api_add_incident_update",
             "api_add_incident_task",
             "api_toggle_incident_task",
@@ -240,6 +251,30 @@ def main():
     assert len(delete_cursor.incident_task_deletes) == 1
     assert delete_cursor.incident_update_inserts[-1][1] == "Usunięto zadanie: Check mail queue"
     assert delete_cursor.incident_timestamp_updates == 1
+
+    Request.payload = {
+        "title": "Mail outage",
+        "summary": "Multiple users cannot send mail.",
+        "impact": "Customer communication is blocked.",
+        "severity": "SEV1",
+        "status": "resolved",
+        "commander_email": "",
+    }
+    body, status = namespace["api_update_incident"](user, 7)
+    assert status == 409
+    assert body["requires_resolution_override"] is True
+    assert body["resolution_check"]["ready"] is False
+    assert body["resolution_check"]["open_task_count"] == 1
+    assert body["resolution_check"]["active_ticket_count"] == 1
+
+    Request.payload["resolution_override"] = True
+    body = namespace["api_update_incident"](user, 7)
+    override_cursor = connections[-1].cursor_value
+    assert body["status"] == "ok"
+    assert body["resolution_check"]["ready"] is False
+    assert override_cursor.incident_timestamp_updates == 0
+    assert override_cursor.incident_update_inserts[-1][1].startswith("Kontrola zamknięcia:")
+    assert override_cursor.incident_update_inserts[-1][2] == user["email"]
 
     Request.payload = {"ticket_id": 103}
     body, status = namespace["api_link_incident_ticket"](user, 7)

@@ -233,6 +233,7 @@ def main() -> None:
     assert "Centrum dowodzenia" in text
     assert "Checklist działań" in text
     assert "incidentCommandCenter" in text
+    assert "incidentResolutionCheckPanel" in text
     assert "incidentTaskList" in text
     assert "incidentTimelineList" in text
     assert "submitIncidentTask" in text
@@ -241,6 +242,13 @@ def main() -> None:
     assert '"tasks": tasks' in text
     assert '"task_summary": task_summary' in text
     assert '"timeline": timeline' in text
+    assert '"resolution_check": resolution_check' in text
+    assert "def incident_resolution_check(cur, incident_id):" in text
+    assert "requires_resolution_override" in text
+    assert "resolution_override = bool(payload.get(\"resolution_override\"))" in text
+    assert "Kontrola zamknięcia" in text
+    assert "resolution_check: \"Kontrola zamknięcia\"" in text
+    assert "Zamknąć incydent mimo tych ostrzeżeń?" in text
     assert "COUNT(DISTINCT task.id) AS task_count" in text
     assert "LEFT JOIN incident_tasks task ON task.incident_id = i.id" in text
     assert 'name="is_public" checked' in text
@@ -395,7 +403,7 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-incident-center-v2" in deployment_text
+    assert "2026-07-15-incident-resolution-check-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
