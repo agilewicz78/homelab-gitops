@@ -65,8 +65,8 @@ class Cursor:
             return (7,)
         if "INSERT INTO incident_tasks" in self.last_query:
             return (55, "2026-06-11 18:30:00")
-        if "SELECT status FROM incidents" in self.last_query:
-            return ("monitoring",)
+        if "SELECT status, COALESCE(user_status_summary" in self.last_query:
+            return ("monitoring", "", "", "")
         if "COUNT(*) AS task_count" in self.last_query:
             return (2, 1)
         if "COUNT(*) AS linked_ticket_count" in self.last_query:
