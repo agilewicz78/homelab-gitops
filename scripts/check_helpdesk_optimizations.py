@@ -209,6 +209,12 @@ def main() -> None:
     assert '"articles": []' in ticket_detail_api
     assert "knowledge_article_row[2] != \"published\"" in ticket_detail_api
     assert "FROM knowledge_articles" in ticket_detail_api
+    assert "COALESCE(t.resolution_feedback_decision, '') AS resolution_feedback_decision" in ticket_detail_api
+    assert "COALESCE(t.resolution_feedback_comment, '') AS resolution_feedback_comment" in ticket_detail_api
+    assert "COALESCE(t.resolution_feedback_by_email, '') AS resolution_feedback_by_email" in ticket_detail_api
+    assert "COALESCE(t.resolution_feedback_by_name, '') AS resolution_feedback_by_name" in ticket_detail_api
+    assert "t.resolution_feedback_at" in ticket_detail_api
+    assert '"resolution_feedback_decision": row[24] or ""' in ticket_detail_api
     assert "automation_execution_rows = []" in ticket_detail_api
     assert "if is_staff(user):" in ticket_detail_api
     assert "FROM workflow_rule_executions wre" in ticket_detail_api
@@ -364,7 +370,7 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-14-resolution-feedback-v1" in deployment_text
+    assert "2026-07-15-resolution-feedback-detail-fix-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
