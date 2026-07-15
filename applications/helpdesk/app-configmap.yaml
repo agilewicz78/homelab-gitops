@@ -3721,453 +3721,6 @@ data:
         .pagination-pages { justify-content: flex-start; }
         .toast { left: 10px; right: 10px; bottom: 10px; min-width: 0; max-width: none; }
       }
-      .page:has(.operator-dashboard-active) {
-        padding: 0;
-        min-height: 100vh;
-        background:
-          radial-gradient(circle at 16% 0%, rgba(56,189,248,.16), transparent 30%),
-          radial-gradient(circle at 82% 12%, rgba(59,130,246,.12), transparent 28%),
-          #07111d;
-      }
-      .page:has(.operator-dashboard-active) > header {
-        position: fixed;
-        top: 0;
-        right: 0;
-        width: 0;
-        height: 0;
-        margin: 0;
-        overflow: visible;
-        z-index: 80;
-      }
-      .page:has(.operator-dashboard-active) > header > div:first-child,
-      .page:has(.operator-dashboard-active) .header-actions > .badge,
-      .page:has(.operator-dashboard-active) .header-actions > .live-panel,
-      .page:has(.operator-dashboard-active) .notification-btn { display: none; }
-      .page:has(.operator-dashboard-active) .header-actions,
-      .page:has(.operator-dashboard-active) .notification-wrapper {
-        display: block;
-        position: static;
-      }
-      .page:has(.operator-dashboard-active) .notification-panel {
-        position: fixed;
-        top: 78px;
-        right: 24px;
-        left: auto;
-        width: min(420px, calc(100vw - 32px));
-      }
-      .page:has(.operator-dashboard-active) #app { min-height: 100vh; }
-      .operator-cockpit-shell.operator-dashboard-active {
-        grid-template-columns: 236px minmax(0, 1fr);
-        gap: 0;
-        align-items: stretch;
-        min-height: 100vh;
-        background: linear-gradient(135deg, rgba(8,20,32,.98), rgba(9,17,29,.98));
-      }
-      .operator-dashboard-active .operator-sidebar {
-        position: sticky;
-        top: 0;
-        height: 100vh;
-        align-content: start;
-        gap: 8px;
-        padding: 18px 10px;
-        border: 0;
-        border-right: 1px solid rgba(148,163,184,.16);
-        border-radius: 0;
-        background: linear-gradient(180deg, rgba(18,35,52,.98), rgba(10,20,32,.98));
-        box-shadow: inset -1px 0 0 rgba(255,255,255,.03);
-      }
-      .operator-dashboard-active .operator-sidebar-title { display: none; }
-      .operator-menu-toggle {
-        display: none;
-        width: 44px;
-        height: 44px;
-        margin: 0 0 28px 6px;
-        padding: 0;
-        border: 0;
-        border-radius: 12px;
-        background: transparent;
-        color: #e5edf7;
-        font-size: 28px;
-        line-height: 1;
-      }
-      .operator-dashboard-active .operator-menu-toggle { display: inline-grid; place-items: center; }
-      .operator-dashboard-active .operator-sidebar button:not(.operator-menu-toggle) {
-        display: flex;
-        align-items: center;
-        gap: 13px;
-        min-height: 54px;
-        padding: 0 16px;
-        border-radius: 0 8px 8px 0;
-        border: 0;
-        color: #cbd5e1;
-        font-size: 16px;
-        font-weight: 700;
-        background: transparent;
-      }
-      .operator-dashboard-active .operator-sidebar button:not(.operator-menu-toggle):hover {
-        color: #f8fafc;
-        background: rgba(59,130,246,.12);
-      }
-      .operator-dashboard-active .operator-sidebar button.active {
-        color: #60a5fa;
-        background: rgba(59,130,246,.16);
-        box-shadow: inset 5px 0 0 #3b82f6;
-      }
-      .operator-dashboard-active .sidebar-icon {
-        width: 26px;
-        display: inline-grid;
-        place-items: center;
-        color: currentColor;
-        font-size: 18px;
-        font-weight: 900;
-      }
-      .operator-dashboard-active .sidebar-primary { display: none; }
-      .operator-sidebar-bottom { display: none; }
-      .operator-dashboard-active .operator-sidebar-bottom {
-        display: block;
-        margin-top: auto;
-        padding: 18px 8px 4px;
-        color: #94a3b8;
-        font-size: 14px;
-      }
-      .operator-dashboard-active .operator-cockpit-main {
-        display: block;
-        gap: 0;
-        min-width: 0;
-        min-height: 100vh;
-      }
-      .operator-dashboard-shell {
-        display: grid;
-        grid-template-columns: minmax(0, 1fr) minmax(320px, 380px);
-        grid-template-rows: 76px minmax(0, 1fr);
-        min-height: 100vh;
-      }
-      .operator-dashboard-topbar {
-        grid-column: 1 / -1;
-        display: grid;
-        grid-template-columns: minmax(320px, 650px) minmax(0, 1fr) auto;
-        align-items: center;
-        gap: 18px;
-        padding: 14px 28px;
-        border-bottom: 1px solid rgba(148,163,184,.14);
-        background: rgba(8,17,29,.66);
-        backdrop-filter: blur(16px);
-      }
-      .operator-search-shell {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        gap: 10px;
-        align-items: center;
-        min-height: 46px;
-        padding: 0 10px 0 14px;
-        border: 1px solid rgba(148,163,184,.18);
-        border-radius: 10px;
-        background: rgba(20,33,48,.76);
-        box-shadow: inset 0 1px 0 rgba(255,255,255,.04);
-      }
-      .operator-search-shell input {
-        min-height: 42px;
-        padding: 0;
-        border: 0;
-        border-radius: 0;
-        background: transparent;
-        color: #e5edf7;
-        outline: 0;
-      }
-      .operator-search-icon { color: #94a3b8; font-size: 18px; }
-      .operator-search-shortcut {
-        border: 1px solid rgba(148,163,184,.18);
-        border-radius: 8px;
-        padding: 3px 8px;
-        color: #94a3b8;
-        font-size: 12px;
-        white-space: nowrap;
-      }
-      .operator-topbar-actions { display: flex; justify-content: flex-end; align-items: center; gap: 18px; }
-      .operator-presence {
-        display: inline-flex;
-        align-items: center;
-        gap: 8px;
-        color: #f8fafc;
-        font-weight: 750;
-        white-space: nowrap;
-      }
-      .operator-presence-dot {
-        width: 11px;
-        height: 11px;
-        border-radius: 999px;
-        background: #22c55e;
-        box-shadow: 0 0 16px rgba(34,197,94,.55);
-      }
-      .operator-presence.offline .operator-presence-dot { background: #ef4444; box-shadow: 0 0 16px rgba(239,68,68,.45); }
-      .operator-bell,
-      .operator-profile-button {
-        margin-top: 0;
-        background: transparent;
-        border: 0;
-        color: #f8fafc;
-      }
-      .operator-bell {
-        position: relative;
-        width: 42px;
-        height: 42px;
-        padding: 0;
-        border-radius: 12px;
-        font-size: 22px;
-      }
-      .operator-bell-count {
-        position: absolute;
-        top: 2px;
-        right: 1px;
-        min-width: 18px;
-        height: 18px;
-        padding: 0 5px;
-        display: inline-grid;
-        place-items: center;
-        border-radius: 999px;
-        background: #ef4444;
-        color: #fff;
-        font-size: 11px;
-        font-weight: 900;
-      }
-      .operator-profile-button {
-        display: grid;
-        grid-template-columns: auto auto auto;
-        align-items: center;
-        gap: 10px;
-        padding: 0;
-        text-align: left;
-      }
-      .operator-profile-avatar {
-        width: 42px;
-        height: 42px;
-        border-radius: 999px;
-        display: grid;
-        place-items: center;
-        background: linear-gradient(135deg, #2563eb, #60a5fa);
-        color: #fff;
-        font-weight: 900;
-        box-shadow: 0 10px 24px rgba(37,99,235,.35);
-      }
-      .operator-profile-name { display: block; color: #f8fafc; font-weight: 850; line-height: 1.1; }
-      .operator-profile-role { display: block; color: #94a3b8; font-size: 13px; margin-top: 3px; }
-      .operator-dashboard-main {
-        min-width: 0;
-        padding: 28px 24px 34px 28px;
-      }
-      .operator-dashboard-title { margin-bottom: 20px; }
-      .operator-dashboard-title h2 {
-        margin: 0 0 8px;
-        font-size: clamp(26px, 2.4vw, 36px);
-        letter-spacing: -.03em;
-      }
-      .operator-dashboard-title p { margin: 0; color: #b7c3d4; font-size: 16px; }
-      .operator-dashboard-grid {
-        display: grid;
-        grid-template-columns: repeat(3, minmax(260px, 1fr));
-        gap: 16px;
-        align-items: stretch;
-      }
-      .operator-work-card {
-        display: grid;
-        grid-template-rows: auto minmax(0, 1fr) auto;
-        min-height: 330px;
-        border: 1px solid rgba(148,163,184,.18);
-        border-radius: 9px;
-        padding: 18px 18px 14px;
-        background:
-          radial-gradient(circle at top left, rgba(56,189,248,.08), transparent 42%),
-          linear-gradient(180deg, rgba(24,39,56,.92), rgba(16,30,45,.92));
-        box-shadow: 0 16px 40px rgba(0,0,0,.20), inset 0 1px 0 rgba(255,255,255,.04);
-        overflow: hidden;
-      }
-      .operator-work-card.blue { --card-accent: #3b82f6; --card-accent-rgb: 59,130,246; }
-      .operator-work-card.green { --card-accent: #63b955; --card-accent-rgb: 99,185,85; }
-      .operator-work-card.red,
-      .operator-work-card.priority { --card-accent: #ef4444; --card-accent-rgb: 239,68,68; }
-      .operator-work-card.yellow,
-      .operator-work-card.waiting { --card-accent: #fbbf24; --card-accent-rgb: 251,191,36; }
-      .operator-work-card.purple { --card-accent: #a78bfa; --card-accent-rgb: 167,139,250; }
-      .operator-work-card.cyan { --card-accent: #45c7c7; --card-accent-rgb: 69,199,199; }
-      .operator-work-card-head {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
-        gap: 16px;
-        align-items: center;
-        padding-bottom: 18px;
-        border-bottom: 1px solid rgba(148,163,184,.15);
-      }
-      .operator-card-icon {
-        width: 58px;
-        height: 58px;
-        display: grid;
-        place-items: center;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(var(--card-accent-rgb), .92), rgba(var(--card-accent-rgb), .58));
-        color: #fff;
-        font-size: 28px;
-        font-weight: 900;
-        box-shadow: 0 12px 28px rgba(var(--card-accent-rgb), .28);
-      }
-      .operator-card-title h3 { margin: 0; color: #f8fafc; font-size: 18px; }
-      .operator-card-title p { margin: 5px 0 0; color: #b7c3d4; font-size: 14px; line-height: 1.35; }
-      .operator-card-count { color: var(--card-accent); font-size: 32px; font-weight: 950; line-height: 1; }
-      .operator-card-list {
-        display: grid;
-        gap: 0;
-        padding: 14px 0 10px;
-        min-height: 0;
-      }
-      .operator-ticket-row,
-      .operator-incident-row {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) minmax(90px, .45fr) auto auto;
-        align-items: center;
-        gap: 12px;
-        width: 100%;
-        min-height: 34px;
-        margin: 0;
-        padding: 6px 0;
-        border: 0;
-        border-radius: 8px;
-        background: transparent;
-        color: #e5edf7;
-        text-align: left;
-      }
-      .operator-ticket-row:hover,
-      .operator-incident-row:hover { background: rgba(148,163,184,.08); }
-      .operator-row-dot {
-        width: 9px;
-        height: 9px;
-        border-radius: 999px;
-        background: var(--card-accent);
-        box-shadow: 0 0 10px rgba(var(--card-accent-rgb), .45);
-      }
-      .operator-row-main,
-      .operator-row-owner,
-      .operator-row-code,
-      .operator-row-time { min-width: 0; color: #cbd5e1; font-size: 14px; }
-      .operator-row-main { color: #f8fafc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .operator-row-owner { color: #b7c3d4; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-      .operator-row-code { color: #94a3b8; white-space: nowrap; }
-      .operator-row-time { color: #cbd5e1; text-align: right; white-space: nowrap; }
-      .operator-empty-row { color: #94a3b8; padding: 12px 0; line-height: 1.5; }
-      .operator-card-footer {
-        display: flex;
-        justify-content: flex-end;
-        padding-top: 12px;
-        border-top: 1px solid rgba(148,163,184,.12);
-      }
-      .operator-card-link {
-        margin-top: 0;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        color: var(--card-accent);
-        font-weight: 900;
-      }
-      .operator-dashboard-events {
-        grid-column: 2;
-        grid-row: 2;
-        margin: 24px 10px 24px 0;
-        padding: 18px;
-        border: 1px solid rgba(148,163,184,.16);
-        border-radius: 9px;
-        background: linear-gradient(180deg, rgba(22,37,54,.94), rgba(14,27,42,.94));
-        box-shadow: 0 16px 40px rgba(0,0,0,.22), inset 0 1px 0 rgba(255,255,255,.04);
-        overflow: hidden;
-      }
-      .operator-events-head {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        align-items: center;
-        margin-bottom: 16px;
-      }
-      .operator-events-head h3 { margin: 0; font-size: 17px; }
-      .operator-events-head button {
-        margin-top: 0;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: rgba(30,41,59,.55);
-        border: 1px solid rgba(148,163,184,.18);
-      }
-      .operator-event-list { display: grid; gap: 14px; max-height: calc(100vh - 150px); overflow: auto; padding-right: 4px; }
-      .operator-event-row {
-        display: grid;
-        grid-template-columns: 28px minmax(0, 1fr) auto;
-        gap: 13px;
-        align-items: start;
-        width: 100%;
-        margin: 0;
-        padding: 0;
-        border: 0;
-        background: transparent;
-        color: #e5edf7;
-        text-align: left;
-      }
-      .operator-event-icon {
-        width: 28px;
-        height: 28px;
-        display: grid;
-        place-items: center;
-        border-radius: 8px;
-        color: var(--event-accent);
-        background: rgba(var(--event-accent-rgb), .13);
-        box-shadow: inset 0 0 0 1px rgba(var(--event-accent-rgb), .35);
-        font-weight: 900;
-      }
-      .operator-event-row.green { --event-accent: #22c55e; --event-accent-rgb: 34,197,94; }
-      .operator-event-row.blue { --event-accent: #3b82f6; --event-accent-rgb: 59,130,246; }
-      .operator-event-row.red { --event-accent: #ef4444; --event-accent-rgb: 239,68,68; }
-      .operator-event-row.yellow { --event-accent: #fbbf24; --event-accent-rgb: 251,191,36; }
-      .operator-event-row.purple { --event-accent: #a78bfa; --event-accent-rgb: 167,139,250; }
-      .operator-event-row.cyan { --event-accent: #45c7c7; --event-accent-rgb: 69,199,199; }
-      .operator-event-title { display: block; color: #f8fafc; font-weight: 850; line-height: 1.35; }
-      .operator-event-message { color: #b7c3d4; font-size: 13px; line-height: 1.45; margin-top: 2px; }
-      .operator-event-time { color: #cbd5e1; font-size: 13px; white-space: nowrap; }
-      .operator-dashboard-active .notification-card { border-radius: 10px; }
-      @media (max-width: 1380px) {
-        .operator-dashboard-grid { grid-template-columns: repeat(2, minmax(260px, 1fr)); }
-        .operator-dashboard-shell { grid-template-columns: minmax(0, 1fr) minmax(300px, 350px); }
-      }
-      @media (max-width: 1160px) {
-        .operator-dashboard-shell { grid-template-columns: 1fr; grid-template-rows: auto auto auto; }
-        .operator-dashboard-events { grid-column: 1; grid-row: auto; margin: 0 24px 24px 28px; }
-        .operator-event-list { max-height: none; }
-      }
-      @media (max-width: 980px) {
-        .operator-cockpit-shell.operator-dashboard-active { grid-template-columns: 1fr; }
-        .operator-dashboard-active .operator-sidebar {
-          position: static;
-          height: auto;
-          grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
-          padding: 10px;
-          border-right: 0;
-          border-bottom: 1px solid rgba(148,163,184,.16);
-        }
-        .operator-dashboard-active .operator-menu-toggle,
-        .operator-dashboard-active .operator-sidebar-bottom { display: none; }
-        .operator-dashboard-topbar { grid-template-columns: 1fr; padding: 14px 18px; }
-        .operator-topbar-actions { justify-content: space-between; }
-      }
-      @media (max-width: 760px) {
-        .operator-dashboard-main { padding: 22px 14px; }
-        .operator-dashboard-grid { grid-template-columns: 1fr; }
-        .operator-dashboard-events { margin: 0 14px 18px; }
-        .operator-work-card { min-height: 0; }
-        .operator-ticket-row,
-        .operator-incident-row { grid-template-columns: auto minmax(0, 1fr) auto auto; }
-        .operator-row-owner { display: none; }
-      }
-      @media (max-width: 560px) {
-        .operator-search-shortcut,
-        .operator-profile-role,
-        .operator-profile-caret { display: none; }
-        .operator-profile-button { grid-template-columns: auto auto; }
-        .operator-dashboard-active .operator-sidebar { grid-template-columns: 1fr; }
-        .operator-card-count { font-size: 28px; }
-      }
     """
     SPA_HTML = f"""
     <!doctype html>
@@ -4626,11 +4179,6 @@ data:
           notificationCount.textContent = unread;
           notificationCount.classList.toggle("hidden", unread <= 0);
           notificationButton.classList.toggle("has-unread", unread > 0);
-          const operatorCount = document.getElementById("operatorNotificationCount");
-          if (operatorCount) {{
-            operatorCount.textContent = unread;
-            operatorCount.classList.toggle("hidden", unread <= 0);
-          }}
           const items = data.notifications || [];
           if (!items.length) {{
             const label = notificationFilter === "unread" ? "Brak nieprzeczytanych powiadomień." : "Brak powiadomień.";
@@ -4773,33 +4321,29 @@ data:
             </section>
           `;
         }}
-        function sidebarItem(key, label, action, active = "", visible = true, icon = "") {{
+        function sidebarItem(key, label, action, active = "", visible = true) {{
           if (!visible) return "";
           const activeClass = active === key ? " active" : "";
-          const iconHtml = icon ? `<span class="sidebar-icon" aria-hidden="true">${{esc(icon)}}</span>` : "";
-          return `<button class="${{activeClass}}" onclick="${{action}}">${{iconHtml}}<span>${{esc(label)}}</span></button>`;
+          return `<button class="${{activeClass}}" onclick="${{action}}">${{esc(label)}}</button>`;
         }}
         function renderAppSidebar(me, active = "") {{
           const canOpenAdmin = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me);
           return `
             <aside class="operator-sidebar">
-              <button class="operator-menu-toggle" onclick="renderStart();return false;" aria-label="Menu">☰</button>
               <div class="operator-sidebar-title">Helpdesk</div>
-              ${{sidebarItem("operator-center", "Centrum", "renderOperatorCenter();return false;", active, canViewOperatorCenter(me), "⌂")}}
-              ${{sidebarItem("tickets", "Zgłoszenia", "renderHome();return false;", active, true, "▣")}}
-              ${{sidebarItem("incidents", "Incydenty", "renderIncidents();return false;", active, canWorkTickets(me), "!")}}
-              ${{sidebarItem("knowledge", "Baza wiedzy", "renderKnowledgeArticles();return false;", active, true, "▤")}}
-              ${{sidebarItem("reports", "Raporty", "renderDashboard();return false;", active, canViewDashboard(me) || canViewReports(me) || canViewSlaCalendar(me), "▥")}}
-              ${{sidebarItem("administration", "Administracja", "renderAdministration();return false;", active, canOpenAdmin, "⚙")}}
+              ${{sidebarItem("operator-center", "Centrum", "renderOperatorCenter();return false;", active, canViewOperatorCenter(me))}}
+              ${{sidebarItem("tickets", "Zgłoszenia", "renderHome();return false;", active, true)}}
+              ${{sidebarItem("incidents", "Incydenty", "renderIncidents();return false;", active, canWorkTickets(me))}}
+              ${{sidebarItem("knowledge", "Baza wiedzy", "renderKnowledgeArticles();return false;", active, true)}}
+              ${{sidebarItem("reports", "Raporty", "renderDashboard();return false;", active, canViewDashboard(me) || canViewReports(me) || canViewSlaCalendar(me))}}
+              ${{sidebarItem("administration", "Administracja", "renderAdministration();return false;", active, canOpenAdmin)}}
               <button class="sidebar-primary" onclick="renderNewTicket();return false;">+ Nowe zgłoszenie</button>
-              <div class="operator-sidebar-bottom">‹ Zwiń menu</div>
             </aside>
           `;
         }}
         function renderWorkspaceShell(me, active, content) {{
-          const dashboardClass = active === "operator-center" ? " operator-dashboard-active" : "";
           return `
-            <div class="operator-cockpit-shell${{dashboardClass}}">
+            <div class="operator-cockpit-shell">
               ${{renderAppSidebar(me, active)}}
               <main class="operator-cockpit-main">${{content}}</main>
             </div>
@@ -4852,10 +4396,6 @@ data:
         function setWsStatus(text, connected) {{
           wsStatus.textContent = text;
           wsStatus.className = connected ? "live-value ws-connected" : "live-value ws-disconnected";
-          const topbarStatus = document.getElementById("operatorTopbarStatus");
-          const topbarPresence = document.getElementById("operatorTopbarPresence");
-          if (topbarStatus) topbarStatus.textContent = connected ? "Online" : "Offline";
-          if (topbarPresence) topbarPresence.classList.toggle("offline", !connected);
         }}
         function connectLive() {{
           const sid = getSid();
@@ -5831,192 +5371,6 @@ data:
             </section>
           `;
         }}
-        function operatorInitials(name) {{
-          const parts = String(name || "HD").trim().split(" ").filter(Boolean);
-          const initials = parts.slice(0, 2).map(part => (part[0] || "").toUpperCase()).join("");
-          return initials || "HD";
-        }}
-        function operatorRoleName(user) {{
-          const roles = Array.isArray(user?.roles) ? user.roles : [];
-          if (roles.includes("admin")) return "Administrator";
-          if (roles.includes("operator")) return "Operator";
-          return "Użytkownik";
-        }}
-        function operatorCenterShortTime(value) {{
-          const timePart = String(value || "").split(" ").find(part => part.includes(":")) || "";
-          return timePart ? timePart.slice(0, 5) : "";
-        }}
-        function operatorCenterFocusEvents() {{
-          const panel = document.querySelector(".operator-dashboard-events");
-          if (panel) {{
-            panel.scrollIntoView({{ behavior: "smooth", block: "nearest", inline: "nearest" }});
-          }} else {{
-            toggleNotifications();
-          }}
-        }}
-        function operatorCenterTopbar(user, unreadCount) {{
-          const connected = wsStatus?.textContent === "connected";
-          return `
-            <section class="operator-dashboard-topbar">
-              <div class="operator-search-shell">
-                <span class="operator-search-icon" aria-hidden="true">⌕</span>
-                <input aria-label="Wyszukaj" placeholder="Wyszukaj zgłoszenie, użytkownika, lub frazę..." onkeydown="if(event.key === 'Enter') {{ saveTicketSearch(this.value.trim()); renderHome([]); }}">
-                <span class="operator-search-shortcut">Ctrl + K</span>
-              </div>
-              <div></div>
-              <div class="operator-topbar-actions">
-                <span id="operatorTopbarPresence" class="operator-presence ${{connected ? "" : "offline"}}">
-                  <span class="operator-presence-dot"></span>
-                  <span id="operatorTopbarStatus">${{connected ? "Online" : "Offline"}}</span>
-                  <span aria-hidden="true">⌄</span>
-                </span>
-                <button class="operator-bell" onclick="toggleNotifications(); return false;" title="Ostatnie zdarzenia">
-                  🔔
-                  <span id="operatorNotificationCount" class="operator-bell-count ${{Number(unreadCount || 0) > 0 ? "" : "hidden"}}">${{Number(unreadCount || 0)}}</span>
-                </button>
-                <button class="operator-profile-button" onclick="renderProfile(); return false;" title="Profil operatora">
-                  <span class="operator-profile-avatar">${{esc(operatorInitials(user?.name || user?.email))}}</span>
-                  <span>
-                    <span class="operator-profile-name">${{esc(user?.name || "Operator")}}</span>
-                    <span class="operator-profile-role">${{esc(operatorRoleName(user))}}</span>
-                  </span>
-                  <span class="operator-profile-caret" aria-hidden="true">⌄</span>
-                </button>
-              </div>
-            </section>
-          `;
-        }}
-        function operatorCenterTicketCard(ticket) {{
-          const owner = ticket.requester_name || ticket.assigned_to_name || "Nieprzypisane";
-          const code = "#" + Number(ticket.id || 0);
-          const time = operatorCenterShortTime(ticket.updated_at || ticket.created_at);
-          return `
-            <button class="operator-ticket-row" onclick="renderTicket(${{Number(ticket.id)}}); return false;">
-              <span class="operator-row-dot"></span>
-              <span class="operator-row-main">${{esc(ticket.title || "Bez tytułu")}}</span>
-              <span class="operator-row-owner">${{esc(owner)}}</span>
-              <span class="operator-row-code">${{esc(code)}}</span>
-              <span class="operator-row-time">${{esc(time)}}</span>
-            </button>
-          `;
-        }}
-        function operatorCenterTicketSection(title, items, emptyText, actionHtml = "", tone = "blue", totalValue = null, icon = "□") {{
-          const list = items || [];
-          const rows = list.map(operatorCenterTicketCard).join("");
-          const total = totalValue === null || totalValue === undefined ? list.length : Number(totalValue || 0);
-          const toneClass = tone || "blue";
-          return `
-            <section class="operator-work-card ${{toneClass}}">
-              <div class="operator-work-card-head">
-                <span class="operator-card-icon" aria-hidden="true">${{esc(icon)}}</span>
-                <span class="operator-card-title">
-                  <h3>${{esc(title)}}</h3>
-                  <p>${{esc(emptyText)}}</p>
-                </span>
-                <span class="operator-card-count">${{Number(total || 0)}}</span>
-              </div>
-              <div class="operator-card-list">
-                ${{rows || `<div class="operator-empty-row">${{esc(emptyText)}}</div>`}}
-              </div>
-              ${{actionHtml ? `<div class="operator-card-footer">${{actionHtml}}</div>` : ""}}
-            </section>
-          `;
-        }}
-        function operatorCenterIncidentRow(item) {{
-          const severity = item.severity || "SEV";
-          const code = "#INC-" + Number(item.id || 0);
-          const time = operatorCenterShortTime(item.updated_at || "");
-          return `
-            <button class="operator-incident-row" onclick="renderIncident(${{Number(item.id)}}); return false;">
-              <span class="operator-row-dot"></span>
-              <span class="operator-row-main">${{esc(item.title || "Incydent")}}</span>
-              <span class="operator-row-owner">${{esc(code)}}</span>
-              <span class="operator-row-code">${{esc(severity)}}</span>
-              <span class="operator-row-time">${{esc(time)}}</span>
-            </button>
-          `;
-        }}
-        function operatorCenterIncidentList(items, totalValue = null) {{
-          const list = items || [];
-          const rows = list.map(operatorCenterIncidentRow).join("");
-          const total = totalValue === null || totalValue === undefined ? list.length : Number(totalValue || 0);
-          return `
-            <section class="operator-work-card cyan">
-              <div class="operator-work-card-head">
-                <span class="operator-card-icon" aria-hidden="true">♨</span>
-                <span class="operator-card-title">
-                  <h3>Aktywne incydenty</h3>
-                  <p>Incydenty w trakcie obsługi</p>
-                </span>
-                <span class="operator-card-count">${{Number(total || 0)}}</span>
-              </div>
-              <div class="operator-card-list">
-                ${{rows || `<div class="operator-empty-row">Brak aktywnych incydentów.</div>`}}
-              </div>
-              <div class="operator-card-footer">
-                <button class="operator-card-link" onclick="renderIncidents(); return false;">Zobacz wszystkie (${{Number(total || 0)}}) →</button>
-              </div>
-            </section>
-          `;
-        }}
-        function operatorCenterNotificationTone(type) {{
-          const map = {{
-            ticket_created: "green",
-            status_changed: "red",
-            comment_added: "blue",
-            incident_update: "red",
-            incident_linked: "cyan",
-            resolution_feedback_accepted: "green",
-            resolution_feedback_rejected: "yellow",
-            workflow_rule_notification: "purple",
-            sla_first_response_overdue: "yellow",
-            sla_resolution_overdue: "yellow"
-          }};
-          return map[type] || "blue";
-        }}
-        function operatorCenterNotificationIcon(type) {{
-          const map = {{
-            ticket_created: "+",
-            status_changed: "✓",
-            comment_added: "▤",
-            incident_update: "!",
-            incident_linked: "∞",
-            resolution_feedback_accepted: "✓",
-            resolution_feedback_rejected: "!",
-            workflow_rule_notification: "↯",
-            sla_first_response_overdue: "⌁",
-            sla_resolution_overdue: "⌁"
-          }};
-          return map[type] || "i";
-        }}
-        function operatorCenterNotificationList(items, unreadCount) {{
-          const rows = (items || []).map(item => {{
-            const tone = operatorCenterNotificationTone(item.type || "");
-            const icon = operatorCenterNotificationIcon(item.type || "");
-            const time = operatorCenterShortTime(item.created_at || "");
-            return `
-              <button class="operator-event-row ${{tone}}" onclick="openNotification(${{Number(item.id)}}, ${{item.ticket_id || "null"}}); return false;">
-                <span class="operator-event-icon" aria-hidden="true">${{esc(icon)}}</span>
-                <span>
-                  <span class="operator-event-title">${{esc(notificationTypeLabel(item.type || ""))}}${{item.ticket_id ? " #" + Number(item.ticket_id) : ""}}</span>
-                  <span class="operator-event-message">${{esc(item.message || item.ticket_title || "")}}</span>
-                </span>
-                <span class="operator-event-time">${{esc(time)}}</span>
-              </button>
-            `;
-          }}).join("");
-          return `
-            <aside class="operator-dashboard-events">
-              <div class="operator-events-head">
-                <h3>Ostatnie zdarzenia</h3>
-                <button class="btn-secondary btn-small" onclick="toggleNotifications(); return false;">Zobacz wszystkie</button>
-              </div>
-              <div class="operator-event-list">
-                ${{rows || `<p class="muted">Brak nowych powiadomień. Nieprzeczytane: ${{Number(unreadCount || 0)}}.</p>`}}
-              </div>
-            </aside>
-          `;
-        }}
         async function renderOperatorCenter(fromLive = false) {{
           currentView = {{ name: "operator-center", ticketId: null }};
           const me = await loadMe();
@@ -6037,28 +5391,41 @@ data:
           }}
           const summary = data.summary || {{}};
           const sections = data.sections || {{}};
-          const firstName = String(me.first_name || me.name || "Operator").split(" ")[0] || "Operator";
-          const activeIncidentsCount = Number(summary.active_incidents || (data.incidents || []).length || 0);
-          const urgentCount = Number(summary.overdue_sla || 0) || (sections.urgent || []).length;
           const cockpitContent = `
-            <section class="operator-dashboard-shell">
-              ${{operatorCenterTopbar(me, summary.unread_notifications || 0)}}
-              <main class="operator-dashboard-main">
-                <section class="operator-dashboard-title">
-                  <h2>Centrum pracy operatora</h2>
-                  <p>Witaj, ${{esc(firstName)}}! Oto Twoje zadania na dziś.</p>
-                </section>
-                <section class="operator-board operator-dashboard-grid">
-                  ${{operatorCenterTicketSection("Nowe nieprzypisane", sections.unassigned || [], "Zgłoszenia czekające na pierwszą reakcję", `<button class="operator-card-link" onclick="applyWorkView('unassigned'); return false;">Zobacz wszystkie (${{Number(summary.unassigned || 0)}}) →</button>`, "blue", summary.unassigned, "▱")}}
-                  ${{operatorCenterTicketSection("Moje zgłoszenia", sections.my_tickets || [], "Zgłoszenia przypisane do Ciebie", `<button class="operator-card-link" onclick="applyWorkView('queue'); return false;">Zobacz wszystkie (${{Number(summary.my_open || 0)}}) →</button>`, "green", summary.my_open, "○")}}
-                  ${{operatorCenterTicketSection("Pilne / po SLA", sections.urgent || [], "Wymagają natychmiastowej uwagi", `<button class="operator-card-link" onclick="applyWorkView('overdue'); return false;">Zobacz wszystkie (${{Number(urgentCount || 0)}}) →</button>`, "red", urgentCount, "!")}}
-                  ${{operatorCenterTicketSection("Czekają na użytkownika", sections.waiting_for_user || [], "Oczekują na odpowiedź lub działanie użytkownika", `<button class="operator-card-link" onclick="applyWorkView('waiting_user'); return false;">Zobacz wszystkie (${{Number(summary.waiting_for_user || 0)}}) →</button>`, "yellow", summary.waiting_for_user, "⌛")}}
-                  ${{operatorCenterTicketSection("Zgłoszenia bez odpowiedzi", sections.no_response || [], "Brak odpowiedzi ze strony operatora", `<button class="operator-card-link" onclick="applyWorkView('no_response'); return false;">Zobacz wszystkie (${{Number(summary.no_response || 0)}}) →</button>`, "purple", summary.no_response, "☏")}}
-                  ${{operatorCenterIncidentList(data.incidents || [], activeIncidentsCount)}}
-                </section>
-              </main>
-              ${{operatorCenterNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
+            <section class="operator-hero">
+              <h2>Centrum pracy operatora</h2>
+              <p>Najważniejsze rzeczy do obsługi teraz: nowe nieprzypisane zgłoszenia, Twoja kolejka, pilne SLA, sprawy bez pierwszej odpowiedzi, aktywne incydenty i ostatnie zdarzenia.</p>
+              <div class="operator-command-row">
+                <input class="quick-search" placeholder="Szukaj: #2415, poczta, użytkownik, incydent, po SLA..." onkeydown="if(event.key === 'Enter') {{ saveTicketSearch(this.value.trim()); renderHome([]); }}">
+                <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+                <button class="btn-secondary" onclick="applyWorkView('queue')">Moja kolejka</button>
+                <button class="btn-secondary" onclick="applyWorkView('unassigned')">Nieprzypisane</button>
+                <button class="btn-secondary" onclick="applyWorkView('no_response')">Bez odpowiedzi</button>
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie odświeżenie: ${{esc(data.generated_at || "")}}</div>
             </section>
+            <section class="operator-summary-strip">
+              ${{operatorCenterMetric("Moje otwarte", summary.my_open, "Zgłoszenia przypisane do Ciebie.", "applyWorkView('queue')")}}
+              ${{operatorCenterMetric("Wymaga uwagi", summary.my_attention, "Priorytet, SLA albo odpowiedź użytkownika.", "applyWorkView('queue')")}}
+              ${{operatorCenterMetric("Nieprzypisane", summary.unassigned, "Kolejka do przejęcia.", "applyWorkView('unassigned')")}}
+              ${{operatorCenterMetric("SLA przekroczone", summary.overdue_sla, "Otwarte zgłoszenia po SLA.", "applyWorkView('overdue')")}}
+              ${{operatorCenterMetric("Bez odpowiedzi", summary.no_response, "Zgłoszenia bez pierwszej odpowiedzi.", "applyWorkView('no_response')")}}
+            </section>
+            <div class="operator-board">
+              <section class="operator-queues">
+                ${{operatorCenterTicketSection("Nowe nieprzypisane", sections.unassigned || [], "Kolejka do przejęcia przez operatora.", `<button class="btn-secondary btn-small" onclick="applyWorkView('unassigned')">Otwórz listę</button>`)}}
+                ${{operatorCenterTicketSection("Moje zgłoszenia", sections.my_tickets || [], "Twoja aktywna kolejka pracy.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Otwórz kolejkę</button>`)}}
+                ${{operatorCenterTicketSection("Pilne / po SLA", sections.urgent || [], "SLA, priorytet albo pierwsza reakcja wymagają uwagi.", `<button class="btn-secondary btn-small" onclick="applyWorkView('overdue')">Filtr SLA</button>`, "priority")}}
+                ${{operatorCenterTicketSection("Czekają na użytkownika", sections.waiting_for_user || [], "Sprawy, w których potrzebna jest odpowiedź użytkownika.", `<button class="btn-secondary btn-small" onclick="applyWorkView('waiting_user')">Pokaż</button>`, "waiting")}}
+                ${{operatorCenterTicketSection("Zgłoszenia bez odpowiedzi", sections.no_response || [], "Jeszcze nie zarejestrowano pierwszej odpowiedzi operatora.", `<button class="btn-secondary btn-small" onclick="applyWorkView('no_response')">Pokaż</button>`, "priority")}}
+                ${{operatorCenterTicketSection("Wraca do operatora", sections.returning_to_operator || [], "Użytkownik odpisał w zgłoszeniu przypisanym do Ciebie.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Moja kolejka</button>`)}}
+              </section>
+              <aside class="operator-side-panel">
+                ${{operatorCenterIncidentList(data.incidents || [])}}
+                ${{operatorCenterSuggestionList(data.suggestions || [])}}
+                ${{operatorCenterNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
+              </aside>
+            </div>
           `;
           appEl.innerHTML = renderWorkspaceShell(me, "operator-center", cockpitContent);
         }}
@@ -17256,13 +16623,6 @@ data:
         )
 
         cur.execute("""
-            SELECT COUNT(*)
-            FROM incidents
-            WHERE status <> 'resolved'
-        """)
-        active_incidents_count = cur.fetchone()[0] or 0
-
-        cur.execute("""
             SELECT
               i.id, i.title, i.severity, i.status, i.updated_at,
               COUNT(DISTINCT it.ticket_id) AS ticket_count
@@ -17323,7 +16683,7 @@ data:
             LEFT JOIN tickets t ON t.id = n.ticket_id
             WHERE lower(n.user_email) = lower(%s)
             ORDER BY n.is_read ASC, n.created_at DESC
-            LIMIT 10
+            LIMIT 6
         """, (user["email"],))
         notifications = [{
             "id": row[0],
@@ -17348,7 +16708,6 @@ data:
                 "returning_to_operator": summary_row[5] or 0,
                 "waiting_for_user": summary_row[6] or 0,
                 "no_response": summary_row[7] or 0,
-                "active_incidents": active_incidents_count,
                 "unread_notifications": unread_notifications,
             },
             "sections": {
