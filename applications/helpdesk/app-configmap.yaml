@@ -5913,7 +5913,6 @@ data:
             ])
           ].filter(Boolean).join("");
           const administrationContent = `
-            ${{renderAppNavigation(me, "administration")}}
             <section class="card">
               <div class="ticket-section-title">
                 <div>
