@@ -436,6 +436,9 @@ def main() -> None:
     assert "first_response_options" in text
     assert "@media (max-width: 1100px)" in text
     assert "@media (max-width: 560px)" in text
+    assert ".page { width: 100%; max-width: none; margin: 0; padding: 42px clamp(16px, 2.2vw, 42px); }" in text
+    assert ".page { padding: 30px 18px; }" in text
+    assert ".page { padding: 20px 10px; }" in text
     assert "overflow-x: auto" in text
     assert "-webkit-overflow-scrolling: touch" in text
     assert ".operator-command-row button" in text
@@ -469,7 +472,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-responsive-layout-v1" in deployment_text
+    assert "2026-07-15-fluid-width-layout-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
