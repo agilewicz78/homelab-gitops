@@ -255,6 +255,7 @@ def main() -> None:
     assert "resolution_override = bool(payload.get(\"resolution_override\"))" in text
     assert "resolve_linked_tickets = bool(payload.get(\"resolve_linked_tickets\"))" in text
     assert "def resolve_incident_active_tickets(cur, incident_id, incident_title, user):" in text
+    assert "def reopen_resolved_incidents_for_ticket(cur, ticket_id, ticket_title, user):" in text
     assert '"active_tickets": active_tickets' in text
     assert '"resolved_linked_ticket_count": len(resolved_linked_ticket_ids)' in text
     assert "Kontrola zamknięcia" in text
@@ -265,6 +266,7 @@ def main() -> None:
     assert "Aktywne zgłoszenia przypisane do incydentu" in text
     assert "Oznacz aktywne zgłoszenia jako Rozwiązane" in text
     assert "linked_tickets_resolved: \"Rozwiązano powiązane zgłoszenia\"" in text
+    assert "ticket_resolution_rejected: \"Odrzucono rozwiązanie zgłoszenia\"" in text
     assert "resolution_check: \"Kontrola zamknięcia\"" in text
     assert "Zamknąć incydent mimo tych ostrzeżeń?" in text
     assert "COUNT(DISTINCT task.id) AS task_count" in text
@@ -415,13 +417,17 @@ def main() -> None:
     assert '@app.post("/api/tickets/<int:ticket_id>/resolution-feedback")' in text
     assert "def api_ticket_resolution_feedback" in text
     assert "resolution_feedback_reopen_status_for_workflow" in text
+    assert "reopen_resolved_incidents_for_ticket" in text
+    assert '"reopened_incident_ids": reopened_incident_ids' in text
+    assert "ticket_resolution_rejected" in text
+    assert "Incydent cofnięto do monitorowania" in text
     assert "user_resolution_feedback" in text
     assert "resolution_feedback_accepted" in text
     assert "resolution_feedback_rejected" in text
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-incident-resolve-linked-tickets-v1" in deployment_text
+    assert "2026-07-15-incident-reopen-on-feedback-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

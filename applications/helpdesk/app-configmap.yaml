@@ -9655,7 +9655,8 @@ data:
             task_reopened: "Ponownie otwarto zadanie",
             task_deleted: "Usunięto zadanie",
             resolution_check: "Kontrola zamknięcia",
-            linked_tickets_resolved: "Rozwiązano powiązane zgłoszenia"
+            linked_tickets_resolved: "Rozwiązano powiązane zgłoszenia",
+            ticket_resolution_rejected: "Odrzucono rozwiązanie zgłoszenia"
           }};
           return labels[type] || type || "Aktualizacja";
         }}
@@ -14408,6 +14409,55 @@ data:
             resolved_ticket_ids.append(ticket_id)
         return resolved_ticket_ids
 
+    def reopen_resolved_incidents_for_ticket(cur, ticket_id, ticket_title, user):
+        cur.execute("""
+            SELECT i.id, i.title
+            FROM incident_tickets it
+            JOIN incidents i ON i.id = it.incident_id
+            WHERE it.ticket_id = %s
+              AND i.status = 'resolved'
+            ORDER BY i.updated_at DESC, i.id DESC
+        """, (ticket_id,))
+        incidents = cur.fetchall()
+        reopened_incident_ids = []
+        affected_ticket_ids = set()
+        for incident_id, incident_title in incidents:
+            cur.execute("""
+                UPDATE incidents
+                SET status = 'monitoring',
+                    updated_at = NOW(),
+                    resolved_at = NULL
+                WHERE id = %s
+                  AND status = 'resolved'
+            """, (incident_id,))
+            if not cur.rowcount:
+                continue
+            reopened_incident_ids.append(incident_id)
+            cur.execute("""
+                INSERT INTO incident_updates (
+                  incident_id, update_type, message, is_public,
+                  created_by_email, created_by_name
+                )
+                VALUES (%s, 'ticket_resolution_rejected', %s, TRUE, %s, %s)
+            """, (
+                incident_id,
+                (
+                    "Jeden z użytkowników zgłosił, że problem nadal występuje. "
+                    "Incydent cofnięto do monitorowania."
+                ),
+                user["email"],
+                user["name"],
+            ))
+            cur.execute("""
+                SELECT ticket_id
+                FROM incident_tickets
+                WHERE incident_id = %s
+            """, (incident_id,))
+            for row in cur.fetchall():
+                if row and row[0]:
+                    affected_ticket_ids.add(int(row[0]))
+        return reopened_incident_ids, sorted(affected_ticket_ids)
+
     @app.get("/api/incidents")
     @api_login_required
     @api_staff_required
@@ -17784,6 +17834,8 @@ data:
             conn.close()
             return jsonify({"error": "Ocenę rozwiązania można zapisać tylko dla zgłoszenia w statusie Rozwiązane."}), 400
 
+        reopened_incident_ids = []
+        reopened_incident_ticket_ids = []
         if decision == "accepted":
             target_status = "Zamknięte"
             feedback_comment = comment or "Użytkownik potwierdził, że problem został rozwiązany."
@@ -17838,6 +17890,12 @@ data:
             event_type = "resolution_feedback_rejected"
             event_text = f"Użytkownik odrzucił rozwiązanie zgłoszenia #{ticket_id}. Status zmieniono z Rozwiązane na {target_status}."
             notification_text = f"Użytkownik zgłosił, że rozwiązanie zgłoszenia #{ticket_id} nie działa: {title}."
+            reopened_incident_ids, reopened_incident_ticket_ids = reopen_resolved_incidents_for_ticket(
+                cur,
+                ticket_id,
+                title,
+                user,
+            )
 
         comment_prefix = "Potwierdzenie rozwiązania" if decision == "accepted" else "Rozwiązanie nie pomogło"
         cur.execute("""
@@ -17859,6 +17917,7 @@ data:
             "old_status": old_status,
             "new_status": target_status,
             "comment": feedback_comment,
+            "reopened_incident_ids": reopened_incident_ids,
         })
         create_ticket_notifications(
             cur,
@@ -17871,10 +17930,19 @@ data:
         cur.close()
         conn.close()
         publish_event(event_text, event_type, ticket_id)
+        if reopened_incident_ids:
+            publish_event(
+                f"Użytkownik odrzucił rozwiązanie zgłoszenia #{ticket_id}. Incydent wrócił do monitorowania.",
+                "incident_updated",
+                None,
+                staff_only=False,
+                ticket_ids=reopened_incident_ticket_ids or [ticket_id],
+            )
         return jsonify({
             "status": "ok",
             "ticket_status": target_status,
             "decision": decision,
+            "reopened_incident_ids": reopened_incident_ids,
         })
 
     @app.post("/api/tickets/<int:ticket_id>/close")

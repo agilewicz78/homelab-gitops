@@ -27,6 +27,7 @@ class Cursor:
         self.incident_task_updates = []
         self.incident_task_deletes = []
         self.incident_update_inserts = []
+        self.incident_status_updates = []
         self.ticket_status_updates = []
         self.ticket_status_history_inserts = []
         self.incident_timestamp_updates = 0
@@ -48,6 +49,8 @@ class Cursor:
             self.incident_task_deletes.append(params)
         elif "INSERT INTO incident_updates" in self.last_query:
             self.incident_update_inserts.append(params)
+        elif "UPDATE incidents SET status = 'monitoring'" in self.last_query:
+            self.incident_status_updates.append(params)
         elif "UPDATE tickets SET status = 'Rozwiązane'" in self.last_query:
             self.ticket_status_updates.append(params)
         elif "INSERT INTO ticket_status_history" in self.last_query:
@@ -78,6 +81,8 @@ class Cursor:
             return ("Mail outage", "SEV1")
         if "SELECT title FROM tickets" in self.last_query:
             return ("Cannot use mail",)
+        if "SELECT status, COALESCE(workflow_key" in self.last_query:
+            return ("Rozwiązane", "default", "Cannot use mail", "")
         if "SELECT message, created_at" in self.last_query:
             return ("We are restoring service.", "2026-06-11 18:00:00")
         return None
@@ -100,6 +105,8 @@ class Cursor:
             ]
         if "FROM ticket_links" in self.last_query:
             return [(102,)]
+        if "SELECT i.id, i.title FROM incident_tickets it JOIN incidents i" in self.last_query:
+            return [(7, "Mail outage")]
         if "SELECT ticket_id FROM incident_tickets" in self.last_query:
             return [(101,), (102,)]
         return []
@@ -158,6 +165,9 @@ def main():
         "clean": lambda value: str(value or "").strip(),
         "get_conn": get_conn,
         "jsonify": lambda value: value,
+        "is_staff": lambda user: False,
+        "can_view_ticket": lambda user, ticket_id: True,
+        "workflow_statuses": lambda workflow_key: ["Nowe", "W trakcie", "Rozwiązane", "Zamknięte"],
         "add_ticket_event": lambda *args, **kwargs: None,
         "add_ticket_status_history": lambda cur, ticket_id, user, old_status, new_status, **kwargs: cur.ticket_status_history_inserts.append(
             (ticket_id, old_status, new_status, kwargs.get("source"))
@@ -174,8 +184,10 @@ def main():
     }
     exec(
         load_functions(
+            "resolution_feedback_reopen_status_for_workflow",
             "incident_resolution_check",
             "resolve_incident_active_tickets",
+            "reopen_resolved_incidents_for_ticket",
             "api_create_incident",
             "api_update_incident",
             "api_add_incident_update",
@@ -183,6 +195,7 @@ def main():
             "api_toggle_incident_task",
             "api_delete_incident_task",
             "api_link_incident_ticket",
+            "api_ticket_resolution_feedback",
         ),
         namespace,
     )
@@ -330,6 +343,25 @@ def main():
     assert first_responses[-1] == 103
     assert notifications[-1] == (103, "incident_linked")
     assert events[-1][0][2] == 103
+
+    feedback_user = {"email": "alice@example.local", "name": "Alice", "roles": ["user"]}
+    Request.payload = {
+        "decision": "rejected",
+        "comment": "Poczta nadal nie działa po komunikacie o rozwiązaniu.",
+    }
+    body = namespace["api_ticket_resolution_feedback"](feedback_user, 101)
+    feedback_cursor = connections[-1].cursor_value
+    assert body["status"] == "ok"
+    assert body["ticket_status"] == "W trakcie"
+    assert body["reopened_incident_ids"] == [7]
+    assert len(feedback_cursor.incident_status_updates) == 1
+    assert feedback_cursor.incident_status_updates[0] == (7,)
+    assert feedback_cursor.incident_update_inserts[-1][0] == 7
+    assert "cofnięto do monitorowania" in feedback_cursor.incident_update_inserts[-1][1]
+    assert notifications[-1] == (101, "resolution_feedback_rejected")
+    assert events[-1][0][1] == "incident_updated"
+    assert events[-1][1]["ticket_ids"] == [101, 102]
+    assert events[-1][1]["staff_only"] is False
 
     print("Helpdesk incident flow checks passed")
 
