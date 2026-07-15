@@ -9583,7 +9583,8 @@ data:
             task: "Dodano zadanie",
             task_done: "Zamknięto zadanie",
             task_reopened: "Ponownie otwarto zadanie",
-            task_deleted: "Usunięto zadanie"
+            task_deleted: "Usunięto zadanie",
+            resolution_check: "Kontrola zamknięcia"
           }};
           return labels[type] || type || "Aktualizacja";
         }}
@@ -9616,6 +9617,28 @@ data:
                 ${{incidentCommandMetric("Publiczne komunikaty", publicUpdates, "Aktualizacje widoczne w powiązanych zgłoszeniach.")}}
               </section>
             </section>
+          `;
+        }}
+        function incidentResolutionCheckPanel(check) {{
+          const warnings = check?.warnings || [];
+          const ready = !warnings.length;
+          const items = warnings.length
+            ? warnings.map(item => `<li>${{esc(item)}}</li>`).join("")
+            : `<li>Wszystkie warunki zamknięcia wyglądają dobrze.</li>`;
+          return `
+            <div class="panel-soft">
+              <h4>Kontrola zamknięcia</h4>
+              <p class="muted">
+                Przed statusem Rozwiązany system sprawdza zadania, komunikację publiczną i stan powiązanych zgłoszeń.
+              </p>
+              <div class="incident-meta">
+                <span class="chip">${{check?.open_task_count || 0}} otwartych zadań</span>
+                <span class="chip">${{check?.active_ticket_count || 0}} aktywnych zgłoszeń</span>
+                <span class="chip">${{check?.public_update_count || 0}} publicznych komunikatów</span>
+                <span class="pill">${{ready ? "Gotowy do zamknięcia" : "Wymaga potwierdzenia"}}</span>
+              </div>
+              <ul>${{items}}</ul>
+            </div>
           `;
         }}
         function incidentTaskList(tasks, incidentId) {{
@@ -9805,6 +9828,7 @@ data:
                   <label>Dowódca</label><select name="commander_email"><option value="">Nieprzypisany</option>${{commanderOptions}}</select>
                   <label>Opis sytuacji</label><textarea name="summary" required>${{esc(i.summary)}}</textarea>
                   <label>Wpływ</label><textarea name="impact">${{esc(i.impact || "")}}</textarea>
+                  ${{incidentResolutionCheckPanel(data.resolution_check || {{}})}}
                   <button type="submit">Zapisz stan incydentu</button>
                 </form>
               </section>
@@ -9858,9 +9882,32 @@ data:
           document.getElementById("incidentEditForm")?.addEventListener("submit", async (event) => {{
             event.preventDefault();
             const payload = Object.fromEntries(new FormData(event.target).entries());
+            payload.resolution_override = false;
             const updateRes = await api(`/api/incidents/${{i.id}}`, {{ method: "PUT", body: JSON.stringify(payload) }});
             if (!updateRes || !updateRes.ok) {{
               const err = updateRes ? await updateRes.json().catch(() => ({{}})) : {{}};
+              if (updateRes?.status === 409 && err.requires_resolution_override) {{
+                const warnings = err.resolution_check?.warnings || [];
+                const warningText = warnings.length
+                  ? warnings.map(item => "- " + item).join("\\n")
+                  : "- System wymaga potwierdzenia zamknięcia.";
+                const confirmed = confirm(
+                  "Kontrola zamknięcia incydentu znalazła ostrzeżenia:\\n\\n"
+                  + warningText
+                  + "\\n\\nZamknąć incydent mimo tych ostrzeżeń?"
+                );
+                if (!confirmed) return;
+                payload.resolution_override = true;
+                const overrideRes = await api(`/api/incidents/${{i.id}}`, {{ method: "PUT", body: JSON.stringify(payload) }});
+                if (!overrideRes || !overrideRes.ok) {{
+                  const overrideErr = overrideRes ? await overrideRes.json().catch(() => ({{}})) : {{}};
+                  alert(overrideErr.error || "Nie udało się potwierdzić zamknięcia incydentu.");
+                  return;
+                }}
+                showToast("Zamknięto incydent #" + i.id, "Operator potwierdził ostrzeżenia kontroli zamknięcia.");
+                await renderIncident(i.id);
+                return;
+              }}
               alert(err.error || "Nie udało się zapisać incydentu.");
               return;
             }}
@@ -14114,6 +14161,61 @@ data:
         row = cur.fetchone()
         return (row[0], row[1]) if row else (None, None)
 
+    def incident_resolution_check(cur, incident_id):
+        cur.execute("""
+            SELECT
+              COUNT(*) AS task_count,
+              COUNT(*) FILTER (WHERE status <> 'done') AS open_task_count
+            FROM incident_tasks
+            WHERE incident_id = %s
+        """, (incident_id,))
+        task_count, open_task_count = cur.fetchone()
+        cur.execute("""
+            SELECT
+              COUNT(*) AS linked_ticket_count,
+              COUNT(*) FILTER (
+                WHERE t.status NOT IN ('Rozwiązane', 'Zamknięte')
+              ) AS active_ticket_count
+            FROM incident_tickets it
+            JOIN tickets t ON t.id = it.ticket_id
+            WHERE it.incident_id = %s
+        """, (incident_id,))
+        linked_ticket_count, active_ticket_count = cur.fetchone()
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM incident_updates
+            WHERE incident_id = %s
+              AND COALESCE(is_public, FALSE) = TRUE
+        """, (incident_id,))
+        public_update_count = cur.fetchone()[0]
+        task_count = int(task_count or 0)
+        open_task_count = int(open_task_count or 0)
+        linked_ticket_count = int(linked_ticket_count or 0)
+        active_ticket_count = int(active_ticket_count or 0)
+        public_update_count = int(public_update_count or 0)
+        warnings = []
+        if open_task_count:
+            warnings.append(
+                f"Masz {open_task_count} otwarte zadania w checkliście incydentu."
+            )
+        if linked_ticket_count and public_update_count == 0:
+            warnings.append(
+                "Nie opublikowano jeszcze żadnego publicznego komunikatu do powiązanych zgłoszeń."
+            )
+        if active_ticket_count:
+            warnings.append(
+                f"{active_ticket_count} powiązanych zgłoszeń nadal nie ma statusu Rozwiązane albo Zamknięte."
+            )
+        return {
+            "ready": not warnings,
+            "warnings": warnings,
+            "task_count": task_count,
+            "open_task_count": open_task_count,
+            "linked_ticket_count": linked_ticket_count,
+            "active_ticket_count": active_ticket_count,
+            "public_update_count": public_update_count,
+        }
+
     @app.get("/api/incidents")
     @api_login_required
     @api_staff_required
@@ -14492,6 +14594,7 @@ data:
             "actor": update["created_by_name"],
             "created_at": update["created_at"],
         } for update in updates]
+        resolution_check = incident_resolution_check(cur, incident_id)
         cur.execute("""
             SELECT first_name, last_name, email, roles
             FROM users
@@ -14513,6 +14616,7 @@ data:
             "tasks": tasks,
             "task_summary": task_summary,
             "timeline": timeline,
+            "resolution_check": resolution_check,
             "meta": {
                 "severities": INCIDENT_SEVERITIES,
                 "statuses": INCIDENT_STATUSES,
@@ -14531,6 +14635,7 @@ data:
         severity = clean(payload.get("severity"))
         status = clean(payload.get("status"))
         commander_email = clean(payload.get("commander_email")).lower()
+        resolution_override = bool(payload.get("resolution_override"))
         if not title or not summary:
             return jsonify({"error": "Tytuł i opis incydentu są wymagane."}), 400
         if severity not in INCIDENT_SEVERITIES or status not in INCIDENT_STATUSES:
@@ -14548,6 +14653,17 @@ data:
             cur.close()
             conn.close()
             return jsonify({"error": "Dowódca incydentu musi być operatorem lub administratorem."}), 400
+        resolution_check = None
+        if current[0] != "resolved" and status == "resolved":
+            resolution_check = incident_resolution_check(cur, incident_id)
+            if resolution_check["warnings"] and not resolution_override:
+                cur.close()
+                conn.close()
+                return jsonify({
+                    "error": "Kontrola zamknięcia incydentu wymaga potwierdzenia.",
+                    "requires_resolution_override": True,
+                    "resolution_check": resolution_check,
+                }), 409
         cur.execute("""
             UPDATE incidents
             SET title = %s,
@@ -14581,10 +14697,32 @@ data:
                 user["email"],
                 user["name"],
             ))
+            if status == "resolved" and resolution_check:
+                if resolution_check["warnings"]:
+                    check_message = (
+                        "Kontrola zamknięcia: operator zamknął incydent mimo ostrzeżeń: "
+                        + "; ".join(resolution_check["warnings"])
+                    )
+                else:
+                    check_message = "Kontrola zamknięcia: wszystkie warunki wyglądają poprawnie."
+                cur.execute("""
+                    INSERT INTO incident_updates (
+                      incident_id, update_type, message, is_public,
+                      created_by_email, created_by_name
+                    )
+                    VALUES (%s, 'resolution_check', %s, FALSE, %s, %s)
+                """, (
+                    incident_id,
+                    check_message,
+                    user["email"],
+                    user["name"],
+                ))
         log_audit(cur, user, "incident_updated", "incident", incident_id, {
             "severity": severity,
             "status": status,
             "commander_email": resolved_commander_email,
+            "resolution_override": resolution_override,
+            "resolution_check": resolution_check,
         })
         conn.commit()
         cur.close()
@@ -14595,7 +14733,10 @@ data:
             None,
             staff_only=True,
         )
-        return jsonify({"status": "ok"})
+        return jsonify({
+            "status": "ok",
+            "resolution_check": resolution_check,
+        })
 
     @app.post("/api/incidents/<int:incident_id>/updates")
     @api_login_required

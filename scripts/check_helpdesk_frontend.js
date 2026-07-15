@@ -341,6 +341,7 @@ const requiredIncidentCenterV2 = [
   "incidentCommandMetric",
   "incidentTaskStatusLabel",
   "incidentTimelineTypeLabel",
+  "incidentResolutionCheckPanel",
   "incidentTaskList",
   "incidentTimelineList",
   "submitIncidentTask",
@@ -351,6 +352,10 @@ const requiredIncidentCenterV2 = [
   "Centrum dowodzenia",
   "Checklist działań",
   "Oś czasu incydentu",
+  "Kontrola zamknięcia",
+  "requires_resolution_override",
+  "resolution_override",
+  "Zamknąć incydent mimo tych ostrzeżeń?",
   "Publiczne komunikaty",
   "Zadania:",
 ];
