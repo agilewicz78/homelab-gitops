@@ -315,6 +315,27 @@ for (const fragment of requiredOperatorCenter) {
   }
 }
 
+const requiredResponsiveLayout = [
+  "@media (max-width: 1100px)",
+  "@media (max-width: 980px)",
+  "@media (max-width: 860px)",
+  "@media (max-width: 720px)",
+  "@media (max-width: 560px)",
+  "overflow-x: hidden",
+  "overflow-x: auto",
+  "-webkit-overflow-scrolling: touch",
+  ".notification-panel {",
+  "position: fixed",
+  "operator-sidebar { grid-template-columns: 1fr; }",
+  ".operator-command-row button",
+  ".workflow-wizard-steps { grid-template-columns: 1fr; }",
+];
+for (const fragment of requiredResponsiveLayout) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing responsive layout fragment: ${fragment}`);
+  }
+}
+
 const requiredUserPortal = [
   "renderUserPortal",
   "userPortalMetric",

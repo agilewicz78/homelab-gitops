@@ -434,6 +434,12 @@ def main() -> None:
     assert "Ostatnie zdarzenia" in text
     assert "first_response_filter" in text
     assert "first_response_options" in text
+    assert "@media (max-width: 1100px)" in text
+    assert "@media (max-width: 560px)" in text
+    assert "overflow-x: auto" in text
+    assert "-webkit-overflow-scrolling: touch" in text
+    assert ".operator-command-row button" in text
+    assert ".workflow-wizard-steps { grid-template-columns: 1fr; }" in text
     assert "currentView.name === \"operator-center\"" in text
     assert "/api/user-portal" in text
     assert "def api_user_portal" in text
@@ -463,7 +469,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-operator-cockpit-v1" in deployment_text
+    assert "2026-07-15-responsive-layout-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
