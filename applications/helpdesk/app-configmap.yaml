@@ -1340,9 +1340,15 @@ data:
                         created_by_name TEXT,
                         created_at TIMESTAMP DEFAULT NOW(),
                         updated_at TIMESTAMP DEFAULT NOW(),
-                        resolved_at TIMESTAMP
+                        resolved_at TIMESTAMP,
+                        user_status_summary TEXT,
+                        user_current_action TEXT,
+                        next_update_hint TEXT
                     );
                 """)
+                cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS user_status_summary TEXT")
+                cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS user_current_action TEXT")
+                cur.execute("ALTER TABLE incidents ADD COLUMN IF NOT EXISTS next_update_hint TEXT")
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS incident_tickets (
                         incident_id INTEGER REFERENCES incidents(id) ON DELETE CASCADE,
@@ -3740,6 +3746,16 @@ data:
             <textarea name="summary" rows="4" required></textarea>
             <label>Wpływ na organizację</label>
             <textarea name="impact" rows="3" placeholder="Kogo dotyczy problem i jakie procesy są zablokowane?"></textarea>
+            <div class="panel-soft">
+              <h4>Status dla użytkowników</h4>
+              <p class="muted">Te pola pojawią się w każdym powiązanym zgłoszeniu jako prosty opis sytuacji.</p>
+              <label>Co już wiemy?</label>
+              <textarea name="user_status_summary" rows="3" placeholder="Np. Problem dotyczy wielu użytkowników i powoduje błędy wysyłania poczty."></textarea>
+              <label>Co robimy teraz?</label>
+              <textarea name="user_current_action" rows="3" placeholder="Np. Sprawdzamy kolejki pocztowe i konfigurację bramy SMTP."></textarea>
+              <label>Kolejna aktualizacja</label>
+              <input name="next_update_hint" placeholder="Np. Około 14:30 albo po potwierdzeniu dostawcy.">
+            </div>
             <label>Dołączone zgłoszenia</label>
             <div id="incidentFromTicketsList" class="watcher-list"></div>
             <div class="attachment-upload-hint">Zgłoszenie źródłowe jest wymagane. Zamknięte tickety nie mogą zostać dołączone.</div>
@@ -3912,6 +3928,9 @@ data:
           form.reset();
           form.elements.title.value = `Incydent: ${{context.sourceTitle}}`;
           form.elements.summary.value = `Problem został zgłoszony w ${{context.tickets.length}} powiązanych zgłoszeniach. Zgłoszenie źródłowe #${{context.sourceTicketId}}: ${{context.sourceTitle}}`;
+          form.elements.user_status_summary.value = `Problem dotyczy ${{context.tickets.length}} powiązanych zgłoszeń. Helpdesk obsługuje go jako incydent zbiorczy.`;
+          form.elements.user_current_action.value = "Analizujemy zgłoszenia i ustalamy przyczynę problemu.";
+          form.elements.next_update_hint.value = "Kolejna aktualizacja pojawi się po potwierdzeniu wpływu i przyczyny.";
           severity.innerHTML = (context.severities || ["SEV1", "SEV2", "SEV3", "SEV4"])
             .map(value => `<option ${{value === "SEV2" ? "selected" : ""}}>${{esc(value)}}</option>`)
             .join("");
@@ -9573,7 +9592,7 @@ data:
         function incidentUserNextStep(incident) {{
           const status = incident?.status || "";
           if (status === "resolved") {{
-            return "Incydent oznaczono jako rozwiązany. Jeżeli problem nadal występuje u Ciebie, dopisz komentarz w tym zgłoszeniu.";
+            return "Incydent oznaczono jako rozwiązany. Sprawdź, czy problem u Ciebie zniknął.";
           }}
           if (status === "monitoring") {{
             return "Usługa jest przywrócona lub stabilizowana. Helpdesk monitoruje sytuację i opublikuje kolejną aktualizację, jeśli będzie potrzebna.";
@@ -9582,6 +9601,20 @@ data:
             return "Przyczyna została zidentyfikowana. Zespół pracuje nad usunięciem problemu albo obejściem.";
           }}
           return "Helpdesk analizuje problem. Nie musisz zakładać kolejnego zgłoszenia, bo dalsze publiczne aktualizacje pojawią się tutaj.";
+        }}
+        function incidentUserActionHint(incident) {{
+          const status = incident?.status || "";
+          if (status === "resolved") {{
+            return "Jeżeli problem nadal występuje, użyj przycisku „Nie, nadal mam problem” w swoim zgłoszeniu albo dopisz komentarz.";
+          }}
+          if (status === "monitoring") {{
+            return "Na razie nic. Obserwuj aktualizacje w tym zgłoszeniu i daj znać, jeśli problem wróci.";
+          }}
+          return "Nie twórz kolejnego zgłoszenia. Helpdesk pracuje na incydencie zbiorczym i będzie publikował aktualizacje tutaj.";
+        }}
+        function incidentUserStatusValue(value, fallback) {{
+          const text = String(value || "").trim();
+          return text || fallback || "Brak informacji.";
         }}
         function incidentPublicUpdatesList(incident) {{
           const updates = incident?.public_updates || [];
@@ -9601,6 +9634,9 @@ data:
           `;
         }}
         function incidentUserStatusPanel(incident, canOpenCenter = false) {{
+          const known = incidentUserStatusValue(incident.user_status_summary, incident.summary);
+          const currentAction = incidentUserStatusValue(incident.user_current_action, incidentUserNextStep(incident));
+          const nextUpdate = incidentUserStatusValue(incident.next_update_hint, "Helpdesk poda kolejną aktualizację, gdy pojawią się nowe informacje.");
           const latest = incident.latest_public_update
             ? `
               <div class="comment incident-update-public">
@@ -9616,16 +9652,32 @@ data:
                 <strong>${{esc(incident.severity)}} · Incydent #${{incident.id}} · ${{esc(incident.title)}}</strong>
                 <span class="pill">${{esc(incidentStatusLabel(incident.status))}}</span>
               </div>
-              <p>${{esc(incident.summary)}}</p>
-              ${{incident.impact ? `<p class="muted"><strong>Wpływ:</strong> ${{esc(incident.impact)}}</p>` : ""}}
               <div class="incident-meta">
                 <span class="chip">Status: ${{esc(incidentStatusLabel(incident.status))}}</span>
                 <span class="chip">Zasięg: ${{incidentTicketCountLabel(incident.affected_ticket_count)}}</span>
                 <span class="chip">Aktualizacja: ${{esc(incident.updated_at)}}</span>
               </div>
+              <div class="ticket-summary-grid">
+                <div class="ticket-summary-item">
+                  <span class="label">Co już wiemy</span>
+                  <span class="value">${{esc(known)}}</span>
+                </div>
+                <div class="ticket-summary-item">
+                  <span class="label">Co robimy teraz</span>
+                  <span class="value">${{esc(currentAction)}}</span>
+                </div>
+                <div class="ticket-summary-item">
+                  <span class="label">Kolejna aktualizacja</span>
+                  <span class="value">${{esc(nextUpdate)}}</span>
+                </div>
+                <div class="ticket-summary-item">
+                  <span class="label">Czy musisz coś zrobić?</span>
+                  <span class="value">${{esc(incidentUserActionHint(incident))}}</span>
+                </div>
+              </div>
               <div class="incident-next-step">
                 <strong>Co dalej?</strong>
-                <div>${{esc(incidentUserNextStep(incident))}}</div>
+                <div>${{esc(currentAction)}}</div>
               </div>
               ${{latest}}
               <details>
@@ -9656,7 +9708,8 @@ data:
             task_deleted: "Usunięto zadanie",
             resolution_check: "Kontrola zamknięcia",
             linked_tickets_resolved: "Rozwiązano powiązane zgłoszenia",
-            ticket_resolution_rejected: "Odrzucono rozwiązanie zgłoszenia"
+            ticket_resolution_rejected: "Odrzucono rozwiązanie zgłoszenia",
+            user_status: "Status dla użytkowników"
           }};
           return labels[type] || type || "Aktualizacja";
         }}
@@ -9845,6 +9898,16 @@ data:
                 <textarea name="summary" required placeholder="Co się dzieje i od kiedy?"></textarea>
                 <label>Wpływ na organizację</label>
                 <textarea name="impact" placeholder="Kogo dotyczy problem i jakie procesy są zablokowane?"></textarea>
+                <div class="panel-soft">
+                  <h4>Status dla użytkowników</h4>
+                  <p class="muted">Krótki, ludzki opis widoczny w powiązanych zgłoszeniach.</p>
+                  <label>Co już wiemy?</label>
+                  <textarea name="user_status_summary" placeholder="Np. Problem dotyczy wielu użytkowników i blokuje wysyłanie poczty."></textarea>
+                  <label>Co robimy teraz?</label>
+                  <textarea name="user_current_action" placeholder="Np. Sprawdzamy kolejki pocztowe i konfigurację usługi."></textarea>
+                  <label>Kolejna aktualizacja</label>
+                  <input name="next_update_hint" placeholder="Np. Około 14:30 albo po potwierdzeniu przez dostawcę.">
+                </div>
                 <button type="submit">Uruchom obsługę incydentu</button>
               </form>
             </section>
@@ -9898,6 +9961,7 @@ data:
           `).join("") : `<p class="muted">Nie powiązano jeszcze żadnych zgłoszeń.</p>`;
           const taskList = incidentTaskList(data.tasks || [], i.id);
           const timeline = incidentTimelineList(data.timeline || data.updates || []);
+          const incidentPreview = {{ ...i, affected_ticket_count: (data.tickets || []).length }};
           appEl.innerHTML = `
             <section class="card incident-card ${{incidentSeverityClass(i.severity)}}">
               <div class="ticket-section-title">
@@ -9916,6 +9980,15 @@ data:
               ${{i.impact ? `<p><strong>Wpływ:</strong> ${{esc(i.impact)}}</p>` : ""}}
             </section>
             ${{incidentCommandCenter(i, data)}}
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Podgląd dla użytkownika</h3>
+                  <p class="muted">Tak ten incydent będzie opisany w powiązanych zgłoszeniach.</p>
+                </div>
+              </div>
+              ${{incidentUserStatusPanel(incidentPreview, false)}}
+            </section>
             <div class="grid">
               <section class="card">
                 <h3>Dowodzenie incydentem</h3>
@@ -9928,6 +10001,16 @@ data:
                   <label>Dowódca</label><select name="commander_email"><option value="">Nieprzypisany</option>${{commanderOptions}}</select>
                   <label>Opis sytuacji</label><textarea name="summary" required>${{esc(i.summary)}}</textarea>
                   <label>Wpływ</label><textarea name="impact">${{esc(i.impact || "")}}</textarea>
+                  <div class="panel-soft">
+                    <h4>Status dla użytkowników</h4>
+                    <p class="muted">Aktualizuj te pola, żeby użytkownik od razu wiedział, co się dzieje, co robimy i kiedy wrócimy z informacją.</p>
+                    <label>Co już wiemy?</label>
+                    <textarea name="user_status_summary" rows="3">${{esc(i.user_status_summary || "")}}</textarea>
+                    <label>Co robimy teraz?</label>
+                    <textarea name="user_current_action" rows="3">${{esc(i.user_current_action || "")}}</textarea>
+                    <label>Kolejna aktualizacja</label>
+                    <input name="next_update_hint" value="${{esc(i.next_update_hint || "")}}" placeholder="Np. Około 14:30 albo po potwierdzeniu dostawcy.">
+                  </div>
                   ${{incidentResolutionCheckPanel(data.resolution_check || {{}})}}
                   <button type="submit">Zapisz stan incydentu</button>
                 </form>
@@ -14546,6 +14629,9 @@ data:
         title = clean(payload.get("title"))
         summary = clean(payload.get("summary"))
         impact = clean(payload.get("impact"))
+        user_status_summary = clean(payload.get("user_status_summary"))
+        user_current_action = clean(payload.get("user_current_action"))
+        next_update_hint = clean(payload.get("next_update_hint"))
         severity = clean(payload.get("severity")) or "SEV3"
         commander_email = clean(payload.get("commander_email")).lower()
         raw_ticket_ids = payload.get("ticket_ids") or []
@@ -14639,14 +14725,16 @@ data:
         cur.execute("""
             INSERT INTO incidents (
               title, summary, impact, severity, status,
-              commander_email, commander_name, created_by_email, created_by_name
+              commander_email, commander_name, created_by_email, created_by_name,
+              user_status_summary, user_current_action, next_update_hint
             )
-            VALUES (%s, %s, %s, %s, 'investigating', %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, 'investigating', %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             title, summary, impact, severity,
             resolved_commander_email, commander_name,
             user["email"], user["name"],
+            user_status_summary, user_current_action, next_update_hint,
         ))
         incident_id = cur.fetchone()[0]
         cur.execute("""
@@ -14708,6 +14796,9 @@ data:
             "severity": severity,
             "commander_email": resolved_commander_email,
             "ticket_ids": ticket_ids,
+            "user_status_summary": user_status_summary,
+            "user_current_action": user_current_action,
+            "next_update_hint": next_update_hint,
         })
         conn.commit()
         cur.close()
@@ -14736,7 +14827,10 @@ data:
               COALESCE(commander_email, ''),
               COALESCE(commander_name, commander_email, ''),
               COALESCE(created_by_name, created_by_email, ''),
-              created_at, updated_at, resolved_at
+              created_at, updated_at, resolved_at,
+              COALESCE(user_status_summary, ''),
+              COALESCE(user_current_action, ''),
+              COALESCE(next_update_hint, '')
             FROM incidents
             WHERE id = %s
         """, (incident_id,))
@@ -14758,6 +14852,9 @@ data:
             "created_at": str(row[9]),
             "updated_at": str(row[10]),
             "resolved_at": str(row[11]) if row[11] else "",
+            "user_status_summary": row[12],
+            "user_current_action": row[13],
+            "next_update_hint": row[14],
         }
         cur.execute("""
             SELECT
@@ -14874,6 +14971,12 @@ data:
         title = clean(payload.get("title"))
         summary = clean(payload.get("summary"))
         impact = clean(payload.get("impact"))
+        user_status_summary_provided = "user_status_summary" in payload
+        user_current_action_provided = "user_current_action" in payload
+        next_update_hint_provided = "next_update_hint" in payload
+        user_status_summary = clean(payload.get("user_status_summary"))
+        user_current_action = clean(payload.get("user_current_action"))
+        next_update_hint = clean(payload.get("next_update_hint"))
         severity = clean(payload.get("severity"))
         status = clean(payload.get("status"))
         commander_email = clean(payload.get("commander_email")).lower()
@@ -14885,12 +14988,25 @@ data:
             return jsonify({"error": "Nieprawidłowy poziom SEV lub status."}), 400
         conn = get_conn()
         cur = conn.cursor()
-        cur.execute("SELECT status FROM incidents WHERE id = %s", (incident_id,))
+        cur.execute("""
+            SELECT status,
+                   COALESCE(user_status_summary, ''),
+                   COALESCE(user_current_action, ''),
+                   COALESCE(next_update_hint, '')
+            FROM incidents
+            WHERE id = %s
+        """, (incident_id,))
         current = cur.fetchone()
         if not current:
             cur.close()
             conn.close()
             return jsonify({"error": "not found"}), 404
+        if not user_status_summary_provided:
+            user_status_summary = current[1]
+        if not user_current_action_provided:
+            user_current_action = current[2]
+        if not next_update_hint_provided:
+            next_update_hint = current[3]
         resolved_commander_email, commander_name = incident_commander(cur, commander_email)
         if commander_email and not resolved_commander_email:
             cur.close()
@@ -14914,6 +15030,9 @@ data:
                 impact = %s,
                 severity = %s,
                 status = %s,
+                user_status_summary = %s,
+                user_current_action = %s,
+                next_update_hint = %s,
                 commander_email = %s,
                 commander_name = %s,
                 updated_at = NOW(),
@@ -14924,6 +15043,7 @@ data:
             WHERE id = %s
         """, (
             title, summary, impact, severity, status,
+            user_status_summary, user_current_action, next_update_hint,
             resolved_commander_email, commander_name,
             status, incident_id,
         ))
@@ -14960,6 +15080,41 @@ data:
                     user["email"],
                     user["name"],
                 ))
+        user_panel_changed = (
+            current[1] != user_status_summary
+            or current[2] != user_current_action
+            or current[3] != next_update_hint
+        )
+        user_visible_changed = current[0] != status or user_panel_changed
+        user_visible_ticket_ids = []
+        if user_visible_changed:
+            cur.execute("""
+                SELECT ticket_id
+                FROM incident_tickets
+                WHERE incident_id = %s
+            """, (incident_id,))
+            user_visible_ticket_ids = [row[0] for row in cur.fetchall()]
+        if user_panel_changed:
+            panel_parts = [
+                f"Co wiemy: {user_status_summary}" if user_status_summary else "",
+                f"Co robimy: {user_current_action}" if user_current_action else "",
+                f"Kolejna aktualizacja: {next_update_hint}" if next_update_hint else "",
+            ]
+            panel_message = "Zaktualizowano status dla użytkowników. " + " ".join(
+                part for part in panel_parts if part
+            )
+            cur.execute("""
+                INSERT INTO incident_updates (
+                  incident_id, update_type, message, is_public,
+                  created_by_email, created_by_name
+                )
+                VALUES (%s, 'user_status', %s, FALSE, %s, %s)
+            """, (
+                incident_id,
+                panel_message.strip(),
+                user["email"],
+                user["name"],
+            ))
         resolved_linked_ticket_ids = []
         if status == "resolved" and resolve_linked_tickets:
             resolved_linked_ticket_ids = resolve_incident_active_tickets(
@@ -14989,16 +15144,20 @@ data:
             "resolve_linked_tickets": resolve_linked_tickets,
             "resolved_linked_ticket_ids": resolved_linked_ticket_ids,
             "resolution_check": resolution_check,
+            "user_status_summary": user_status_summary,
+            "user_current_action": user_current_action,
+            "next_update_hint": next_update_hint,
         })
         conn.commit()
         cur.close()
         conn.close()
+        publish_ticket_ids = sorted(set(resolved_linked_ticket_ids + user_visible_ticket_ids))
         publish_event(
             f"{user['name']} zaktualizował incydent #{incident_id}: {title}",
             "incident_updated",
             None,
-            staff_only=not bool(resolved_linked_ticket_ids),
-            ticket_ids=resolved_linked_ticket_ids or None,
+            staff_only=not bool(publish_ticket_ids),
+            ticket_ids=publish_ticket_ids or None,
         )
         return jsonify({
             "status": "ok",
@@ -17408,7 +17567,10 @@ data:
                 SELECT COUNT(*)
                 FROM incident_tickets affected
                 WHERE affected.incident_id = i.id
-              ) AS affected_ticket_count
+              ) AS affected_ticket_count,
+              COALESCE(i.user_status_summary, ''),
+              COALESCE(i.user_current_action, ''),
+              COALESCE(i.next_update_hint, '')
             FROM incident_tickets it
             JOIN incidents i ON i.id = it.incident_id
             LEFT JOIN LATERAL (
@@ -17733,6 +17895,9 @@ data:
             "latest_public_update": incident[9],
             "latest_public_update_at": str(incident[10]) if incident[10] else "",
             "affected_ticket_count": int(incident[11] or 0),
+            "user_status_summary": incident[12],
+            "user_current_action": incident[13],
+            "next_update_hint": incident[14],
             "public_updates": incident_public_updates.get(incident[0], []),
         } for incident in incident_rows]
         knowledge_article = None
