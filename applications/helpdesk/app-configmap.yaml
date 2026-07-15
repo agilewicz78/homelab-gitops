@@ -3220,6 +3220,9 @@ data:
         .incident-card.sev3, .incident-banner.sev3, .incident-relation.sev3 { border-left-color: #facc15; }
         .incident-card.sev4, .incident-banner.sev4, .incident-relation.sev4 { border-left-color: #38bdf8; }
         .incident-banner { border-left: 5px solid #64748b; background: rgba(127,29,29,.18); padding: 14px; border-radius: 14px; margin: 14px 0; }
+        .incident-user-status { background: linear-gradient(135deg, rgba(14,165,233,.16), rgba(34,197,94,.10)); }
+        .incident-public-timeline { margin-top: 10px; }
+        .incident-next-step { margin: 12px 0; padding: 12px; border-radius: 12px; background: rgba(15,23,42,.38); border: 1px solid rgba(148,163,184,.22); }
         .incident-relation { border-left: 4px solid #64748b; }
         .incident-meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
         .incident-update-public { border-left: 3px solid #22c55e; }
@@ -9567,6 +9570,73 @@ data:
           }}
           return `${{value}} powiązanych zgłoszeń`;
         }}
+        function incidentUserNextStep(incident) {{
+          const status = incident?.status || "";
+          if (status === "resolved") {{
+            return "Incydent oznaczono jako rozwiązany. Jeżeli problem nadal występuje u Ciebie, dopisz komentarz w tym zgłoszeniu.";
+          }}
+          if (status === "monitoring") {{
+            return "Usługa jest przywrócona lub stabilizowana. Helpdesk monitoruje sytuację i opublikuje kolejną aktualizację, jeśli będzie potrzebna.";
+          }}
+          if (status === "identified") {{
+            return "Przyczyna została zidentyfikowana. Zespół pracuje nad usunięciem problemu albo obejściem.";
+          }}
+          return "Helpdesk analizuje problem. Nie musisz zakładać kolejnego zgłoszenia, bo dalsze publiczne aktualizacje pojawią się tutaj.";
+        }}
+        function incidentPublicUpdatesList(incident) {{
+          const updates = incident?.public_updates || [];
+          if (!updates.length) {{
+            return `<p class="muted">Nie opublikowano jeszcze publicznej aktualizacji incydentu.</p>`;
+          }}
+          return `
+            <div class="timeline incident-public-timeline">
+              ${{updates.map(update => `
+                <div class="event-item incident-update-public">
+                  <strong>${{esc(incidentTimelineTypeLabel(update.update_type))}}</strong>
+                  <span class="muted"> · ${{esc(update.created_at)}} · ${{esc(update.created_by_name || "Helpdesk")}}</span>
+                  <div>${{esc(update.message)}}</div>
+                </div>
+              `).join("")}}
+            </div>
+          `;
+        }}
+        function incidentUserStatusPanel(incident, canOpenCenter = false) {{
+          const latest = incident.latest_public_update
+            ? `
+              <div class="comment incident-update-public">
+                <div class="muted"><strong>Ostatni komunikat Helpdesku</strong> · ${{esc(incident.latest_public_update_at)}}</div>
+                <div>${{esc(incident.latest_public_update)}}</div>
+              </div>
+            `
+            : `<p class="muted">Helpdesk nie opublikował jeszcze publicznego komunikatu dla tego incydentu.</p>`;
+          return `
+            <div class="incident-banner incident-user-status ${{incidentSeverityClass(incident.severity)}}">
+              <div class="muted"><strong>To zgłoszenie jest częścią incydentu.</strong></div>
+              <div class="ticket-section-title">
+                <strong>${{esc(incident.severity)}} · Incydent #${{incident.id}} · ${{esc(incident.title)}}</strong>
+                <span class="pill">${{esc(incidentStatusLabel(incident.status))}}</span>
+              </div>
+              <p>${{esc(incident.summary)}}</p>
+              ${{incident.impact ? `<p class="muted"><strong>Wpływ:</strong> ${{esc(incident.impact)}}</p>` : ""}}
+              <div class="incident-meta">
+                <span class="chip">Status: ${{esc(incidentStatusLabel(incident.status))}}</span>
+                <span class="chip">Zasięg: ${{incidentTicketCountLabel(incident.affected_ticket_count)}}</span>
+                <span class="chip">Aktualizacja: ${{esc(incident.updated_at)}}</span>
+              </div>
+              <div class="incident-next-step">
+                <strong>Co dalej?</strong>
+                <div>${{esc(incidentUserNextStep(incident))}}</div>
+              </div>
+              ${{latest}}
+              <details>
+                <summary>Publiczne aktualizacje incydentu</summary>
+                ${{incidentPublicUpdatesList(incident)}}
+              </details>
+              <p class="muted">Nie musisz tworzyć kolejnego zgłoszenia. Publiczne komunikaty incydentu pojawią się również w komentarzach poniżej.</p>
+              ${{canOpenCenter ? `<button class="btn-secondary btn-small" onclick="renderIncident(${{incident.id}})">Otwórz centrum incydentu</button>` : ""}}
+            </div>
+          `;
+        }}
         function incidentTaskStatusLabel(status) {{
           return status === "done" ? "Wykonane" : "Otwarte";
         }}
@@ -10471,27 +10541,9 @@ data:
             categories: data.meta.categories || [],
             subcategories: data.meta.subcategories || {{}}
           }} : null;
-          const incidentBanners = (data.incidents || []).map(i => `
-            <div class="incident-banner ${{incidentSeverityClass(i.severity)}}">
-              <div class="muted"><strong>Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego.</strong></div>
-              <div class="ticket-section-title">
-                <strong>${{esc(i.severity)}} · Incydent #${{i.id}} · ${{esc(i.title)}}</strong>
-                <span class="pill">${{esc(incidentStatusLabel(i.status))}}</span>
-              </div>
-              <p>${{esc(i.summary)}}</p>
-              ${{i.impact ? `<p class="muted"><strong>Wpływ:</strong> ${{esc(i.impact)}}</p>` : ""}}
-              ${{i.latest_public_update ? `
-                <div class="comment incident-update-public">
-                  <div class="muted"><strong>Ostatnia publiczna aktualizacja</strong> · ${{esc(i.latest_public_update_at)}}</div>
-                  <div>${{esc(i.latest_public_update)}}</div>
-                </div>
-              ` : `<p class="muted">Operator nie opublikował jeszcze publicznej aktualizacji.</p>`}}
-              <p class="muted"><strong>Zasięg incydentu:</strong> ${{incidentTicketCountLabel(i.affected_ticket_count)}}.</p>
-              <p class="muted">Powiązano: ${{esc(i.linked_at)}} · Dowódca: ${{esc(i.commander_name || "Nieprzypisany")}} · aktualizacja incydentu: ${{esc(i.updated_at)}}</p>
-              <p class="muted">Nie musisz tworzyć kolejnego zgłoszenia. Publiczne komunikaty incydentu pojawią się również w komentarzach poniżej.</p>
-              ${{canWorkTickets(me) ? `<button class="btn-secondary btn-small" onclick="renderIncident(${{i.id}})">Otwórz centrum incydentu</button>` : ""}}
-            </div>
-          `).join("");
+          const incidentBanners = (data.incidents || [])
+            .map(i => incidentUserStatusPanel(i, canWorkTickets(me)))
+            .join("");
           const comments = data.comments.map(c => `
             <div class="comment ${{c.visibility === "internal" ? "internal" : ""}}">
               <div class="muted">
@@ -17157,6 +17209,39 @@ data:
               i.updated_at DESC
         """, (ticket_id,))
         incident_rows = cur.fetchall()
+        incident_public_updates = {}
+        incident_ids = [incident[0] for incident in incident_rows]
+        if incident_ids:
+            cur.execute("""
+                SELECT incident_id, update_type, message,
+                       COALESCE(created_by_name, created_by_email, 'Helpdesk'),
+                       created_at
+                FROM (
+                  SELECT
+                    iu.incident_id,
+                    iu.update_type,
+                    iu.message,
+                    iu.created_by_name,
+                    iu.created_by_email,
+                    iu.created_at,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY iu.incident_id
+                      ORDER BY iu.id DESC
+                    ) AS rn
+                  FROM incident_updates iu
+                  WHERE iu.incident_id = ANY(%s)
+                    AND COALESCE(iu.is_public, FALSE) = TRUE
+                ) public_updates
+                WHERE rn <= 5
+                ORDER BY incident_id, created_at DESC
+            """, (incident_ids,))
+            for update in cur.fetchall():
+                incident_public_updates.setdefault(update[0], []).append({
+                    "update_type": update[1],
+                    "message": update[2],
+                    "created_by_name": update[3],
+                    "created_at": str(update[4]),
+                })
         cur.execute("""
             SELECT id, title, status
             FROM knowledge_articles
@@ -17431,6 +17516,7 @@ data:
             "latest_public_update": incident[9],
             "latest_public_update_at": str(incident[10]) if incident[10] else "",
             "affected_ticket_count": int(incident[11] or 0),
+            "public_updates": incident_public_updates.get(incident[0], []),
         } for incident in incident_rows]
         knowledge_article = None
         if knowledge_article_row:

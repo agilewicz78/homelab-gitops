@@ -200,9 +200,13 @@ def main() -> None:
     )
     assert "LEFT JOIN LATERAL" in ticket_detail_api
     assert "latest_public_update" in ticket_detail_api
+    assert "incident_public_updates = {}" in ticket_detail_api
+    assert "ROW_NUMBER() OVER" in ticket_detail_api
+    assert "WHERE rn <= 5" in ticket_detail_api
     assert '"linked_at": str(incident[8])' in ticket_detail_api
     assert "AS affected_ticket_count" in ticket_detail_api
     assert '"affected_ticket_count": int(incident[11] or 0)' in ticket_detail_api
+    assert '"public_updates": incident_public_updates.get(incident[0], [])' in ticket_detail_api
     assert "def similarity_tokens(" in text
     assert "def similarity_score(" in text
     assert "LIMIT 150" in ticket_detail_api
@@ -234,6 +238,9 @@ def main() -> None:
     assert "Checklist działań" in text
     assert "incidentCommandCenter" in text
     assert "incidentResolutionCheckPanel" in text
+    assert "incidentUserStatusPanel" in text
+    assert "incidentUserNextStep" in text
+    assert "incidentPublicUpdatesList" in text
     assert "incidentTaskList" in text
     assert "incidentTimelineList" in text
     assert "submitIncidentTask" in text
@@ -247,6 +254,10 @@ def main() -> None:
     assert "requires_resolution_override" in text
     assert "resolution_override = bool(payload.get(\"resolution_override\"))" in text
     assert "Kontrola zamknięcia" in text
+    assert "To zgłoszenie jest częścią incydentu." in text
+    assert "Co dalej?" in text
+    assert "Publiczne aktualizacje incydentu" in text
+    assert "Ostatni komunikat Helpdesku" in text
     assert "resolution_check: \"Kontrola zamknięcia\"" in text
     assert "Zamknąć incydent mimo tych ostrzeżeń?" in text
     assert "COUNT(DISTINCT task.id) AS task_count" in text
@@ -254,7 +265,7 @@ def main() -> None:
     assert 'name="is_public" checked' in text
     assert "Opublikuj w powiązanych zgłoszeniach" in text
     assert "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}" in text
-    assert "Twoje zgłoszenie jest obsługiwane w ramach incydentu zbiorczego" in text
+    assert "To zgłoszenie jest częścią incydentu." in text
     assert "const incidentRelations = (data.incidents || []).length" in text
     assert "const directTicketRelations = (data.linked_tickets || []).length" in text
     assert "const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length" in text
@@ -403,7 +414,7 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-incident-resolution-check-v1" in deployment_text
+    assert "2026-07-15-user-incident-status-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
