@@ -9654,7 +9654,8 @@ data:
             task_done: "Zamknięto zadanie",
             task_reopened: "Ponownie otwarto zadanie",
             task_deleted: "Usunięto zadanie",
-            resolution_check: "Kontrola zamknięcia"
+            resolution_check: "Kontrola zamknięcia",
+            linked_tickets_resolved: "Rozwiązano powiązane zgłoszenia"
           }};
           return labels[type] || type || "Aktualizacja";
         }}
@@ -9692,9 +9693,36 @@ data:
         function incidentResolutionCheckPanel(check) {{
           const warnings = check?.warnings || [];
           const ready = !warnings.length;
+          const activeTickets = check?.active_tickets || [];
           const items = warnings.length
             ? warnings.map(item => `<li>${{esc(item)}}</li>`).join("")
             : `<li>Wszystkie warunki zamknięcia wyglądają dobrze.</li>`;
+          const activeTicketList = activeTickets.length ? `
+            <div class="watcher-list">
+              ${{activeTickets.map(ticket => `
+                <div class="watcher-item">
+                  <div>
+                    <strong>#${{ticket.id}} · ${{esc(ticket.title)}}</strong>
+                    <div class="watcher-meta">
+                      <span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status)}}</span>
+                      ${{ticket.assigned_to_name ? " · " + esc(ticket.assigned_to_name) : ""}}
+                      ${{ticket.requester_name ? " · zgłaszający: " + esc(ticket.requester_name) : ""}}
+                    </div>
+                  </div>
+                  <button type="button" class="btn-secondary btn-small" onclick="renderTicket(${{ticket.id}})">Otwórz</button>
+                </div>
+              `).join("")}}
+            </div>
+          ` : "";
+          const resolveTicketOption = activeTickets.length ? `
+            <label class="switch-row">
+              <span>
+                <strong>Oznacz aktywne zgłoszenia jako Rozwiązane</strong>
+                <small>Przy zamknięciu incydentu Helpdesk dopisze publiczny komentarz do każdego aktywnego zgłoszenia i pozostawi użytkownikowi możliwość odrzucenia rozwiązania.</small>
+              </span>
+              <span class="switch"><input type="checkbox" name="resolve_linked_tickets"><span class="slider"></span></span>
+            </label>
+          ` : "";
           return `
             <div class="panel-soft">
               <h4>Kontrola zamknięcia</h4>
@@ -9708,6 +9736,7 @@ data:
                 <span class="pill">${{ready ? "Gotowy do zamknięcia" : "Wymaga potwierdzenia"}}</span>
               </div>
               <ul>${{items}}</ul>
+              ${{activeTickets.length ? `<h4>Aktywne zgłoszenia przypisane do incydentu</h4>${{activeTicketList}}${{resolveTicketOption}}` : ""}}
             </div>
           `;
         }}
@@ -9951,8 +9980,10 @@ data:
           `;
           document.getElementById("incidentEditForm")?.addEventListener("submit", async (event) => {{
             event.preventDefault();
-            const payload = Object.fromEntries(new FormData(event.target).entries());
+            const form = event.target;
+            const payload = Object.fromEntries(new FormData(form).entries());
             payload.resolution_override = false;
+            payload.resolve_linked_tickets = !!form.querySelector('[name="resolve_linked_tickets"]')?.checked;
             const updateRes = await api(`/api/incidents/${{i.id}}`, {{ method: "PUT", body: JSON.stringify(payload) }});
             if (!updateRes || !updateRes.ok) {{
               const err = updateRes ? await updateRes.json().catch(() => ({{}})) : {{}};
@@ -9974,14 +10005,26 @@ data:
                   alert(overrideErr.error || "Nie udało się potwierdzić zamknięcia incydentu.");
                   return;
                 }}
-                showToast("Zamknięto incydent #" + i.id, "Operator potwierdził ostrzeżenia kontroli zamknięcia.");
+                const overrideResult = await overrideRes.json().catch(() => ({{}}));
+                const resolvedCount = Number(overrideResult.resolved_linked_ticket_count || 0);
+                showToast(
+                  "Zamknięto incydent #" + i.id,
+                  resolvedCount
+                    ? `Operator potwierdził ostrzeżenia i oznaczył ${{resolvedCount}} powiązanych zgłoszeń jako Rozwiązane.`
+                    : "Operator potwierdził ostrzeżenia kontroli zamknięcia."
+                );
                 await renderIncident(i.id);
                 return;
               }}
               alert(err.error || "Nie udało się zapisać incydentu.");
               return;
             }}
-            showToast("Zaktualizowano incydent #" + i.id);
+            const result = await updateRes.json().catch(() => ({{}}));
+            const resolvedCount = Number(result.resolved_linked_ticket_count || 0);
+            showToast(
+              "Zaktualizowano incydent #" + i.id,
+              resolvedCount ? `Oznaczono ${{resolvedCount}} powiązanych zgłoszeń jako Rozwiązane.` : ""
+            );
             await renderIncident(i.id);
           }});
           const incidentUpdateForm = document.getElementById("incidentUpdateForm");
@@ -14258,6 +14301,30 @@ data:
             warnings.append(
                 f"{active_ticket_count} powiązanych zgłoszeń nadal nie ma statusu Rozwiązane albo Zamknięte."
             )
+        cur.execute("""
+            SELECT
+              t.id,
+              t.title,
+              t.status,
+              COALESCE(t.requester_name, ''),
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, ''),
+              t.updated_at
+            FROM incident_tickets it
+            JOIN tickets t ON t.id = it.ticket_id
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE it.incident_id = %s
+              AND t.status NOT IN ('Rozwiązane', 'Zamknięte')
+            ORDER BY t.updated_at DESC, t.id DESC
+            LIMIT 25
+        """, (incident_id,))
+        active_tickets = [{
+            "id": ticket[0],
+            "title": ticket[1],
+            "status": ticket[2],
+            "requester_name": ticket[3],
+            "assigned_to_name": ticket[4],
+            "updated_at": str(ticket[5]),
+        } for ticket in cur.fetchall()]
         return {
             "ready": not warnings,
             "warnings": warnings,
@@ -14265,8 +14332,81 @@ data:
             "open_task_count": open_task_count,
             "linked_ticket_count": linked_ticket_count,
             "active_ticket_count": active_ticket_count,
+            "active_tickets": active_tickets,
             "public_update_count": public_update_count,
         }
+
+    def resolve_incident_active_tickets(cur, incident_id, incident_title, user):
+        cur.execute("""
+            SELECT t.id, t.title, t.status
+            FROM incident_tickets it
+            JOIN tickets t ON t.id = it.ticket_id
+            WHERE it.incident_id = %s
+              AND t.status NOT IN ('Rozwiązane', 'Zamknięte')
+            ORDER BY t.updated_at DESC, t.id DESC
+        """, (incident_id,))
+        rows = cur.fetchall()
+        resolved_ticket_ids = []
+        for ticket_id, ticket_title, old_status in rows:
+            resolution_summary = (
+                f"Zgłoszenie oznaczono jako rozwiązane razem z incydentem "
+                f"#{incident_id}: {incident_title}."
+            )
+            cur.execute("""
+                UPDATE tickets
+                SET status = 'Rozwiązane',
+                    updated_at = NOW(),
+                    resolution_summary = COALESCE(NULLIF(resolution_summary, ''), %s),
+                    resolution_feedback_decision = NULL,
+                    resolution_feedback_comment = NULL,
+                    resolution_feedback_by_email = NULL,
+                    resolution_feedback_by_name = NULL,
+                    resolution_feedback_at = NULL
+                WHERE id = %s
+                  AND status NOT IN ('Rozwiązane', 'Zamknięte')
+            """, (resolution_summary, ticket_id))
+            if not cur.rowcount:
+                continue
+            add_ticket_status_history(
+                cur,
+                ticket_id,
+                user,
+                old_status,
+                "Rozwiązane",
+                source="incident_resolution",
+            )
+            public_comment = (
+                f"Incydent #{incident_id} ({incident_title}) został oznaczony jako rozwiązany. "
+                "To zgłoszenie oznaczono jako Rozwiązane. "
+                "Jeżeli problem nadal występuje, odrzuć rozwiązanie albo dopisz komentarz."
+            )
+            cur.execute("""
+                INSERT INTO comments (
+                  ticket_id, author, author_email, content, visibility
+                )
+                VALUES (%s, %s, %s, %s, 'public')
+            """, (
+                ticket_id,
+                f"Incident Command Center · {user['name']}",
+                user["email"],
+                public_comment,
+            ))
+            add_ticket_event(
+                cur,
+                ticket_id,
+                user,
+                "status_changed",
+                f"Incydent #{incident_id} oznaczył zgłoszenie jako Rozwiązane.",
+            )
+            create_ticket_notifications(
+                cur,
+                ticket_id,
+                "status_changed",
+                f"Zgłoszenie #{ticket_id} oznaczono jako Rozwiązane razem z incydentem #{incident_id}: {incident_title}.",
+                actor_email=user["email"],
+            )
+            resolved_ticket_ids.append(ticket_id)
+        return resolved_ticket_ids
 
     @app.get("/api/incidents")
     @api_login_required
@@ -14688,6 +14828,7 @@ data:
         status = clean(payload.get("status"))
         commander_email = clean(payload.get("commander_email")).lower()
         resolution_override = bool(payload.get("resolution_override"))
+        resolve_linked_tickets = bool(payload.get("resolve_linked_tickets"))
         if not title or not summary:
             return jsonify({"error": "Tytuł i opis incydentu są wymagane."}), 400
         if severity not in INCIDENT_SEVERITIES or status not in INCIDENT_STATUSES:
@@ -14769,11 +14910,34 @@ data:
                     user["email"],
                     user["name"],
                 ))
+        resolved_linked_ticket_ids = []
+        if status == "resolved" and resolve_linked_tickets:
+            resolved_linked_ticket_ids = resolve_incident_active_tickets(
+                cur,
+                incident_id,
+                title,
+                user,
+            )
+            if resolved_linked_ticket_ids:
+                cur.execute("""
+                    INSERT INTO incident_updates (
+                      incident_id, update_type, message, is_public,
+                      created_by_email, created_by_name
+                    )
+                    VALUES (%s, 'linked_tickets_resolved', %s, FALSE, %s, %s)
+                """, (
+                    incident_id,
+                    f"Oznaczono jako Rozwiązane {len(resolved_linked_ticket_ids)} aktywnych zgłoszeń powiązanych z incydentem.",
+                    user["email"],
+                    user["name"],
+                ))
         log_audit(cur, user, "incident_updated", "incident", incident_id, {
             "severity": severity,
             "status": status,
             "commander_email": resolved_commander_email,
             "resolution_override": resolution_override,
+            "resolve_linked_tickets": resolve_linked_tickets,
+            "resolved_linked_ticket_ids": resolved_linked_ticket_ids,
             "resolution_check": resolution_check,
         })
         conn.commit()
@@ -14783,11 +14947,14 @@ data:
             f"{user['name']} zaktualizował incydent #{incident_id}: {title}",
             "incident_updated",
             None,
-            staff_only=True,
+            staff_only=not bool(resolved_linked_ticket_ids),
+            ticket_ids=resolved_linked_ticket_ids or None,
         )
         return jsonify({
             "status": "ok",
             "resolution_check": resolution_check,
+            "resolved_linked_ticket_count": len(resolved_linked_ticket_ids),
+            "resolved_linked_ticket_ids": resolved_linked_ticket_ids,
         })
 
     @app.post("/api/incidents/<int:incident_id>/updates")

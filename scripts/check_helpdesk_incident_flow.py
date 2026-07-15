@@ -27,6 +27,8 @@ class Cursor:
         self.incident_task_updates = []
         self.incident_task_deletes = []
         self.incident_update_inserts = []
+        self.ticket_status_updates = []
+        self.ticket_status_history_inserts = []
         self.incident_timestamp_updates = 0
         self.ticket_timestamp_updates = 0
 
@@ -46,6 +48,10 @@ class Cursor:
             self.incident_task_deletes.append(params)
         elif "INSERT INTO incident_updates" in self.last_query:
             self.incident_update_inserts.append(params)
+        elif "UPDATE tickets SET status = 'Rozwiązane'" in self.last_query:
+            self.ticket_status_updates.append(params)
+        elif "INSERT INTO ticket_status_history" in self.last_query:
+            self.ticket_status_history_inserts.append(params)
         elif "UPDATE incidents SET updated_at = NOW()" in self.last_query:
             self.incident_timestamp_updates += 1
         elif "UPDATE tickets SET updated_at = NOW()" in self.last_query:
@@ -78,6 +84,16 @@ class Cursor:
 
     def fetchall(self):
         if "SELECT id, title, status FROM tickets" in self.last_query:
+            return [
+                (101, "Cannot use mail", "Nowe"),
+                (102, "Outlook cannot send", "W toku"),
+            ]
+        if "FROM incident_tickets it JOIN tickets t" in self.last_query and "t.status NOT IN" in self.last_query:
+            if "COALESCE(t.requester_name" in self.last_query:
+                return [
+                    (101, "Cannot use mail", "Nowe", "Alice", "Operator", "2026-06-11 18:05:00"),
+                    (102, "Outlook cannot send", "W toku", "Bob", "", "2026-06-11 18:04:00"),
+                ]
             return [
                 (101, "Cannot use mail", "Nowe"),
                 (102, "Outlook cannot send", "W toku"),
@@ -143,6 +159,9 @@ def main():
         "get_conn": get_conn,
         "jsonify": lambda value: value,
         "add_ticket_event": lambda *args, **kwargs: None,
+        "add_ticket_status_history": lambda cur, ticket_id, user, old_status, new_status, **kwargs: cur.ticket_status_history_inserts.append(
+            (ticket_id, old_status, new_status, kwargs.get("source"))
+        ),
         "create_ticket_notifications": lambda cur, ticket_id, event_type, message, actor_email=None: notifications.append(
             (ticket_id, event_type)
         ),
@@ -156,6 +175,7 @@ def main():
     exec(
         load_functions(
             "incident_resolution_check",
+            "resolve_incident_active_tickets",
             "api_create_incident",
             "api_update_incident",
             "api_add_incident_update",
@@ -275,6 +295,28 @@ def main():
     assert override_cursor.incident_timestamp_updates == 0
     assert override_cursor.incident_update_inserts[-1][1].startswith("Kontrola zamknięcia:")
     assert override_cursor.incident_update_inserts[-1][2] == user["email"]
+
+    Request.payload = {
+        "title": "Mail outage",
+        "summary": "Multiple users cannot send mail.",
+        "impact": "Customer communication is blocked.",
+        "severity": "SEV1",
+        "status": "resolved",
+        "commander_email": "",
+        "resolution_override": True,
+        "resolve_linked_tickets": True,
+    }
+    body = namespace["api_update_incident"](user, 7)
+    resolve_cursor = connections[-1].cursor_value
+    assert body["status"] == "ok"
+    assert body["resolved_linked_ticket_count"] == 2
+    assert body["resolved_linked_ticket_ids"] == [101, 102]
+    assert len(resolve_cursor.ticket_status_updates) == 2
+    assert len(resolve_cursor.ticket_status_history_inserts) == 2
+    assert len(resolve_cursor.comment_inserts) == 2
+    assert resolve_cursor.incident_update_inserts[-1][1].startswith("Oznaczono jako Rozwiązane 2 aktywnych zgłoszeń")
+    assert events[-1][1]["ticket_ids"] == [101, 102]
+    assert events[-1][1]["staff_only"] is False
 
     Request.payload = {"ticket_id": 103}
     body, status = namespace["api_link_incident_ticket"](user, 7)
