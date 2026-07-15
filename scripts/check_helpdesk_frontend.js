@@ -283,6 +283,9 @@ for (const fragment of requiredAutomationDashboard) {
 }
 
 const requiredOperatorCenter = [
+  "renderStart",
+  "renderAppSidebar",
+  "renderWorkspaceShell",
   "renderOperatorCenter",
   "operatorCenterMetric",
   "operatorCenterTicketSection",
@@ -293,10 +296,17 @@ const requiredOperatorCenter = [
   "/api/operator-center",
   "Centrum pracy operatora",
   "Centrum operatora",
-  "Moje zadania",
+  "operator-cockpit-shell",
+  "operator-sidebar",
+  "operator-board",
+  "Moje zgłoszenia",
   "Wraca do operatora",
   "Nowe nieprzypisane",
-  "Widok odświeża się przez WebSocket",
+  "Pilne / po SLA",
+  "Czekają na użytkownika",
+  "Zgłoszenia bez odpowiedzi",
+  "Ostatnie zdarzenia",
+  "first_response",
   "workflow_rule_notification",
 ];
 for (const fragment of requiredOperatorCenter) {

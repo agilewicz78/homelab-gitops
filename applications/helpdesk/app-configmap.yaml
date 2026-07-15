@@ -3587,6 +3587,31 @@ data:
       .module-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
       .module-actions button { margin-top: 0; padding: 8px 10px; font-size: 13px; }
       .module-actions .primary-action { background: linear-gradient(135deg, #0284c7, #22c55e); color: white; border-color: transparent; }
+      .operator-cockpit-shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
+      .operator-sidebar { position: sticky; top: 14px; display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 22px; padding: 14px; background: rgba(15,23,42,.76); box-shadow: 0 18px 40px rgba(0,0,0,.20); }
+      .operator-sidebar-title { padding: 7px 8px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
+      .operator-sidebar button { width: 100%; margin-top: 0; text-align: left; justify-content: flex-start; border-radius: 13px; padding: 10px 12px; background: transparent; border: 1px solid transparent; color: var(--muted); }
+      .operator-sidebar button:hover { color: var(--text); border-color: rgba(56,189,248,.38); background: rgba(31,41,55,.55); }
+      .operator-sidebar button.active { color: #fff; background: linear-gradient(135deg, rgba(2,132,199,.88), rgba(34,197,94,.76)); border-color: transparent; box-shadow: 0 12px 24px rgba(0,0,0,.22); }
+      .operator-sidebar .sidebar-primary { margin-top: 8px; color: #fff; background: rgba(2,132,199,.26); border-color: rgba(56,189,248,.42); }
+      .operator-cockpit-main { display: grid; gap: 14px; min-width: 0; }
+      .operator-hero { border: 1px solid rgba(56,189,248,.32); border-radius: 24px; padding: 20px; background: radial-gradient(circle at top left, rgba(56,189,248,.18), transparent 32%), linear-gradient(135deg, rgba(15,23,42,.95), rgba(31,41,55,.70)); box-shadow: 0 22px 54px rgba(0,0,0,.26); }
+      .operator-hero h2 { margin: 0; }
+      .operator-hero p { margin: 8px 0 0; color: var(--muted); max-width: 760px; line-height: 1.5; }
+      .operator-command-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 14px; }
+      .operator-command-row .quick-search { flex: 1 1 320px; margin-top: 0; background: rgba(15,23,42,.78); border-color: rgba(56,189,248,.28); }
+      .operator-summary-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+      .operator-summary-strip .dashboard-card { padding: 14px; border-radius: 17px; }
+      .operator-summary-strip .dashboard-card .num { font-size: 28px; }
+      .operator-board { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 14px; align-items: start; }
+      .operator-queues { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+      .operator-work-card { border: 1px solid var(--border); border-radius: 20px; padding: 14px; background: rgba(31,41,55,.54); min-width: 0; }
+      .operator-work-card.priority { border-color: rgba(248,113,113,.44); background: rgba(127,29,29,.16); }
+      .operator-work-card.waiting { border-color: rgba(250,204,21,.40); background: rgba(113,63,18,.14); }
+      .operator-work-card h3 { margin: 0; }
+      .operator-work-card .notification-list { max-height: 330px; }
+      .operator-side-panel { display: grid; gap: 14px; }
+      .operator-side-panel .card { margin: 0; }
       .dashboard-list { display: grid; gap: 9px; }
       .dashboard-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--border); background: rgba(31,41,55,.52); border-radius: 14px; padding: 11px 12px; cursor: pointer; }
       .dashboard-row:hover { border-color: rgba(56,189,248,.55); }
@@ -3605,6 +3630,7 @@ data:
       .sla-calendar-meta { color: var(--muted); font-size: 13px; margin-top: 6px; line-height: 1.5; }
       .sla-calendar-empty { color: var(--muted); margin: 0; }
       .hidden { display: none; }
+      @media (max-width: 980px) { .operator-cockpit-shell, .operator-board, .operator-queues { grid-template-columns: 1fr; } .operator-sidebar { position: static; } }
       @media (max-width: 860px) { header, .topbar { flex-direction: column; } .grid { grid-template-columns: 1fr; } table { font-size: 14px; } }
       @media (max-width: 720px) {
         .workflow-diagram-lane { flex-direction: column; overflow-x: visible; }
@@ -4211,6 +4237,34 @@ data:
             </section>
           `;
         }}
+        function sidebarItem(key, label, action, active = "", visible = true) {{
+          if (!visible) return "";
+          const activeClass = active === key ? " active" : "";
+          return `<button class="${{activeClass}}" onclick="${{action}}">${{esc(label)}}</button>`;
+        }}
+        function renderAppSidebar(me, active = "") {{
+          const canOpenAdmin = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me);
+          return `
+            <aside class="operator-sidebar">
+              <div class="operator-sidebar-title">Helpdesk</div>
+              ${{sidebarItem("operator-center", "Centrum", "renderOperatorCenter();return false;", active, canViewOperatorCenter(me))}}
+              ${{sidebarItem("tickets", "Zgłoszenia", "renderHome();return false;", active, true)}}
+              ${{sidebarItem("incidents", "Incydenty", "renderIncidents();return false;", active, canWorkTickets(me))}}
+              ${{sidebarItem("knowledge", "Baza wiedzy", "renderKnowledgeArticles();return false;", active, true)}}
+              ${{sidebarItem("reports", "Raporty", "renderDashboard();return false;", active, canViewDashboard(me) || canViewReports(me) || canViewSlaCalendar(me))}}
+              ${{sidebarItem("administration", "Administracja", "renderAdministration();return false;", active, canOpenAdmin)}}
+              <button class="sidebar-primary" onclick="renderNewTicket();return false;">+ Nowe zgłoszenie</button>
+            </aside>
+          `;
+        }}
+        function renderWorkspaceShell(me, active, content) {{
+          return `
+            <div class="operator-cockpit-shell">
+              ${{renderAppSidebar(me, active)}}
+              <main class="operator-cockpit-main">${{content}}</main>
+            </div>
+          `;
+        }}
         function roleBadges(roles) {{
           const list = Array.isArray(roles) && roles.length ? roles : ["user"];
           return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
@@ -4409,6 +4463,8 @@ data:
         function savePriorityFilter(value) {{ sessionStorage.setItem("helpdesk_priority_filter", value || "all"); }}
         function loadSlaFilter() {{ return sessionStorage.getItem("helpdesk_sla_filter") || "all"; }}
         function saveSlaFilter(value) {{ sessionStorage.setItem("helpdesk_sla_filter", value || "all"); }}
+        function loadFirstResponseFilter() {{ return sessionStorage.getItem("helpdesk_first_response_filter") || "all"; }}
+        function saveFirstResponseFilter(value) {{ sessionStorage.setItem("helpdesk_first_response_filter", value || "all"); }}
         function loadTicketCategoryFilter() {{ return sessionStorage.getItem("helpdesk_ticket_category_filter") || "all"; }}
         function saveTicketCategoryFilter(value) {{ sessionStorage.setItem("helpdesk_ticket_category_filter", value || "all"); }}
         function loadTicketSubcategoryFilter() {{ return sessionStorage.getItem("helpdesk_ticket_subcategory_filter") || "all"; }}
@@ -4449,6 +4505,7 @@ data:
         function setAssignedFilter(value) {{ saveAssignedFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function setPriorityFilter(value) {{ savePriorityFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function setSlaFilter(value) {{ saveSlaFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
+        function setFirstResponseFilter(value) {{ saveFirstResponseFilter(value); resetTicketPage(); renderHome(loadStatusFilters()); }}
         function setTicketCategoryFilter(value) {{
           saveTicketCategoryFilter(value || "all");
           saveTicketSubcategoryFilter("all");
@@ -4539,6 +4596,7 @@ data:
           saveStatusFilters([]);
           savePriorityFilter("all");
           saveSlaFilter("all");
+          saveFirstResponseFilter("all");
           saveTicketCategoryFilter("all");
           saveTicketSubcategoryFilter("all");
           saveTicketRequesterFilter("");
@@ -4558,6 +4616,7 @@ data:
           saveStatusFilters([]);
           savePriorityFilter("all");
           saveSlaFilter("all");
+          saveFirstResponseFilter("all");
           saveTicketCategoryFilter("all");
           saveTicketSubcategoryFilter("all");
           saveTicketRequesterFilter("");
@@ -4580,30 +4639,35 @@ data:
           }} else if (view === "waiting_user") {{
             saveAssignedFilter("all");
             saveStatusFilters(["Oczekuje na użytkownika"]);
+          }} else if (view === "no_response") {{
+            saveAssignedFilter("all");
+            saveFirstResponseFilter("no_response");
           }} else {{
             saveAssignedFilter("all");
           }}
           renderHome(loadStatusFilters());
         }}
-        function detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
+        function detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, firstResponseFilter, searchQuery) {{
           if (!canWorkTickets(me)) return "";
           const statusKey = (filters || []).join("|");
           const noPriority = priorityFilter === "all";
+          const noFirstResponse = firstResponseFilter === "all";
           const noSearch = !searchQuery;
-          if (assignedFilter === "me" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "queue";
-          if (assignedFilter === "unassigned" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "unassigned";
-          if (assignedFilter === "all" && statusKey === "Nowe" && noPriority && slaFilter === "all" && noSearch) return "new";
-          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "overdue" && noSearch) return "overdue";
-          if (assignedFilter === "all" && statusKey === "Oczekuje na użytkownika" && noPriority && slaFilter === "all" && noSearch) return "waiting_user";
-          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "all" && noSearch) return "all";
+          if (assignedFilter === "me" && !statusKey && noPriority && slaFilter === "all" && noFirstResponse && noSearch) return "queue";
+          if (assignedFilter === "unassigned" && !statusKey && noPriority && slaFilter === "all" && noFirstResponse && noSearch) return "unassigned";
+          if (assignedFilter === "all" && statusKey === "Nowe" && noPriority && slaFilter === "all" && noFirstResponse && noSearch) return "new";
+          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "overdue" && noFirstResponse && noSearch) return "overdue";
+          if (assignedFilter === "all" && statusKey === "Oczekuje na użytkownika" && noPriority && slaFilter === "all" && noFirstResponse && noSearch) return "waiting_user";
+          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "all" && firstResponseFilter === "no_response" && noSearch) return "no_response";
+          if (assignedFilter === "all" && !statusKey && noPriority && slaFilter === "all" && noFirstResponse && noSearch) return "all";
           return "";
         }}
         function workViewButton(view, label, activeView) {{
           return `<button type="button" class="work-view-btn ${{activeView === view ? "active" : ""}}" onclick="applyWorkView('${{view}}')">${{label}}</button>`;
         }}
-        function renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery) {{
+        function renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, firstResponseFilter, searchQuery) {{
           if (!canWorkTickets(me)) return "";
-          const activeView = detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
+          const activeView = detectWorkView(me, filters, assignedFilter, priorityFilter, slaFilter, firstResponseFilter, searchQuery);
           return `
             <div class="work-views">
               ${{workViewButton("queue", "Moja kolejka", activeView)}}
@@ -4611,6 +4675,7 @@ data:
               ${{workViewButton("new", "Nowe", activeView)}}
               ${{workViewButton("overdue", "SLA przekroczone", activeView)}}
               ${{workViewButton("waiting_user", "Oczekuje na użytkownika", activeView)}}
+              ${{workViewButton("no_response", "Bez odpowiedzi", activeView)}}
               ${{workViewButton("all", "Wszystkie", activeView)}}
             </div>
           `;
@@ -4635,10 +4700,23 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderHome();return false;">Start</a> · <a href="#" onclick="renderProfile();return false;">Profil</a> · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderStart();return false;">Start</a> · <a href="#" onclick="renderProfile();return false;">Profil</a> · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           await loadNotifications();
           return data;
+        }}
+        async function renderStart() {{
+          const me = await loadMe();
+          if (!me) return;
+          if (canViewOperatorCenter(me)) {{
+            await renderOperatorCenter();
+            return;
+          }}
+          if (canViewUserPortal(me)) {{
+            await renderUserPortal();
+            return;
+          }}
+          await renderHome();
         }}
         async function logout() {{
           await api("/api/logout", {{ method: "POST" }});
@@ -5110,15 +5188,18 @@ data:
             </button>
           `;
         }}
-        function operatorCenterTicketSection(title, items, emptyText, actionHtml = "") {{
+        function operatorCenterTicketSection(title, items, emptyText, actionHtml = "", tone = "") {{
           const rows = (items || []).map(operatorCenterTicketCard).join("");
+          const count = (items || []).length;
+          const toneClass = tone ? ` ${{tone}}` : "";
           return `
-            <section class="card">
+            <section class="operator-work-card${{toneClass}}">
               <div class="ticket-section-title">
                 <div>
-                  <strong>${{esc(title)}}</strong>
+                  <h3>${{esc(title)}}</h3>
                   <div class="attachment-upload-hint">${{esc(emptyText)}}</div>
                 </div>
+                <span class="counter">${{Number(count || 0)}}</span>
                 ${{actionHtml}}
               </div>
               <div class="notification-list" style="margin-top:12px">
@@ -5174,6 +5255,7 @@ data:
           saveAssignedFilter("all");
           savePriorityFilter("all");
           saveSlaFilter("all");
+          saveFirstResponseFilter("all");
           saveTicketSearch("");
           saveTicketCategoryFilter(category || "all");
           saveTicketSubcategoryFilter(subcategory || "all");
@@ -5194,8 +5276,8 @@ data:
             <section class="card">
               <div class="ticket-section-title">
                 <div>
-                  <strong>Powiadomienia</strong>
-                  <div class="attachment-upload-hint">Nieprzeczytane: ${{Number(unreadCount || 0)}}. Panel powiadomień nadal działa w prawym górnym rogu.</div>
+                  <strong>Ostatnie zdarzenia</strong>
+                  <div class="attachment-upload-hint">Nieprzeczytane: ${{Number(unreadCount || 0)}}. Najnowsze sygnały z pracy Helpdesku.</div>
                 </div>
                 <button class="btn-secondary btn-small" onclick="toggleNotifications()">Otwórz panel</button>
               </div>
@@ -5225,41 +5307,43 @@ data:
           }}
           const summary = data.summary || {{}};
           const sections = data.sections || {{}};
-          appEl.innerHTML = `
-            <section class="card">
-              <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
+          const cockpitContent = `
+            <section class="operator-hero">
               <h2>Centrum pracy operatora</h2>
-              <p class="muted">Najważniejsze rzeczy do obsługi teraz. Widok odświeża się przez WebSocket i korzysta z istniejących powiadomień Helpdesku.</p>
-              <div class="actions">
+              <p>Najważniejsze rzeczy do obsługi teraz: nowe nieprzypisane zgłoszenia, Twoja kolejka, pilne SLA, sprawy bez pierwszej odpowiedzi, aktywne incydenty i ostatnie zdarzenia.</p>
+              <div class="operator-command-row">
+                <input class="quick-search" placeholder="Szukaj: #2415, poczta, użytkownik, incydent, po SLA..." onkeydown="if(event.key === 'Enter') {{ saveTicketSearch(this.value.trim()); renderHome([]); }}">
                 <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
                 <button class="btn-secondary" onclick="applyWorkView('queue')">Moja kolejka</button>
                 <button class="btn-secondary" onclick="applyWorkView('unassigned')">Nieprzypisane</button>
-                <button class="btn-secondary" onclick="applyWorkView('overdue')">SLA przekroczone</button>
-                <button class="btn-secondary" onclick="renderIncidents()">Incydenty</button>
+                <button class="btn-secondary" onclick="applyWorkView('no_response')">Bez odpowiedzi</button>
               </div>
               <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie odświeżenie: ${{esc(data.generated_at || "")}}</div>
             </section>
-            <section class="dashboard-grid">
+            <section class="operator-summary-strip">
               ${{operatorCenterMetric("Moje otwarte", summary.my_open, "Zgłoszenia przypisane do Ciebie.", "applyWorkView('queue')")}}
               ${{operatorCenterMetric("Wymaga uwagi", summary.my_attention, "Priorytet, SLA albo odpowiedź użytkownika.", "applyWorkView('queue')")}}
               ${{operatorCenterMetric("Nieprzypisane", summary.unassigned, "Kolejka do przejęcia.", "applyWorkView('unassigned')")}}
               ${{operatorCenterMetric("SLA przekroczone", summary.overdue_sla, "Otwarte zgłoszenia po SLA.", "applyWorkView('overdue')")}}
-              ${{operatorCenterMetric("Wraca do mnie", summary.returning_to_operator, "Użytkownik odpisał w Twoim zgłoszeniu.", "applyWorkView('queue')")}}
+              ${{operatorCenterMetric("Bez odpowiedzi", summary.no_response, "Zgłoszenia bez pierwszej odpowiedzi.", "applyWorkView('no_response')")}}
             </section>
-            <div class="grid">
-              ${{operatorCenterTicketSection("Moje zadania", sections.my_tickets || [], "Brak otwartych zgłoszeń przypisanych do Ciebie.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Otwórz kolejkę</button>`)}}
-              ${{operatorCenterTicketSection("Pilne", sections.urgent || [], "Brak pilnych zgłoszeń według SLA, priorytetu i pierwszej reakcji.", `<button class="btn-secondary btn-small" onclick="applyWorkView('overdue')">Filtr SLA</button>`)}}
+            <div class="operator-board">
+              <section class="operator-queues">
+                ${{operatorCenterTicketSection("Nowe nieprzypisane", sections.unassigned || [], "Kolejka do przejęcia przez operatora.", `<button class="btn-secondary btn-small" onclick="applyWorkView('unassigned')">Otwórz listę</button>`)}}
+                ${{operatorCenterTicketSection("Moje zgłoszenia", sections.my_tickets || [], "Twoja aktywna kolejka pracy.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Otwórz kolejkę</button>`)}}
+                ${{operatorCenterTicketSection("Pilne / po SLA", sections.urgent || [], "SLA, priorytet albo pierwsza reakcja wymagają uwagi.", `<button class="btn-secondary btn-small" onclick="applyWorkView('overdue')">Filtr SLA</button>`, "priority")}}
+                ${{operatorCenterTicketSection("Czekają na użytkownika", sections.waiting_for_user || [], "Sprawy, w których potrzebna jest odpowiedź użytkownika.", `<button class="btn-secondary btn-small" onclick="applyWorkView('waiting_user')">Pokaż</button>`, "waiting")}}
+                ${{operatorCenterTicketSection("Zgłoszenia bez odpowiedzi", sections.no_response || [], "Jeszcze nie zarejestrowano pierwszej odpowiedzi operatora.", `<button class="btn-secondary btn-small" onclick="applyWorkView('no_response')">Pokaż</button>`, "priority")}}
+                ${{operatorCenterTicketSection("Wraca do operatora", sections.returning_to_operator || [], "Użytkownik odpisał w zgłoszeniu przypisanym do Ciebie.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Moja kolejka</button>`)}}
+              </section>
+              <aside class="operator-side-panel">
+                ${{operatorCenterIncidentList(data.incidents || [])}}
+                ${{operatorCenterSuggestionList(data.suggestions || [])}}
+                ${{operatorCenterNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
+              </aside>
             </div>
-            <div class="grid">
-              ${{operatorCenterTicketSection("Nowe nieprzypisane", sections.unassigned || [], "Brak otwartych nieprzypisanych zgłoszeń.", `<button class="btn-secondary btn-small" onclick="applyWorkView('unassigned')">Otwórz listę</button>`)}}
-              ${{operatorCenterTicketSection("Wraca do operatora", sections.returning_to_operator || [], "Brak zgłoszeń, w których ostatnio odpisał użytkownik.", `<button class="btn-secondary btn-small" onclick="applyWorkView('queue')">Moja kolejka</button>`)}}
-            </div>
-            <div class="grid">
-              ${{operatorCenterIncidentList(data.incidents || [])}}
-              ${{operatorCenterSuggestionList(data.suggestions || [])}}
-            </div>
-            ${{operatorCenterNotificationList(data.notifications || [], summary.unread_notifications || 0)}}
           `;
+          appEl.innerHTML = renderWorkspaceShell(me, "operator-center", cockpitContent);
         }}
         function dashboardPercent(count, total) {{
           const c = Number(count || 0);
@@ -5295,6 +5379,7 @@ data:
           saveAssignedFilter("all");
           savePriorityFilter("all");
           saveSlaFilter("all");
+          saveFirstResponseFilter("all");
           saveTicketSearch("");
           resetTicketPage();
           if (kind === "status") {{
@@ -10315,6 +10400,7 @@ data:
           const assignedFilter = canWorkTickets(me) ? loadAssignedFilter(me) : "all";
           const priorityFilter = loadPriorityFilter();
           const slaFilter = loadSlaFilter();
+          const firstResponseFilter = loadFirstResponseFilter();
           const categoryFilter = loadTicketCategoryFilter();
           const subcategoryFilter = loadTicketSubcategoryFilter();
           const requesterFilter = loadTicketRequesterFilter();
@@ -10332,6 +10418,7 @@ data:
           if (canWorkTickets(me)) params.set("assigned", assignedFilter);
           if (priorityFilter && priorityFilter !== "all") params.set("priority", priorityFilter);
           if (slaFilter && slaFilter !== "all") params.set("sla", slaFilter);
+          if (firstResponseFilter && firstResponseFilter !== "all") params.set("first_response", firstResponseFilter);
           if (categoryFilter && categoryFilter !== "all") params.set("category", categoryFilter);
           if (subcategoryFilter && subcategoryFilter !== "all") params.set("subcategory", subcategoryFilter);
           if (requesterFilter) params.set("requester", requesterFilter);
@@ -10363,6 +10450,7 @@ data:
             + (canWorkTickets(me) && assignedFilter !== "all" ? 1 : 0)
             + (priorityFilter !== "all" ? 1 : 0)
             + (slaFilter !== "all" ? 1 : 0)
+            + (firstResponseFilter !== "all" ? 1 : 0)
             + (categoryFilter !== "all" ? 1 : 0)
             + (subcategoryFilter !== "all" ? 1 : 0)
             + (requesterFilter ? 1 : 0)
@@ -10376,6 +10464,8 @@ data:
           if (canWorkTickets(me) && assignedFilter !== "all") filterSummary.push(`operator: ${{assignedFilterLabel(assignedFilter, data.operators || [])}}`);
           if (priorityFilter !== "all") filterSummary.push(`priorytet: ${{priorityFilter}}`);
           if (slaFilter !== "all") filterSummary.push(`SLA: ${{slaFilterLabel(slaFilter)}}`);
+          if (firstResponseFilter === "no_response") filterSummary.push("reakcja: bez odpowiedzi");
+          if (firstResponseFilter === "responded") filterSummary.push("reakcja: udzielona");
           if (categoryFilter !== "all") filterSummary.push(`kategoria: ${{categoryFilter}}`);
           if (subcategoryFilter !== "all") filterSummary.push(`podkategoria: ${{subcategoryFilter}}`);
           if (requesterFilter) filterSummary.push(`zgłaszający: ${{requesterFilter}}`);
@@ -10420,6 +10510,15 @@ data:
                 <option value="none" ${{slaFilter === "none" ? "selected" : ""}}>Brak SLA</option>
               </select>
             </div>`;
+          const firstResponseSelect = `
+            <div class="filter-field">
+              <label>Pierwsza odpowiedź</label>
+              <select onchange="setFirstResponseFilter(this.value)">
+                <option value="all" ${{firstResponseFilter === "all" ? "selected" : ""}}>Wszystkie</option>
+                <option value="no_response" ${{firstResponseFilter === "no_response" ? "selected" : ""}}>Bez odpowiedzi</option>
+                <option value="responded" ${{firstResponseFilter === "responded" ? "selected" : ""}}>Odpowiedź udzielona</option>
+              </select>
+            </div>`;
           const categoriesForFilter = Array.isArray(data.categories) ? data.categories : Object.keys(data.categories || {{}});
           const categorySelect = `
             <div class="filter-field">
@@ -10450,7 +10549,7 @@ data:
               <div class="filter-field"><label>Aktualizacja od</label><input type="date" value="${{esc(updatedFrom)}}" onchange="setTicketDateFilter('updated_from', this.value)"></div>
               <div class="filter-field"><label>Aktualizacja do</label><input type="date" value="${{esc(updatedTo)}}" onchange="setTicketDateFilter('updated_to', this.value)"></div>
             </div>`;
-          const workViewsHtml = renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, searchQuery);
+          const workViewsHtml = renderWorkViews(me, filters, assignedFilter, priorityFilter, slaFilter, firstResponseFilter, searchQuery);
           const searchSortControls = `
             <div class="filter-grid" style="margin-top:14px">
               <div class="filter-field" style="grid-column: span 2">
@@ -10517,8 +10616,7 @@ data:
                 ${{buildPaginationButtons(pagination)}}
               </div>
             </div>`;
-          appEl.innerHTML = `
-            ${{renderAppNavigation(me, "tickets")}}
+          const homeContent = `
             <section class="stats">
               <div class="stat"><div class="num">${{data.stats.total}}</div><div class="label">${{scope}}</div></div>
               <div class="stat"><div class="num">${{data.stats.new}}</div><div class="label">Nowe</div></div>
@@ -10557,6 +10655,7 @@ data:
                   ${{categorySelect}}
                   ${{subcategorySelect}}
                   ${{slaSelect}}
+                  ${{firstResponseSelect}}
                   <div class="filter-field">
                     <label>&nbsp;</label>
                     <button class="btn-secondary" onclick="clearAllFilters()">Wyczyść filtry</button>
@@ -10576,6 +10675,9 @@ data:
               </table>
               ${{pageControls}}
             </section>`;
+          appEl.innerHTML = canViewOperatorCenter(me)
+            ? renderWorkspaceShell(me, "tickets", homeContent)
+            : homeContent;
         }}
         async function renderNewTicket() {{
           currentView = {{ name: "new-ticket", ticketId: null }};
@@ -11530,7 +11632,7 @@ data:
             await renderTicket(reopenedId);
           }});
         }}
-        renderHome();
+        renderStart();
       </script>
     </body>
     </html>
@@ -15727,6 +15829,7 @@ data:
         assigned_filter = clean(request.args.get("assigned")) or ""
         priority_filter = clean(request.args.get("priority")) or "all"
         sla_filter = clean(request.args.get("sla")) or "all"
+        first_response_filter = clean(request.args.get("first_response")) or "all"
         category_filter = clean(request.args.get("category")) or "all"
         subcategory_filter = clean(request.args.get("subcategory")) or "all"
         requester_filter = clean(request.args.get("requester")) or ""
@@ -15754,6 +15857,9 @@ data:
         valid_sla_filters = ["all", "ok", "warning", "overdue", "done", "none"]
         if sla_filter not in valid_sla_filters:
             return jsonify({"error": "invalid sla filter"}), 400
+        valid_first_response_filters = ["all", "no_response", "responded"]
+        if first_response_filter not in valid_first_response_filters:
+            return jsonify({"error": "invalid first_response filter"}), 400
         if category_filter != "all" and category_filter not in CATEGORIES:
             return jsonify({"error": "invalid category filter"}), 400
         all_subcategories = sorted({s for values in SUBCATEGORIES.values() for s in values})
@@ -15849,6 +15955,10 @@ data:
             base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at >= NOW() AND t.sla_due_at <= NOW() + INTERVAL '4 hours'")
         elif sla_filter == "ok":
             base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.sla_due_at IS NOT NULL AND t.sla_due_at > NOW() + INTERVAL '4 hours'")
+        if first_response_filter == "no_response":
+            base_clauses.append("t.status NOT IN ('Rozwiązane', 'Zamknięte') AND t.first_response_at IS NULL")
+        elif first_response_filter == "responded":
+            base_clauses.append("t.first_response_at IS NOT NULL")
         base_where_sql = "WHERE " + " AND ".join(base_clauses) if base_clauses else ""
         filtered_clauses = list(base_clauses)
         filtered_params = list(base_params)
@@ -15986,10 +16096,12 @@ data:
             "categories": SUBCATEGORIES,
             "operators": operators,
             "sla_options": ["all", "ok", "warning", "overdue", "done", "none"],
+            "first_response_options": ["all", "no_response", "responded"],
             "selected_statuses": status_filters,
             "selected_assigned": assigned_filter,
             "selected_priority": priority_filter,
             "selected_sla": sla_filter,
+            "selected_first_response": first_response_filter,
             "selected_category": category_filter,
             "selected_subcategory": subcategory_filter,
             "requester": requester_filter,
@@ -16370,7 +16482,15 @@ data:
                 WHERE {open_ticket_sql}
                   AND lower(COALESCE(t.assigned_to_email, '')) = lower(%s)
                   AND lower(COALESCE(lp.author_email, '')) = lower(t.requester_email)
-              ) AS returning_to_operator
+              ) AS returning_to_operator,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND t.status = 'Oczekuje na użytkownika'
+              ) AS waiting_for_user,
+              COUNT(*) FILTER (
+                WHERE {open_ticket_sql}
+                  AND t.first_response_at IS NULL
+              ) AS no_response
             FROM tickets t
             LEFT JOIN latest_public_comment lp ON lp.ticket_id = t.id
         """, (user["email"], user["email"], user["email"]))
@@ -16405,6 +16525,16 @@ data:
               AND lower(COALESCE(lp.author_email, '')) = lower(t.requester_email)
             """,
             [user["email"]],
+            6,
+        )
+        waiting_for_user = ticket_rows(
+            f"WHERE {open_ticket_sql} AND t.status = %s",
+            ["Oczekuje na użytkownika"],
+            6,
+        )
+        no_response = ticket_rows(
+            f"WHERE {open_ticket_sql} AND t.first_response_at IS NULL",
+            [],
             6,
         )
 
@@ -16492,6 +16622,8 @@ data:
                 "overdue_sla": summary_row[3] or 0,
                 "first_response_overdue": summary_row[4] or 0,
                 "returning_to_operator": summary_row[5] or 0,
+                "waiting_for_user": summary_row[6] or 0,
+                "no_response": summary_row[7] or 0,
                 "unread_notifications": unread_notifications,
             },
             "sections": {
@@ -16499,6 +16631,8 @@ data:
                 "urgent": urgent,
                 "unassigned": unassigned,
                 "returning_to_operator": returning_to_operator,
+                "waiting_for_user": waiting_for_user,
+                "no_response": no_response,
             },
             "incidents": incidents,
             "suggestions": suggestions,
