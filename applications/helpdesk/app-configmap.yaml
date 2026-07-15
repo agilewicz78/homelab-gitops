@@ -3579,6 +3579,14 @@ data:
       .dashboard-card.active { border-color: rgba(34,197,94,.75); background: linear-gradient(135deg, rgba(2,132,199,.30), rgba(34,197,94,.22)); box-shadow: 0 14px 28px rgba(0,0,0,.22); }
       .dashboard-card .num { font-size: 34px; font-weight: 900; line-height: 1; }
       .dashboard-card .label { margin-top: 7px; color: var(--muted); font-size: 14px; }
+      .module-nav { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin: 14px 0 4px; }
+      .module-card { display: grid; gap: 10px; align-content: start; border: 1px solid var(--border); border-radius: 18px; padding: 15px; background: rgba(31,41,55,.58); }
+      .module-card.active { border-color: rgba(56,189,248,.78); background: linear-gradient(135deg, rgba(2,132,199,.24), rgba(31,41,55,.74)); box-shadow: 0 16px 32px rgba(0,0,0,.22); }
+      .module-card h3 { margin: 0; }
+      .module-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .module-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+      .module-actions button { margin-top: 0; padding: 8px 10px; font-size: 13px; }
+      .module-actions .primary-action { background: linear-gradient(135deg, #0284c7, #22c55e); color: white; border-color: transparent; }
       .dashboard-list { display: grid; gap: 9px; }
       .dashboard-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--border); background: rgba(31,41,55,.52); border-radius: 14px; padding: 11px 12px; cursor: pointer; }
       .dashboard-row:hover { border-color: rgba(56,189,248,.55); }
@@ -4147,6 +4155,62 @@ data:
         function canManageWorkflow(user) {{ return userHasPermission(user, "workflow.manage"); }}
         function canViewAudit(user) {{ return userHasPermission(user, "audit.view"); }}
         function canViewPermissions(user) {{ return userHasPermission(user, "permissions.view"); }}
+        function moduleAction(label, action, primary = false) {{
+          const cls = primary ? "primary-action" : "btn-secondary";
+          return `<button class="${{cls}}" onclick="${{action}}">${{esc(label)}}</button>`;
+        }}
+        function moduleCard(key, title, description, actions, active = "") {{
+          const visibleActions = (actions || []).filter(Boolean);
+          if (!visibleActions.length) return "";
+          const activeClass = active === key ? " active" : "";
+          return `
+            <section class="module-card${{activeClass}}">
+              <h3>${{esc(title)}}</h3>
+              <p>${{esc(description)}}</p>
+              <div class="module-actions">${{visibleActions.join("")}}</div>
+            </section>
+          `;
+        }}
+        function renderAppNavigation(me, active = "") {{
+          const cards = [
+            moduleCard("user-work", "Moja praca", "Osobiste zgłoszenia, profil użytkownika i centrum operatora, jeżeli masz taką rolę.", [
+              canViewUserPortal(me) ? moduleAction("Portal użytkownika", "renderUserPortal();return false;", active === "user-work") : "",
+              canViewOperatorCenter(me) ? moduleAction("Centrum operatora", "renderOperatorCenter();return false;", active === "operator-work") : "",
+              moduleAction("Mój profil", "renderProfile();return false;")
+            ], active),
+            moduleCard("tickets", "Zgłoszenia", "Lista ticketów, nowe zgłoszenie, filtry i widoki robocze.", [
+              moduleAction("Lista zgłoszeń", "renderHome();return false;", active === "tickets"),
+              moduleAction("Nowe zgłoszenie", "renderNewTicket();return false;")
+            ], active),
+            moduleCard("incidents", "Incydenty", "Dowodzenie incydentami, komunikaty i zgłoszenia powiązane z awarią.", [
+              canWorkTickets(me) ? moduleAction("Centrum incydentów", "renderIncidents();return false;", active === "incidents") : ""
+            ], active),
+            moduleCard("knowledge", "Baza wiedzy", "Instrukcje, rozwiązania i artykuły podpowiadane przy podobnych zgłoszeniach.", [
+              moduleAction("Baza wiedzy", "renderKnowledgeArticles();return false;", active === "knowledge")
+            ], active),
+            moduleCard("reports", "Raporty", "Dashboard, raporty i kalendarz SLA w jednym spokojniejszym miejscu.", [
+              canViewDashboard(me) ? moduleAction("Dashboard", "renderDashboard();return false;", active === "reports") : "",
+              canViewReports(me) ? moduleAction("Raporty", "renderReports();return false;", active === "reports") : "",
+              canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;", active === "reports") : ""
+            ], active),
+            moduleCard("administration", "Administracja", "Konfiguracja systemu, workflow, automatyzacji, SLA, użytkowników i audytu.", [
+              (canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me))
+                ? moduleAction("Centrum administracji", "renderAdministration();return false;", active === "administration")
+                : ""
+            ], active)
+          ].filter(Boolean).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Nawigacja</h2>
+                  <p class="muted">Widoki są pogrupowane według pracy użytkownika, operatora i administracji.</p>
+                </div>
+              </div>
+              <div class="module-nav">${{cards}}</div>
+            </section>
+          `;
+        }}
         function roleBadges(roles) {{
           const list = Array.isArray(roles) && roles.length ? roles : ["user"];
           return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
@@ -4571,28 +4635,7 @@ data:
           const res = await api("/api/me");
           if (!res) return null;
           const data = await res.json();
-    
-          // Dynamiczne menu modułów.
-          // Po odebraniu uprawnienia w ekranie Uprawnienia pozycja znika z menu,
-          // a po ponownym nadaniu pojawia się po odświeżeniu danych użytkownika.
-          const moduleLinks = [];
-          if (canViewUserPortal(data)) moduleLinks.push(`<a href="#" onclick="renderUserPortal();return false;">Portal użytkownika</a>`);
-          moduleLinks.push(`<a href="#" onclick="renderKnowledgeArticles();return false;">Baza wiedzy</a>`);
-          if (canViewOperatorCenter(data)) moduleLinks.push(`<a href="#" onclick="renderOperatorCenter();return false;">Centrum operatora</a>`);
-          if (canViewDashboard(data)) moduleLinks.push(`<a href="#" onclick="renderDashboard();return false;">Dashboard</a>`);
-          if (canViewReports(data)) moduleLinks.push(`<a href="#" onclick="renderReports();return false;">Raporty</a>`);
-          if (canViewSlaCalendar(data)) moduleLinks.push(`<a href="#" onclick="renderSlaCalendar();return false;">Kalendarz SLA</a>`);
-          if (canWorkTickets(data)) moduleLinks.push(`<a href="#" onclick="renderIncidents();return false;">Incydenty</a>`);
-    
-          const adminLinks = [];
-          if (canManageUsers(data)) adminLinks.push(`<a href="#" onclick="renderAdminUsers();return false;">Użytkownicy</a>`);
-          if (canViewPermissions(data)) adminLinks.push(`<a href="#" onclick="renderAdminPermissions();return false;">Uprawnienia</a>`);
-          if (canManageWorkflow(data)) adminLinks.push(`<a href="#" onclick="renderAdminWorkflows();return false;">Workflow</a>`);
-          if (canViewAudit(data)) adminLinks.push(`<a href="#" onclick="renderAudit();return false;">Audyt</a>`);
-    
-          const moduleMenu = moduleLinks.length ? ` · ${{moduleLinks.join(" · ")}}` : "";
-          const adminMenu = adminLinks.length ? ` · ${{adminLinks.join(" · ")}}` : "";
-          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderProfile();return false;">Profil</a>${{moduleMenu}}${{adminMenu}} · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
+          userBadge.innerHTML = `Zalogowany: <strong>${{esc(data.name)}}</strong> · ${{esc(data.department)}} · <a href="#" onclick="renderHome();return false;">Start</a> · <a href="#" onclick="renderProfile();return false;">Profil</a> · <a href="#" onclick="logout();return false;">Wyloguj</a>`;
           connectLive();
           await loadNotifications();
           return data;
@@ -5664,6 +5707,49 @@ data:
             e.target.reset();
             msg.classList.remove("hidden");
           }});
+        }}
+        async function renderAdministration() {{
+          currentView = {{ name: "administration", ticketId: null }};
+          const me = await loadMe();
+          if (!me) return;
+          const canOpen = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me);
+          if (!canOpen) {{
+            appEl.innerHTML = `
+              <section class="card">
+                <h2>Brak dostępu</h2>
+                <p class="muted">Centrum administracji jest dostępne tylko dla osób z uprawnieniami administracyjnymi lub SLA.</p>
+              </section>
+            `;
+            return;
+          }}
+          const adminCards = [
+            moduleCard("admin-users", "Użytkownicy i role", "Kontrola kont, ról i uprawnień systemowych.", [
+              canManageUsers(me) ? moduleAction("Użytkownicy", "renderAdminUsers();return false;") : "",
+              canViewPermissions(me) ? moduleAction("Uprawnienia", "renderAdminPermissions();return false;") : ""
+            ]),
+            moduleCard("admin-workflow", "Workflow i automatyzacje", "Procesy obsługi, reguły automatyzacji i centrum automatyzacji.", [
+              canManageWorkflow(me) ? moduleAction("Workflow", "renderAdminWorkflows();return false;") : ""
+            ]),
+            moduleCard("admin-sla", "SLA", "Terminy reakcji, kalendarz SLA i zgłoszenia wymagające uwagi.", [
+              canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;") : ""
+            ]),
+            moduleCard("admin-audit", "Audyt", "Historia zmian i kontrola tego, kto zmienił konfigurację systemu.", [
+              canViewAudit(me) ? moduleAction("Audyt", "renderAudit();return false;") : ""
+            ])
+          ].filter(Boolean).join("");
+          appEl.innerHTML = `
+            ${{renderAppNavigation(me, "administration")}}
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Administracja</h2>
+                  <p class="muted">Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń.</p>
+                </div>
+                <button class="btn-secondary" onclick="renderHome()">← Zgłoszenia</button>
+              </div>
+            </section>
+            <section class="module-nav">${{adminCards}}</section>
+          `;
         }}
         async function renderAdminPermissions() {{
           const me = await loadMe();
@@ -10432,6 +10518,7 @@ data:
               </div>
             </div>`;
           appEl.innerHTML = `
+            ${{renderAppNavigation(me, "tickets")}}
             <section class="stats">
               <div class="stat"><div class="num">${{data.stats.total}}</div><div class="label">${{scope}}</div></div>
               <div class="stat"><div class="num">${{data.stats.new}}</div><div class="label">Nowe</div></div>
@@ -10440,14 +10527,13 @@ data:
               <div class="stat"><div class="num">${{data.stats.resolved}}</div><div class="label">Rozwiązane / Zamknięte</div></div>
             </section>
             <section class="card">
-              <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
-              ${{canViewUserPortal(me) ? `<button class="btn-secondary" onclick="renderUserPortal()">Portal użytkownika</button>` : ""}}
-              <button class="btn-secondary" onclick="renderProfile()">Mój profil</button>
-              <button class="btn-secondary" onclick="renderKnowledgeArticles()">Baza wiedzy</button>
-              ${{canViewOperatorCenter(me) ? `<button class="btn-secondary" onclick="renderOperatorCenter()">Centrum operatora</button>` : ""}}
-              ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>` : ""}}
-              ${{canWorkTickets(me) ? `<button class="btn-secondary" onclick="renderIncidents()">Incident Command Center</button>` : ""}}
-              ${{isAdmin(me) ? `<button class="btn-secondary" onclick="renderAdminUsers()">Zarządzanie użytkownikami</button> <button class="btn-secondary" onclick="renderAdminWorkflows()">Workflow</button> <button class="btn-secondary" onclick="renderAudit()">Audyt</button>` : ""}}
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Zgłoszenia</h2>
+                  <p class="muted">Lista i filtry są tu skupione tylko na obsłudze ticketów. Pozostałe moduły są w nawigacji powyżej.</p>
+                </div>
+                <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+              </div>
               <div style="margin-top:16px">
                 <strong>Widoki robocze:</strong>
                 ${{workViewsHtml}}

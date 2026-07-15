@@ -443,7 +443,15 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-incident-user-status-panel-v1" in deployment_text
+    assert "function renderAppNavigation" in text
+    assert "function moduleCard" in text
+    assert "function moduleAction" in text
+    assert "async function renderAdministration" in text
+    assert "module-nav" in text
+    assert "Centrum administracji" in text
+    assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
+    assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
+    assert "2026-07-15-ui-navigation-groups-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

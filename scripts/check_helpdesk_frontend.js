@@ -174,6 +174,27 @@ for (const fragment of requiredFriendlyConditionBuilder) {
   }
 }
 
+const requiredGroupedNavigation = [
+  "function moduleAction",
+  "function moduleCard",
+  "function renderAppNavigation",
+  "async function renderAdministration",
+  "Moja praca",
+  "Zgłoszenia",
+  "Incydenty",
+  "Baza wiedzy",
+  "Raporty",
+  "Administracja",
+  "Centrum administracji",
+  "Widoki są pogrupowane według pracy użytkownika, operatora i administracji.",
+  "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń.",
+];
+for (const fragment of requiredGroupedNavigation) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing grouped navigation fragment: ${fragment}`);
+  }
+}
+
 const requiredAutomationCenter = [
   "/automation-center",
   "renderWorkflowAutomationCenter",
