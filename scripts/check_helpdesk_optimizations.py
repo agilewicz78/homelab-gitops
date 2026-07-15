@@ -422,6 +422,18 @@ def main() -> None:
     assert "/api/operator-center" in text
     assert "def api_operator_center" in text
     assert "operatorCenterTicketSection" in text
+    assert "function renderStart" in text
+    assert "function renderAppSidebar" in text
+    assert "function renderWorkspaceShell" in text
+    assert "operator-cockpit-shell" in text
+    assert "operator-board" in text
+    assert "Moje zgłoszenia" in text
+    assert "Pilne / po SLA" in text
+    assert "Czekają na użytkownika" in text
+    assert "Zgłoszenia bez odpowiedzi" in text
+    assert "Ostatnie zdarzenia" in text
+    assert "first_response_filter" in text
+    assert "first_response_options" in text
     assert "currentView.name === \"operator-center\"" in text
     assert "/api/user-portal" in text
     assert "def api_user_portal" in text
@@ -451,7 +463,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-ui-navigation-groups-v1" in deployment_text
+    assert "2026-07-15-operator-cockpit-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
