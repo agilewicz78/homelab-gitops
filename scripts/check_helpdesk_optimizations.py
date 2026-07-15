@@ -425,8 +425,13 @@ def main() -> None:
     assert "function renderStart" in text
     assert "function renderAppSidebar" in text
     assert "function renderWorkspaceShell" in text
+    assert "function renderWorkspaceView" in text
     assert "operator-cockpit-shell" in text
     assert "operator-board" in text
+    assert 'renderWorkspaceView(me, "incidents"' in text
+    assert 'renderWorkspaceView(me, "knowledge"' in text
+    assert 'renderWorkspaceView(me, "reports"' in text
+    assert 'renderWorkspaceView(me, "administration"' in text
     assert "Moje zgłoszenia" in text
     assert "Pilne / po SLA" in text
     assert "Czekają na użytkownika" in text
@@ -472,7 +477,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-fluid-width-layout-v1" in deployment_text
+    assert "2026-07-15-persistent-workspace-sidebar-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

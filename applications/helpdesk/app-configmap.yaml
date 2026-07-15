@@ -4349,6 +4349,9 @@ data:
             </div>
           `;
         }}
+        function renderWorkspaceView(me, active, content) {{
+          return canViewOperatorCenter(me) ? renderWorkspaceShell(me, active, content) : content;
+        }}
         function roleBadges(roles) {{
           const list = Array.isArray(roles) && roles.length ? roles : ["user"];
           return list.map(r => `<span class="pill">${{esc(r)}}</span>`).join(" ");
@@ -5504,7 +5507,7 @@ data:
           }}
           const summary = data.summary || {{}};
           const total = Number(summary.total || 0);
-          appEl.innerHTML = `
+          const dashboardContent = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <h2>Dashboard Helpdesk</h2>
@@ -5546,6 +5549,7 @@ data:
               ${{dashboardList("Według działu", data.by_department || [], total, "department")}}
             </div>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "reports", dashboardContent);
         }}
     
         function reportDateValue(value) {{
@@ -5612,7 +5616,7 @@ data:
           }}
           const summary = data.summary || {{}};
           const totalCreated = Number(summary.created || 0);
-          appEl.innerHTML = `
+          const reportsContent = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <h2>Raporty i statystyki</h2>
@@ -5644,6 +5648,7 @@ data:
             </div>
             ${{reportDailyTable(data.by_day || [])}}
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "reports", reportsContent);
         }}
         function applyReportDates() {{
           const fromValue = document.getElementById("reportFrom")?.value || "";
@@ -5778,7 +5783,7 @@ data:
               </div>
             `;
           }}
-          appEl.innerHTML = `
+          const slaCalendarContent = `
             <section class="card">
               <button class="btn-secondary" onclick="renderHome()">← Lista zgłoszeń</button>
               <button class="btn-secondary" onclick="renderDashboard()">Dashboard</button>
@@ -5799,6 +5804,7 @@ data:
             </section>
             ${{slaPoliciesTable(data.policies || [], me)}}
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "reports", slaCalendarContent);
         }}
         async function renderProfile() {{
           const me = await loadMe();
@@ -5906,7 +5912,7 @@ data:
               canViewAudit(me) ? moduleAction("Audyt", "renderAudit();return false;") : ""
             ])
           ].filter(Boolean).join("");
-          appEl.innerHTML = `
+          const administrationContent = `
             ${{renderAppNavigation(me, "administration")}}
             <section class="card">
               <div class="ticket-section-title">
@@ -5919,6 +5925,7 @@ data:
             </section>
             <section class="module-nav">${{adminCards}}</section>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "administration", administrationContent);
         }}
         async function renderAdminPermissions() {{
           const me = await loadMe();
@@ -9643,7 +9650,7 @@ data:
               <p class="muted">Aktualizacja: ${{esc(article.updated_at)}}${{article.updated_by_name ? " · " + esc(article.updated_by_name) : ""}}</p>
             </section>
           `).join("") : `<section class="card"><p class="muted">Brak artykułów dla wybranych filtrów.</p></section>`;
-          appEl.innerHTML = `
+          const knowledgeContent = `
             <section class="card">
               <div class="ticket-section-title">
                 <div>
@@ -9666,6 +9673,7 @@ data:
             </section>
             <div class="incident-grid">${{cards}}</div>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "knowledge", knowledgeContent);
           document.getElementById("knowledgeSearchForm")?.addEventListener("submit", event => {{
             event.preventDefault();
             sessionStorage.setItem("helpdesk_knowledge_q", document.getElementById("knowledgeSearchInput")?.value.trim() || "");
@@ -9712,7 +9720,7 @@ data:
             categories: data.meta?.categories || [],
             subcategories: data.meta?.subcategories || {{}}
           }} : null;
-          appEl.innerHTML = `
+          const knowledgeArticleContent = `
             <section class="card knowledge-card">
               <div class="ticket-section-title">
                 <div>
@@ -9771,6 +9779,7 @@ data:
               ${{canWorkTickets(me) ? `<button onclick="openKnowledgeArticleModal()">Edytuj artykuł</button>` : ""}}
             </section>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "knowledge", knowledgeArticleContent);
         }}
         function openKnowledgeFeedbackModal() {{
           const context = knowledgeFeedbackContext;
@@ -10126,7 +10135,7 @@ data:
           const commanderOptions = (data.meta?.commanders || []).map(c =>
             `<option value="${{esc(c.email)}}">${{esc(c.name)}} · ${{esc(c.email)}}</option>`
           ).join("");
-          appEl.innerHTML = `
+          const incidentsContent = `
             <section class="card">
               <div class="ticket-section-title">
                 <div>
@@ -10168,6 +10177,7 @@ data:
             </section>
             <div class="incident-grid">${{cards}}</div>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "incidents", incidentsContent);
           const form = document.getElementById("incidentCreateForm");
           if (form) form.addEventListener("submit", async (event) => {{
             event.preventDefault();
@@ -10217,7 +10227,7 @@ data:
           const taskList = incidentTaskList(data.tasks || [], i.id);
           const timeline = incidentTimelineList(data.timeline || data.updates || []);
           const incidentPreview = {{ ...i, affected_ticket_count: (data.tickets || []).length }};
-          appEl.innerHTML = `
+          const incidentContent = `
             <section class="card incident-card ${{incidentSeverityClass(i.severity)}}">
               <div class="ticket-section-title">
                 <div>
@@ -10317,6 +10327,7 @@ data:
               <div class="timeline">${{timeline}}</div>
             </section>
           `;
+          appEl.innerHTML = renderWorkspaceView(me, "incidents", incidentContent);
           document.getElementById("incidentEditForm")?.addEventListener("submit", async (event) => {{
             event.preventDefault();
             const form = event.target;
