@@ -336,6 +336,30 @@ for (const fragment of requiredTicketAssistant) {
   }
 }
 
+const requiredIncidentCenterV2 = [
+  "incidentCommandCenter",
+  "incidentCommandMetric",
+  "incidentTaskStatusLabel",
+  "incidentTimelineTypeLabel",
+  "incidentTaskList",
+  "incidentTimelineList",
+  "submitIncidentTask",
+  "toggleIncidentTask",
+  "deleteIncidentTask",
+  "/api/incidents/${{incidentId}}/tasks",
+  "/api/incidents/${{incidentId}}/tasks/${{taskId}}/toggle",
+  "Centrum dowodzenia",
+  "Checklist działań",
+  "Oś czasu incydentu",
+  "Publiczne komunikaty",
+  "Zadania:",
+];
+for (const fragment of requiredIncidentCenterV2) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing incident center v2 fragment: ${fragment}`);
+  }
+}
+
 const requiredWorkflowChangeHistory = [
   "renderWorkflowChangeHistory",
   "workflowChangeHistoryLabel",

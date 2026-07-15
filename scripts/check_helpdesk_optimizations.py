@@ -71,6 +71,8 @@ def main() -> None:
         "idx_incidents_severity_updated",
         "idx_incident_tickets_ticket_id",
         "idx_incident_updates_incident_id",
+        "idx_incident_tasks_incident_id",
+        "idx_incident_tasks_owner_status",
         "idx_knowledge_articles_status_updated",
         "idx_knowledge_articles_category",
         "idx_knowledge_feedback_article_helpful",
@@ -113,7 +115,7 @@ def main() -> None:
     assert "time.sleep(1)" not in websocket
     assert "live_state_condition.notify_all()" in text
 
-    for table in ("incidents", "incident_tickets", "incident_updates"):
+    for table in ("incidents", "incident_tickets", "incident_updates", "incident_tasks"):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in text
     assert "CREATE TABLE IF NOT EXISTS knowledge_articles" in text
     assert "CREATE TABLE IF NOT EXISTS knowledge_article_feedback" in text
@@ -129,6 +131,9 @@ def main() -> None:
         '@app.get("/api/incidents/<int:incident_id>")',
         '@app.put("/api/incidents/<int:incident_id>")',
         '@app.post("/api/incidents/<int:incident_id>/updates")',
+        '@app.post("/api/incidents/<int:incident_id>/tasks")',
+        '@app.post("/api/incidents/<int:incident_id>/tasks/<int:task_id>/toggle")',
+        '@app.delete("/api/incidents/<int:incident_id>/tasks/<int:task_id>")',
         '@app.post("/api/incidents/<int:incident_id>/tickets")',
         '@app.delete("/api/incidents/<int:incident_id>/tickets/<int:ticket_id>")',
     ]
@@ -225,6 +230,19 @@ def main() -> None:
     assert "async function renderIncidents(" in text
     assert "async function renderIncident(" in text
     assert "Incident Command Center" in text
+    assert "Centrum dowodzenia" in text
+    assert "Checklist działań" in text
+    assert "incidentCommandCenter" in text
+    assert "incidentTaskList" in text
+    assert "incidentTimelineList" in text
+    assert "submitIncidentTask" in text
+    assert "toggleIncidentTask" in text
+    assert "deleteIncidentTask" in text
+    assert '"tasks": tasks' in text
+    assert '"task_summary": task_summary' in text
+    assert '"timeline": timeline' in text
+    assert "COUNT(DISTINCT task.id) AS task_count" in text
+    assert "LEFT JOIN incident_tasks task ON task.incident_id = i.id" in text
     assert 'name="is_public" checked' in text
     assert "Opublikuj w powiązanych zgłoszeniach" in text
     assert "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}" in text
@@ -377,7 +395,7 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-ticket-assistant-v1" in deployment_text
+    assert "2026-07-15-incident-center-v2" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
