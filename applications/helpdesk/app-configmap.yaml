@@ -16344,7 +16344,12 @@ data:
                    COALESCE(t.workflow_key, 'default') AS workflow_key,
                    COALESCE(t.workflow_name, %s) AS workflow_name,
                    t.first_response_due_at,
-                   t.first_response_at
+                   t.first_response_at,
+                   COALESCE(t.resolution_feedback_decision, '') AS resolution_feedback_decision,
+                   COALESCE(t.resolution_feedback_comment, '') AS resolution_feedback_comment,
+                   COALESCE(t.resolution_feedback_by_email, '') AS resolution_feedback_by_email,
+                   COALESCE(t.resolution_feedback_by_name, '') AS resolution_feedback_by_name,
+                   t.resolution_feedback_at
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
