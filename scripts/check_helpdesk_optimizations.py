@@ -237,8 +237,15 @@ def main() -> None:
     assert "incidentTicketCountLabel(i.affected_ticket_count)" in text
     assert "Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem" in text
     assert "affectedTicketIds.includes(Number(currentView.ticketId))" in text
-    assert "Sugestie podobnych spraw" in text
-    assert "Sugestia nie tworzy powiązania automatycznie" in text
+    assert "function renderTicketAssistantPanel" in text
+    assert "function ticketAssistantDiagnosis" in text
+    assert "function ticketAssistantPriorityHint" in text
+    assert "function ticketAssistantWorkflowHint" in text
+    assert "Asystent zgłoszenia" in text
+    assert "Krótka diagnoza" in text
+    assert "Sugerowany priorytet" in text
+    assert "Sugerowany workflow" in text
+    assert "Artykuły bazy wiedzy" in text
     assert "async function linkSuggestedTicket(" in text
     assert "async function linkSuggestedIncident(" in text
     assert "Utwórz incydent z powiązanych zgłoszeń" in text
@@ -370,7 +377,7 @@ def main() -> None:
     assert "currentView.name === \"user-portal\"" in text
     assert "Co się teraz dzieje?" in text
     assert "loadNotifications()" in text
-    assert "2026-07-15-resolution-feedback-detail-fix-v1" in deployment_text
+    assert "2026-07-15-ticket-assistant-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

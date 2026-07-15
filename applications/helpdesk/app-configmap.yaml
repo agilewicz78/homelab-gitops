@@ -4770,6 +4770,144 @@ data:
           );
           await renderTicket(ticketId);
         }}
+        function ticketAssistantDiagnosis(ticket, articles = [], similarTickets = [], incidents = []) {{
+          if (incidents.length) {{
+            const top = incidents[0];
+            return `Możliwy incydent: ${{top.severity || "SEV"}} #${{top.id}} · ${{top.title || "bez tytułu"}}. Sprawdź, czy zgłoszenie nie jest częścią większego problemu.`;
+          }}
+          if (similarTickets.length >= 3) {{
+            return `To wygląda podobnie do ${{similarTickets.length}} innych zgłoszeń. Warto rozważyć powiązanie ticketów albo utworzenie incydentu.`;
+          }}
+          if (similarTickets.length) {{
+            return `Znaleziono ${{similarTickets.length}} podobne zgłoszenie. Sprawdź historię przed odpowiedzią do użytkownika.`;
+          }}
+          if (articles.length) {{
+            return `Baza wiedzy ma ${{articles.length}} pasujące rozwiązanie. Otwórz artykuł i wykorzystaj go w odpowiedzi.`;
+          }}
+          return "Brak mocnych sugestii. Obsłuż zgłoszenie standardowo i uzupełnij wiedzę, jeśli pojawi się powtarzalny wzorzec.";
+        }}
+        function ticketAssistantPriorityHint(ticket, similarTickets = [], incidents = []) {{
+          const incidentSeverity = incidents[0]?.severity || "";
+          if (incidentSeverity === "SEV1" || ticket.priority === "Krytyczny") return "Krytyczny · możliwy wpływ na wielu użytkowników albo już ustawiony krytyczny priorytet.";
+          if (incidentSeverity === "SEV2" || similarTickets.length >= 3) return "Wysoki · kilka podobnych spraw sugeruje szerszy problem.";
+          if (ticket.sla_state === "overdue" || ticket.first_response_state === "overdue") return `${{ticket.priority || "Normalny"}} · SLA jest przekroczone, potraktuj jako pilne.`;
+          if (ticket.sla_state === "warning" || ticket.first_response_state === "warning") return `${{ticket.priority || "Normalny"}} · SLA zbliża się do terminu.`;
+          return `${{ticket.priority || "Normalny"}} · brak dodatkowych sygnałów do podniesienia priorytetu.`;
+        }}
+        function ticketAssistantWorkflowHint(ticket, articles = [], similarTickets = []) {{
+          const candidates = [];
+          [...similarTickets, ...articles].forEach(item => {{
+            const category = item.category || "";
+            const subcategory = item.subcategory || "Inne";
+            if (category) candidates.push(`${{category}} / ${{subcategory}}`);
+          }});
+          const counts = candidates.reduce((acc, key) => {{
+            acc[key] = (acc[key] || 0) + 1;
+            return acc;
+          }}, {{}});
+          const best = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+          const current = `${{ticket.category || "-"}} / ${{ticket.subcategory || "Inne"}}`;
+          if (best && best[0] !== current && best[1] >= 2) {{
+            return `Sprawdź kategorię: ${{best[0]}}. Kilka podobnych elementów wskazuje ten kierunek. Aktualny workflow: ${{ticket.workflow_name || "standardowy"}}.`;
+          }}
+          return `Aktualny workflow: ${{ticket.workflow_name || "standardowy"}} · kategoria: ${{current}}.`;
+        }}
+        function ticketAssistantArticleList(articles = []) {{
+          if (!articles.length) return `<p class="muted">Brak pasujących artykułów.</p>`;
+          return `
+            <div class="watcher-list">${{articles.map(article => `
+              <div class="watcher-item">
+                <div>
+                  <strong><a href="#" onclick="renderKnowledgeArticle(${{article.id}}); return false;">#${{article.id}} · ${{esc(article.title)}}</a></strong>
+                  <div class="watcher-meta">
+                    ${{esc(article.category)}} / ${{esc(article.subcategory)}}
+                    · <span class="chip">${{article.score}}% dopasowania</span>
+                  </div>
+                  <div class="incident-meta">${{(article.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderKnowledgeArticle(${{article.id}})">Otwórz</button>
+              </div>
+            `).join("")}}</div>
+          `;
+        }}
+        function ticketAssistantIncidentList(ticket, incidents = []) {{
+          if (!incidents.length) return `<p class="muted">Brak pasujących aktywnych incydentów.</p>`;
+          return `
+            <div class="watcher-list">${{incidents.map(s => `
+              <div class="watcher-item incident-relation ${{incidentSeverityClass(s.severity)}}">
+                <div>
+                  <strong>Incydent #${{s.id}} · ${{esc(s.title)}}</strong>
+                  <div class="watcher-meta">
+                    <span class="pill">${{esc(s.severity)}}</span>
+                    · <span class="pill">${{esc(incidentStatusLabel(s.status))}}</span>
+                    · ${{incidentTicketCountLabel(s.affected_ticket_count)}}
+                    · <span class="chip">${{s.score}}% dopasowania</span>
+                  </div>
+                  <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="linkSuggestedIncident(${{ticket.id}}, ${{s.id}})">Powiąż z incydentem</button>
+              </div>
+            `).join("")}}</div>
+          `;
+        }}
+        function ticketAssistantSimilarTicketList(ticket, similarTickets = []) {{
+          if (!similarTickets.length) return `<p class="muted">Brak podobnych zgłoszeń do powiązania.</p>`;
+          return `
+            <div class="watcher-list">${{similarTickets.map(s => `
+              <div class="watcher-item">
+                <div>
+                  <strong><a href="#" onclick="renderTicket(${{s.id}}); return false;">#${{s.id}} · ${{esc(s.title)}}</a></strong>
+                  <div class="watcher-meta">
+                    <span class="pill ${{statusClass(s.status)}}">${{esc(s.status)}}</span>
+                    · ${{esc(s.category)}} / ${{esc(s.subcategory)}}
+                    · <span class="chip">${{s.score}}% dopasowania</span>
+                  </div>
+                  <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="linkSuggestedTicket(${{ticket.id}}, ${{s.id}})">Powiąż</button>
+              </div>
+            `).join("")}}</div>
+          `;
+        }}
+        function renderTicketAssistantPanel(ticket, articles = [], similarTickets = [], incidents = [], options = {{}}) {{
+          const total = articles.length + similarTickets.length + incidents.length;
+          return `
+            <section class="card ticket-assistant-card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Asystent zgłoszenia</h3>
+                  <div class="attachment-upload-hint">Jedno miejsce na podobne tickety, możliwe incydenty, wiedzę i szybkie decyzje operatora.</div>
+                </div>
+                <span class="counter">${{total}}</span>
+              </div>
+              <div class="panel-soft">
+                <strong>Krótka diagnoza</strong>
+                <div class="attachment-upload-hint" style="margin-top:6px">${{esc(ticketAssistantDiagnosis(ticket, articles, similarTickets, incidents))}}</div>
+              </div>
+              <div class="ticket-summary-grid" style="margin-top:12px">
+                <div class="ticket-summary-item"><span class="label">Sugerowany priorytet</span><span class="value">${{esc(ticketAssistantPriorityHint(ticket, similarTickets, incidents))}}</span></div>
+                <div class="ticket-summary-item"><span class="label">Sugerowany workflow</span><span class="value">${{esc(ticketAssistantWorkflowHint(ticket, articles, similarTickets))}}</span></div>
+              </div>
+              ${{options.canCreateIncident ? `
+                <div class="form-actions">
+                  <button type="button" onclick="openIncidentFromTicketsModal()">Utwórz incydent z powiązanych zgłoszeń</button>
+                </div>
+              ` : ""}}
+              <details open>
+                <summary><strong>Możliwe incydenty</strong> · ${{incidents.length}}</summary>
+                ${{ticketAssistantIncidentList(ticket, incidents)}}
+              </details>
+              <details open>
+                <summary><strong>Podobne zgłoszenia</strong> · ${{similarTickets.length}}</summary>
+                ${{ticketAssistantSimilarTicketList(ticket, similarTickets)}}
+              </details>
+              <details open>
+                <summary><strong>Artykuły bazy wiedzy</strong> · ${{articles.length}}</summary>
+                ${{ticketAssistantArticleList(articles)}}
+              </details>
+            </section>
+          `;
+        }}
         function userPortalTicketStatusPanel(ticket, data) {{
           const incidents = data?.incidents || [];
           const hasIncident = incidents.some(i => i.status !== "resolved");
@@ -10275,15 +10413,23 @@ data:
               ` : ""}}
             </section>`;
           const knowledgeSuggestions = data.suggestions?.articles || [];
+          const suggestedTickets = data.suggestions?.tickets || [];
+          const suggestedIncidents = data.suggestions?.incidents || [];
+          const ticketAssistantPanelHtml = canWorkTickets(me) && !isClosed
+            ? renderTicketAssistantPanel(t, knowledgeSuggestions, suggestedTickets, suggestedIncidents, {{
+                canCreateIncident: !!(incidentCreationContext && !hasActiveIncident)
+              }})
+            : "";
+          const visibleKnowledgeSuggestions = canWorkTickets(me) ? [] : knowledgeSuggestions;
           const ticketKnowledgePanel = (
-            knowledgeSuggestions.length
+            visibleKnowledgeSuggestions.length
             || data.knowledge_article
             || canCreateKnowledgeArticle
           ) ? `
             <section class="card knowledge-card">
               <div class="ticket-section-title">
                 <h3>Baza wiedzy</h3>
-                <span class="counter">${{knowledgeSuggestions.length}}</span>
+                <span class="counter">${{visibleKnowledgeSuggestions.length}}</span>
               </div>
               ${{data.knowledge_article ? `
                 <p class="muted">Na podstawie tego zgłoszenia utworzono artykuł.</p>
@@ -10297,9 +10443,9 @@ data:
                   : "To starsze zgłoszenie nie ma opisu rozwiązania. Możesz wpisać rozwiązanie ręcznie podczas tworzenia artykułu."}}</p>
                 <button onclick="openKnowledgeArticleModal()">Utwórz artykuł z rozwiązania</button>
               ` : ""}}
-              ${{knowledgeSuggestions.length ? `
+              ${{visibleKnowledgeSuggestions.length ? `
                 <p class="muted">Pasujące, opublikowane rozwiązania:</p>
-                <div class="watcher-list">${{knowledgeSuggestions.map(article => `
+                <div class="watcher-list">${{visibleKnowledgeSuggestions.map(article => `
                   <div class="watcher-item">
                     <div>
                       <strong><a href="#" onclick="renderKnowledgeArticle(${{article.id}}); return false;">#${{article.id}} · ${{esc(article.title)}}</a></strong>
@@ -10312,50 +10458,6 @@ data:
                     <button class="btn-secondary btn-small" onclick="renderKnowledgeArticle(${{article.id}})">Otwórz</button>
                   </div>
                 `).join("")}}</div>
-              ` : ""}}
-            </section>` : "";
-          const suggestedTickets = data.suggestions?.tickets || [];
-          const suggestedIncidents = data.suggestions?.incidents || [];
-          const suggestionCount = suggestedTickets.length + suggestedIncidents.length;
-          const similarItemsPanel = canWorkTickets(me) && !isClosed && suggestionCount ? `
-            <section class="card">
-              <div class="ticket-section-title">
-                <h3>Sugestie podobnych spraw</h3>
-                <span class="counter">${{suggestionCount}}</span>
-              </div>
-              <p class="muted">Helpdesk porównuje słowa z opisu i kategorię. Sugestia nie tworzy powiązania automatycznie.</p>
-              ${{suggestedIncidents.length ? `
-                <div class="watcher-meta"><strong>Aktywne incydenty</strong></div>
-                <div class="watcher-list">${{suggestedIncidents.map(s => `
-                  <div class="watcher-item incident-relation ${{incidentSeverityClass(s.severity)}}">
-                    <div>
-                      <strong>Incydent #${{s.id}} · ${{esc(s.title)}}</strong>
-                      <div class="watcher-meta">
-                        <span class="pill">${{esc(s.severity)}}</span>
-                        · <span class="pill">${{esc(incidentStatusLabel(s.status))}}</span>
-                        · ${{incidentTicketCountLabel(s.affected_ticket_count)}}
-                        · <span class="chip">${{s.score}}% dopasowania</span>
-                      </div>
-                      <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
-                    </div>
-                    <button class="btn-secondary btn-small" onclick="linkSuggestedIncident(${{t.id}}, ${{s.id}})">Powiąż z incydentem</button>
-                  </div>`).join("")}}</div>
-              ` : ""}}
-              ${{suggestedTickets.length ? `
-                <div class="watcher-meta"><strong>Podobne zgłoszenia</strong></div>
-                <div class="watcher-list">${{suggestedTickets.map(s => `
-                  <div class="watcher-item">
-                    <div>
-                      <strong><a href="#" onclick="renderTicket(${{s.id}}); return false;">#${{s.id}} · ${{esc(s.title)}}</a></strong>
-                      <div class="watcher-meta">
-                        <span class="pill ${{statusClass(s.status)}}">${{esc(s.status)}}</span>
-                        · ${{esc(s.category)}} / ${{esc(s.subcategory)}}
-                        · <span class="chip">${{s.score}}% dopasowania</span>
-                      </div>
-                      <div class="incident-meta">${{(s.reasons || []).map(reason => `<span class="chip">${{esc(reason)}}</span>`).join("")}}</div>
-                    </div>
-                    <button class="btn-secondary btn-small" onclick="linkSuggestedTicket(${{t.id}}, ${{s.id}})">Powiąż</button>
-                  </div>`).join("")}}</div>
               ` : ""}}
             </section>` : "";
           const watcherPanel = `
@@ -10548,8 +10650,8 @@ data:
                 ${{statusPanel}}
                 ${{assignmentPanel}}
                 ${{reopenPanel}}
+                ${{ticketAssistantPanelHtml}}
                 ${{ticketKnowledgePanel}}
-                ${{similarItemsPanel}}
                 ${{linkedTicketsPanel}}
                 ${{watcherPanel}}
               </aside>
