@@ -464,6 +464,7 @@ def main() -> None:
     assert "/api/user-portal" in text
     assert "def api_user_portal" in text
     assert "visible_ticket_sql" in text
+    assert text.count("t.updated_at DESC,\n                  t.created_at DESC,\n                  t.id DESC") >= 2
     assert "function renderUserPortal" in text
     assert "function userPortalTicketStatusPanel" in text
     assert "function resolutionFeedbackPanel" in text
@@ -500,7 +501,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-16-cross-user-ticket-similarity-v1" in deployment_text
+    assert "2026-07-16-portal-center-newest-first-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
