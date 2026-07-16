@@ -3297,6 +3297,13 @@ data:
       .ticket-context-card summary { cursor: pointer; color: var(--text); }
       .ticket-context-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin-top: 12px; }
       .ticket-context-actions button { width: 100%; margin-top: 0; padding: 9px 10px; font-size: 13px; }
+      .ticket-recommendation-list { display: grid; gap: 10px; margin-top: 10px; }
+      .ticket-recommendation { border-left: 4px solid rgba(56,189,248,.65); }
+      .ticket-recommendation-warning { border-left-color: rgba(250,204,21,.8); background: rgba(250,204,21,.08); }
+      .ticket-recommendation-danger { border-left-color: rgba(239,68,68,.85); background: rgba(239,68,68,.08); }
+      .ticket-recommendation-success { border-left-color: rgba(34,197,94,.8); background: rgba(34,197,94,.08); }
+      .ticket-recommendation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .ticket-recommendation-actions button { margin-top: 0; }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
       .stat .num { font-size: 32px; font-weight: 800; }
@@ -5213,6 +5220,135 @@ data:
             </div>
           `;
         }}
+        function ticketRecommendationButton(label, onclick, primary = false) {{
+          const classes = primary ? "btn-small" : "btn-secondary btn-small";
+          return `<button type="button" class="${{classes}}" onclick="${{onclick}}">${{esc(label)}}</button>`;
+        }}
+        function ticketRecommendationCard(title, reason, actionHtml = "", tone = "info") {{
+          const safeTone = ["warning", "danger", "success"].includes(tone) ? tone : "info";
+          return `
+            <div class="panel-soft ticket-recommendation ticket-recommendation-${{safeTone}}">
+              <strong>${{esc(title)}}</strong>
+              <div class="attachment-upload-hint" style="margin-top:6px">${{esc(reason)}}</div>
+              ${{actionHtml ? `<div class="ticket-recommendation-actions">${{actionHtml}}</div>` : ""}}
+            </div>
+          `;
+        }}
+        function ticketOperatorRecommendations(ticket, articles = [], similarTickets = [], incidents = [], options = {{}}) {{
+          const currentIncidents = options.currentIncidents || [];
+          const linkedTickets = options.linkedTickets || [];
+          const activeCurrentIncidents = currentIncidents.filter(i => i.status !== "resolved");
+          const currentUserEmail = String(options.currentUserEmail || "").toLowerCase();
+          const assignedToEmail = String(ticket.assigned_to_email || "").toLowerCase();
+          const isClosed = !!options.isClosed;
+          const recommendations = [];
+          const add = (title, reason, actionHtml = "", tone = "info") => {{
+            recommendations.push(ticketRecommendationCard(title, reason, actionHtml, tone));
+          }};
+
+          if (activeCurrentIncidents.length) {{
+            const incident = activeCurrentIncidents[0];
+            add(
+              "Prowadź komunikację przez incydent",
+              `Zgłoszenie jest już częścią aktywnego incydentu #${{incident.id}}. Najlepiej aktualizować komunikat incydentu, żeby wszystkie powiązane zgłoszenia dostały spójną informację.`,
+              ticketRecommendationButton("Otwórz incydent", `renderIncident(${{Number(incident.id)}})`, true),
+              "success"
+            );
+          }}
+
+          if (!isClosed && !activeCurrentIncidents.length && incidents.length) {{
+            const incident = incidents[0];
+            const scoreText = Number(incident.score || 0) ? `${{incident.score}}% dopasowania` : "najlepsze dostępne dopasowanie";
+            add(
+              "Podepnij do istniejącego incydentu",
+              `${{incident.severity || "SEV"}} #${{incident.id}} · ${{incident.title || "bez tytułu"}} ma ${{scoreText}}. Jeśli to ten sam problem, jedno podpięcie oszczędzi osobną komunikację w zgłoszeniu.`,
+              ticketRecommendationButton("Pokaż możliwe incydenty", "focusTicketContextSection('ticketContextPossibleIncidents')", true),
+              "warning"
+            );
+          }}
+
+          const relatedSignalCount = similarTickets.length + linkedTickets.length;
+          if (!isClosed && !incidents.length && relatedSignalCount >= 3) {{
+            const action = options.canCreateIncident
+              ? ticketRecommendationButton("Utwórz incydent", "openIncidentFromTicketsModal()", true)
+              : ticketRecommendationButton("Pokaż podobne zgłoszenia", "focusTicketContextSection('ticketContextSimilarTickets')", true);
+            add(
+              "Rozważ incydent zbiorczy",
+              `Widać ${{relatedSignalCount}} powiązane lub podobne zgłoszenia. To może być szerszy problem, więc warto zebrać komunikację w jednym incydencie.`,
+              action,
+              "warning"
+            );
+          }}
+
+          const firstResponseOverdue = ticket.first_response_state === "overdue";
+          const resolutionOverdue = ticket.sla_state === "overdue";
+          const firstResponseWarning = ticket.first_response_state === "warning";
+          const resolutionWarning = ticket.sla_state === "warning";
+          if (!isClosed && (firstResponseOverdue || resolutionOverdue)) {{
+            const scope = firstResponseOverdue && resolutionOverdue
+              ? "pierwsza odpowiedź i rozwiązanie są po SLA"
+              : (firstResponseOverdue ? "pierwsza odpowiedź jest po SLA" : "rozwiązanie jest po SLA");
+            add(
+              "Zareaguj priorytetowo",
+              `SLA wymaga uwagi: ${{scope}}. Najpierw dodaj publiczną odpowiedź albo aktualizację statusu, potem wykonaj kolejne kroki techniczne.`,
+              ticketRecommendationButton("Przejdź do komentarzy", "focusTicketContextSection('commentsSection')", true),
+              "danger"
+            );
+          }} else if (!isClosed && (firstResponseWarning || resolutionWarning)) {{
+            add(
+              "Dopilnuj SLA",
+              "Termin SLA zbliża się do granicy. Warto zaplanować następną odpowiedź, zanim zgłoszenie trafi do puli pilnych.",
+              ticketRecommendationButton("Przejdź do komentarzy", "focusTicketContextSection('commentsSection')"),
+              "warning"
+            );
+          }}
+
+          if (!isClosed && options.currentUserCanBeAssigned && currentUserEmail && !assignedToEmail) {{
+            add(
+              "Przypisz zgłoszenie do siebie",
+              "Zgłoszenie nie ma operatora. Przypisanie porządkuje kolejkę i daje użytkownikowi jasny sygnał, kto prowadzi sprawę.",
+              ticketRecommendationButton("Przypisz do mnie", `assignTicketToMe(${{Number(ticket.id)}}, '${{esc(currentUserEmail)}}')`)
+            );
+          }}
+
+          if (articles.length) {{
+            const article = articles[0];
+            const scoreText = Number(article.score || 0) ? `${{article.score}}% dopasowania` : "najlepsze dopasowanie";
+            add(
+              "Sprawdź artykuł bazy wiedzy",
+              `Najlepiej pasuje artykuł #${{article.id}} · ${{article.title || "bez tytułu"}} (${{scoreText}}). Może dać gotowy kierunek odpowiedzi albo rozwiązania.`,
+              ticketRecommendationButton("Otwórz artykuł", `renderKnowledgeArticle(${{Number(article.id)}})`),
+              "success"
+            );
+          }}
+
+          if (!isClosed && similarTickets.length && relatedSignalCount < 3) {{
+            add(
+              "Powiąż podobne zgłoszenia",
+              `Znaleziono ${{similarTickets.length}} podobne zgłoszenie od innych użytkowników. Powiązanie ułatwi późniejszą analizę i ewentualne utworzenie incydentu.`,
+              ticketRecommendationButton("Pokaż podobne zgłoszenia", "focusTicketContextSection('ticketContextSimilarTickets')")
+            );
+          }}
+
+          if (options.canCreateKnowledgeArticle) {{
+            add(
+              "Zamień rozwiązanie w artykuł KB",
+              "Zgłoszenie jest zamknięte i może zostać wykorzystane jako gotowa instrukcja dla podobnych problemów w przyszłości.",
+              ticketRecommendationButton("Utwórz artykuł KB", "openKnowledgeArticleModal()"),
+              "success"
+            );
+          }}
+
+          if (!recommendations.length) {{
+            add(
+              "Obsłuż standardowo",
+              "Nie ma mocnych sygnałów o incydencie, pilnym SLA ani pasującym artykule. Poprowadź zgłoszenie normalnie i uzupełnij kontekst, jeśli pojawi się powtarzalny wzorzec.",
+              ticketRecommendationButton("Przejdź do komentarzy", "focusTicketContextSection('commentsSection')")
+            );
+          }}
+
+          return `<div class="ticket-recommendation-list">${{recommendations.slice(0, 4).join("")}}</div>`;
+        }}
         function ticketContextSituationPanel(ticket) {{
           const firstResponseText = ticket.first_response_at
             ? `reakcja: ${{ticket.first_response_at}}`
@@ -5302,12 +5438,16 @@ data:
               <div class="ticket-section-title">
                 <div>
                   <h3>Panel kontekstu zgłoszenia</h3>
-                  <div class="attachment-upload-hint">Etap 1: sytuacja, powiązania, podobne zgłoszenia i pasujące artykuły w jednym miejscu.</div>
+                  <div class="attachment-upload-hint">Etap 3: rekomendacje operatora, sytuacja, powiązania, podobne zgłoszenia i pasujące artykuły w jednym miejscu.</div>
                 </div>
                 <span class="counter">${{total}}</span>
               </div>
               ${{ticketContextSituationPanel(ticket)}}
               ${{ticketContextQuickActions(ticket, Object.assign({{ suggestedIncidentCount: incidents.length }}, options))}}
+              <details open>
+                <summary><strong>Rekomendacje operatora</strong></summary>
+                ${{ticketOperatorRecommendations(ticket, articles, similarTickets, incidents, Object.assign({{ currentIncidents, linkedTickets }}, options))}}
+              </details>
               <details open>
                 <summary><strong>Powiązany incydent</strong> · ${{currentIncidents.length}}</summary>
                 ${{ticketContextCurrentIncidentList(currentIncidents)}}
@@ -5320,16 +5460,16 @@ data:
                 <summary><strong>Powiązane zgłoszenia</strong> · ${{linkedTickets.length}}</summary>
                 ${{ticketContextLinkedTicketList(linkedTickets)}}
               </details>
-              <details open>
+              <details id="ticketContextSimilarTickets" open>
                 <summary><strong>Podobne zgłoszenia</strong> · ${{similarTickets.length}}</summary>
                 ${{ticketAssistantSimilarTicketList(ticket, similarTickets)}}
               </details>
-              <details open>
+              <details id="ticketContextKnowledgeArticles" open>
                 <summary><strong>Artykuły bazy wiedzy</strong> · ${{articles.length}}</summary>
                 ${{ticketAssistantArticleList(articles)}}
               </details>
               <details>
-                <summary><strong>Sugestie operatora</strong></summary>
+                <summary><strong>Uzasadnienie rekomendacji</strong></summary>
                 <div class="panel-soft" style="margin-top:10px">
                   <strong>Krótka diagnoza</strong>
                   <div class="attachment-upload-hint" style="margin-top:6px">${{esc(ticketAssistantDiagnosis(ticket, articles, similarTickets, incidents))}}</div>
