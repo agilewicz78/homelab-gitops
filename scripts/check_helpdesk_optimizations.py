@@ -305,18 +305,32 @@ def main() -> None:
     assert "function ticketAssistantWorkflowHint" in text
     assert "function renderTicketContextPanel" in text
     assert "function ticketContextQuickActions" in text
+    assert "function ticketRecommendationButton" in text
+    assert "function ticketRecommendationCard" in text
+    assert "function ticketOperatorRecommendations" in text
     assert "async function assignTicketToMe" in text
     assert "function prepareRequestUserInfo" in text
     assert "function focusTicketLinkForm" in text
     assert "function focusTicketContextSection" in text
     assert "Panel kontekstu zgłoszenia" in text
+    assert "Etap 3: rekomendacje operatora" in text
     assert "Sytuacja" in text
     assert "Szybkie akcje" in text
+    assert "Rekomendacje operatora" in text
+    assert "Prowadź komunikację przez incydent" in text
+    assert "Podepnij do istniejącego incydentu" in text
+    assert "Rozważ incydent zbiorczy" in text
+    assert "Zareaguj priorytetowo" in text
+    assert "Sprawdź artykuł bazy wiedzy" in text
+    assert "Obsłuż standardowo" in text
     assert "Przypisz do mnie" in text
     assert "Poproś o informacje" in text
     assert "Dodaj powiązanie" in text
     assert "Podepnij do incydentu" in text
     assert "Utwórz artykuł KB" in text
+    assert "Uzasadnienie rekomendacji" in text
+    assert "ticketContextSimilarTickets" in text
+    assert "ticketContextKnowledgeArticles" in text
     assert "Powiązany incydent" in text
     assert "Możliwe incydenty" in text
     assert "Powiązane zgłoszenia" in text
@@ -485,10 +499,15 @@ def main() -> None:
     assert "function ticketContextCurrentIncidentList" in text
     assert "function ticketContextLinkedTicketList" in text
     assert "function ticketContextQuickActions" in text
+    assert "function ticketOperatorRecommendations" in text
     assert "Panel kontekstu zgłoszenia" in text
+    assert "Rekomendacje operatora" in text
     assert "Powiązany incydent" in text
     assert "Możliwe incydenty" in text
     assert "Powiązane zgłoszenia" in text
+    assert "Uzasadnienie rekomendacji" in text
+    assert "ticketContextSimilarTickets" in text
+    assert "ticketContextKnowledgeArticles" in text
     assert "ticketContextPanelHtml" in text
     assert "currentIncidents: data.incidents || []" in text
     assert "linkedTickets: data.linked_tickets || []" in text
@@ -516,7 +535,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-16-ticket-context-quick-actions-v1" in deployment_text
+    assert "2026-07-16-ticket-context-recommendations-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
