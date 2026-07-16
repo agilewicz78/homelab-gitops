@@ -6894,6 +6894,14 @@ data:
           await renderIncident(created.id);
         }}
 
+        function serviceIncidentActionButton(service, summary) {{
+          const openTickets = Number(summary?.open_tickets || 0);
+          if (openTickets <= 0) {{
+            return `<button disabled title="Do utworzenia incydentu potrzebne jest aktywne zgłoszenie tej usługi.">Utwórz incydent z usługi</button>`;
+          }}
+          return `<button onclick="createServiceIncident(${{Number(service?.id || 0)}})">Utwórz incydent z usługi</button>`;
+        }}
+
         async function renderServiceContext(serviceId) {{
           currentView = {{ name: "service-context", serviceId: Number(serviceId), ticketId: null }};
           const me = await loadMe();
@@ -6919,7 +6927,7 @@ data:
                   <p class="muted">${{esc(service.description || "Brak opisu usługi.")}}</p>
                 </div>
                 <div class="actions">
-                  ${{Number(summary.open_tickets || 0) > 0 ? `<button onclick="createServiceIncident(${{Number(service.id)}})">Utwórz incydent z usługi</button>` : ""}}
+                  ${{serviceIncidentActionButton(service, summary)}}
                   <button onclick="openNewTicketForService(${{Number(service.id)}})">Nowe zgłoszenie</button>
                   ${{canManageServiceCatalog(me) ? `<button class="btn-secondary" onclick="renderAdminServiceForm(${{Number(service.id)}})">Edytuj usługę</button>` : ""}}
                 </div>
