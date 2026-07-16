@@ -558,8 +558,12 @@ def main() -> None:
     assert "newTicketServiceHint" in text
     assert '"services": services' in text
     assert '"service": {' in text
+    assert '"id": row[28]' in text
+    assert '"name": row[29] or ""' in text
+    assert '"status": row[30] or "operational"' in text
+    assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
-    assert "2026-07-16-service-catalog-v1" in deployment_text
+    assert "2026-07-16-service-catalog-ticket-list-fix-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

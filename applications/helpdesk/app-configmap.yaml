@@ -17322,11 +17322,11 @@ data:
                 "workflow_name": row[20] or WORKFLOWS["default"]["name"],
                 "sla_state": sla_state(row[13], row[8]),
                 "service": {
-                    "id": row[29],
-                    "name": row[30] or "",
-                    "status": row[31] or "operational",
-                    "status_label": SERVICE_STATUS_LABELS.get(row[31] or "operational", row[31] or "operational"),
-                } if row[29] else None,
+                    "id": row[28],
+                    "name": row[29] or "",
+                    "status": row[30] or "operational",
+                    "status_label": SERVICE_STATUS_LABELS.get(row[30] or "operational", row[30] or "operational"),
+                } if row[28] else None,
             })
         return jsonify({
             "stats": {
