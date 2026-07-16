@@ -4605,7 +4605,8 @@ data:
             ], active),
             moduleCard("tickets", "Zgłoszenia", "Lista ticketów, nowe zgłoszenie, filtry i widoki robocze.", [
               moduleAction("Lista zgłoszeń", "renderHome();return false;", active === "tickets"),
-              moduleAction("Nowe zgłoszenie", "renderNewTicket();return false;")
+              moduleAction("Nowe zgłoszenie", "renderNewTicket();return false;"),
+              (canWorkTickets(me) && canViewServiceCatalog(me)) ? moduleAction("Usługi IT", "renderAdminServices();return false;", active === "services") : ""
             ], active),
             moduleCard("incidents", "Incydenty", "Dowodzenie incydentami, komunikaty i zgłoszenia powiązane z awarią.", [
               canWorkTickets(me) ? moduleAction("Centrum incydentów", "renderIncidents();return false;", active === "incidents") : ""
@@ -4649,6 +4650,7 @@ data:
               ${{sidebarItem("operator-center", "Centrum", "renderOperatorCenter();return false;", active, canViewOperatorCenter(me))}}
               ${{sidebarItem("tickets", "Zgłoszenia", "renderHome();return false;", active, true)}}
               ${{sidebarItem("incidents", "Incydenty", "renderIncidents();return false;", active, canWorkTickets(me))}}
+              ${{sidebarItem("services", "Usługi IT", "renderAdminServices();return false;", active, canWorkTickets(me) && canViewServiceCatalog(me))}}
               ${{sidebarItem("knowledge", "Baza wiedzy", "renderKnowledgeArticles();return false;", active, true)}}
               ${{sidebarItem("reports", "Raporty", "renderDashboard();return false;", active, canViewDashboard(me) || canViewReports(me) || canViewSlaCalendar(me))}}
               ${{sidebarItem("administration", "Administracja", "renderAdministration();return false;", active, canOpenAdmin)}}
@@ -6766,14 +6768,175 @@ data:
           `;
         }}
 
+        function serviceContextMetric(label, value, hint) {{
+          return `
+            <div class="dashboard-card">
+              <div class="num">${{Number(value || 0)}}</div>
+              <div class="label">${{esc(label)}}</div>
+              <div class="muted">${{esc(hint || "")}}</div>
+            </div>
+          `;
+        }}
+
+        function serviceContextTicketCard(ticket) {{
+          return `
+            <button class="notification-card" onclick="renderTicket(${{Number(ticket.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(ticket.id)}} · ${{esc(ticket.title || "Zgłoszenie")}}</div>
+                <div>
+                  <span class="pill ${{priorityClass(ticket.priority)}}">${{esc(ticket.priority || "-")}}</span>
+                  <span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status || "-")}}</span>
+                  <span class="sla-badge ${{slaClass(ticket.sla_state)}}">${{slaLabel(ticket.sla_state)}}</span>
+                  ${{Number(ticket.active_incident_count || 0) > 0 ? `<span class="chip">incydent</span>` : ""}}
+                </div>
+                <div class="notification-meta">
+                  ${{esc(ticket.requester_name || ticket.requester_email || "Brak zgłaszającego")}} ·
+                  ${{esc(ticket.department || "brak działu")}} ·
+                  operator: ${{esc(ticket.assigned_to_name || "nieprzypisane")}} ·
+                  aktualizacja: ${{esc(ticket.updated_at || "")}}
+                </div>
+              </div>
+            </button>
+          `;
+        }}
+
+        function serviceContextTicketSection(title, tickets, emptyText) {{
+          const rows = (tickets || []).map(serviceContextTicketCard).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>${{esc(title)}}</h3>
+                  <div class="attachment-upload-hint">${{esc(emptyText)}}</div>
+                </div>
+                <span class="counter">${{Number((tickets || []).length)}}</span>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">${{esc(emptyText)}}</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+
+        function serviceContextIncidentCard(incident) {{
+          return `
+            <button class="notification-card" onclick="renderIncident(${{Number(incident.id)}}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">#${{Number(incident.id)}} · ${{esc(incident.title || "Incydent")}}</div>
+                <div>
+                  <span class="pill">${{esc(incident.severity || "SEV")}}</span>
+                  <span class="pill">${{esc(incidentStatusLabel(incident.status || ""))}}</span>
+                  <span class="chip">${{Number(incident.ticket_count || 0)}} zgłoszeń</span>
+                  <span class="chip">${{Number(incident.department_count || 0)}} działów</span>
+                </div>
+                <div class="notification-meta">
+                  Dowódca: ${{esc(incident.commander_name || "nieprzypisany")}} · aktualizacja: ${{esc(incident.updated_at || "")}}
+                </div>
+                <div class="attachment-upload-hint">${{esc(incident.summary || "")}}</div>
+              </div>
+            </button>
+          `;
+        }}
+
+        function serviceContextIncidentSection(incidents) {{
+          const rows = (incidents || []).map(serviceContextIncidentCard).join("");
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Aktywne incydenty usługi</h3>
+                  <div class="attachment-upload-hint">Incydenty zbudowane ze zgłoszeń przypisanych do tej usługi.</div>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderIncidents()">Centrum incydentów</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{rows || `<p class="muted">Brak aktywnych incydentów dla tej usługi.</p>`}}
+              </div>
+            </section>
+          `;
+        }}
+
+        function serviceContextRecommendation(service, summary, incidents) {{
+          const openTickets = Number(summary?.open_tickets || 0);
+          const highPriority = Number(summary?.high_priority_open || 0);
+          const incidentCount = Number((incidents || []).length);
+          if (incidentCount > 0) {{
+            return "Usługa ma aktywny incydent. Najlepiej publikować komunikaty w incydencie, żeby aktualizacje trafiły do powiązanych zgłoszeń.";
+          }}
+          if (openTickets >= 5 || highPriority >= 2 || isProblematicService(service)) {{
+            return "Warto rozważyć incydent zbiorczy: usługa ma wyraźny sygnał problemu albo wiele aktywnych zgłoszeń.";
+          }}
+          if (openTickets > 0) {{
+            return "Na razie wygląda to na pojedyncze zgłoszenia. Obserwuj trend 7/30 dni i powtarzające się objawy.";
+          }}
+          return "Brak aktywnych zgłoszeń dla tej usługi. Status i komunikat mogą wystarczyć użytkownikom.";
+        }}
+
+        async function renderServiceContext(serviceId) {{
+          currentView = {{ name: "service-context", serviceId: Number(serviceId), ticketId: null }};
+          const me = await loadMe();
+          if (!me || !canWorkTickets(me) || !canViewServiceCatalog(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Kontekst usługi wymaga uprawnień operatora i podglądu katalogu usług IT.</p></section>`;
+            return;
+          }}
+          appEl.innerHTML = renderWorkspaceView(me, "services", `<section class="card"><h2>Kontekst usługi</h2><p class="muted">Ładuję zgłoszenia i incydenty...</p></section>`);
+          const res = await api(`/api/services/${{Number(serviceId)}}/context`);
+          const data = res ? await res.json().catch(() => ({{}})) : {{}};
+          if (!res || !res.ok) {{
+            appEl.innerHTML = renderWorkspaceView(me, "services", `<section class="card"><h2>Nie udało się pobrać kontekstu usługi</h2><p class="error">${{esc(data.error || "Nieznany błąd")}}</p></section>`);
+            return;
+          }}
+          const service = data.service || {{}};
+          const summary = data.summary || {{}};
+          const content = `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <button class="btn-secondary btn-small" onclick="renderAdminServices()">← Usługi IT</button>
+                  <h2>${{esc(service.name || "Usługa IT")}}</h2>
+                  <p class="muted">${{esc(service.description || "Brak opisu usługi.")}}</p>
+                </div>
+                <div class="actions">
+                  <button onclick="openNewTicketForService(${{Number(service.id)}})">Nowe zgłoszenie</button>
+                  ${{canManageServiceCatalog(me) ? `<button class="btn-secondary" onclick="renderAdminServiceForm(${{Number(service.id)}})">Edytuj usługę</button>` : ""}}
+                </div>
+              </div>
+              <div style="margin-top:10px">
+                ${{serviceStatusBadge(service)}} ${{serviceCriticalityBadge(service)}}
+                <span class="chip">${{esc(service.category || "-")}} / ${{esc(service.subcategory || "Inne")}}</span>
+                <span class="chip">właściciel: ${{esc(service.owner_name || service.owner_email || "brak")}}</span>
+              </div>
+              <div class="panel-soft" style="margin-top:12px">
+                <strong>Rekomendacja operatora</strong>
+                <div class="attachment-upload-hint" style="margin-top:6px">${{esc(serviceContextRecommendation(service, summary, data.active_incidents || []))}}</div>
+              </div>
+            </section>
+            <section class="dashboard-grid">
+              ${{serviceContextMetric("Otwarte", summary.open_tickets, "Aktywne zgłoszenia tej usługi.")}}
+              ${{serviceContextMetric("Wysoki priorytet", summary.high_priority_open, "Otwarte zgłoszenia Wysoki/Krytyczny.")}}
+              ${{serviceContextMetric("Bez reakcji", summary.without_first_response, "Brak pierwszej odpowiedzi operatora.")}}
+              ${{serviceContextMetric("Po SLA", summary.overdue_sla, "Otwarte zgłoszenia po terminie.")}}
+              ${{serviceContextMetric("7 dni", summary.last_7_days, "Nowe zgłoszenia w ostatnim tygodniu.")}}
+              ${{serviceContextMetric("30 dni", summary.last_30_days, "Nowe zgłoszenia w ostatnich 30 dniach.")}}
+            </section>
+            <div class="grid">
+              ${{serviceContextIncidentSection(data.active_incidents || [])}}
+              ${{serviceContextTicketSection("Aktywne zgłoszenia usługi", data.active_tickets || [], "Brak aktywnych zgłoszeń dla tej usługi.")}}
+            </div>
+            ${{serviceContextTicketSection("Ostatnie zgłoszenia usługi", data.recent_tickets || [], "Brak historii zgłoszeń dla tej usługi.")}}
+          `;
+          appEl.innerHTML = renderWorkspaceView(me, "services", content);
+        }}
+
         async function renderAdminServices() {{
           currentView = {{ name: "admin-services", ticketId: null }};
           const me = await loadMe();
-          if (!me || !canManageServiceCatalog(me)) {{
-            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Katalog usług IT wymaga uprawnienia service_catalog.manage.</p></section>`;
+          if (!me || !canViewServiceCatalog(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Katalog usług IT wymaga uprawnienia service_catalog.view.</p></section>`;
             return;
           }}
-          const res = await api("/api/admin/services");
+          const canManage = canManageServiceCatalog(me);
+          const res = await api(canManage ? "/api/admin/services" : "/api/services");
           const data = res ? await res.json().catch(() => ({{}})) : {{}};
           if (!res || !res.ok) {{
             appEl.innerHTML = `<section class="card"><h2>Katalog usług IT</h2><p class="error">${{esc(data.error || "Nie udało się pobrać katalogu usług.")}}</p></section>`;
@@ -6796,19 +6959,22 @@ data:
                 <strong>${{Number(service.open_ticket_count || 0)}}</strong> otwarte<br>
                 <span class="muted">${{Number(service.active_incident_count || 0)}} aktywne incydenty</span>
               </td>
-              <td><button class="btn-secondary btn-small" onclick="renderAdminServiceForm(${{Number(service.id)}})">Edytuj</button></td>
+              <td>
+                <button class="btn-secondary btn-small" onclick="renderServiceContext(${{Number(service.id)}})">Kontekst</button>
+                ${{canManage ? `<button class="btn-secondary btn-small" onclick="renderAdminServiceForm(${{Number(service.id)}})">Edytuj</button>` : ""}}
+              </td>
             </tr>
           `).join("");
           const content = `
             <section class="card">
               <div class="ticket-section-title">
                 <div>
-                  <h2>Katalog usług IT</h2>
+                  <h2>Usługi IT</h2>
                   <p class="muted">Usługi są warstwą nad kategoriami: pomagają użytkownikowi zgłosić problem, operatorowi zobaczyć kontekst, a administratorowi kontrolować status usług.</p>
                 </div>
                 <div class="actions">
-                  <button onclick="renderAdminServiceForm()">Dodaj usługę</button>
-                  <button class="btn-secondary" onclick="renderAdministration()">← Administracja</button>
+                  ${{canManage ? `<button onclick="renderAdminServiceForm()">Dodaj usługę</button>` : ""}}
+                  <button class="btn-secondary" onclick="${{canManage ? "renderAdministration()" : "renderOperatorCenter()"}}">← ${{canManage ? "Administracja" : "Centrum operatora"}}</button>
                 </div>
               </div>
             </section>
@@ -6821,7 +6987,7 @@ data:
               </table>
             </section>
           `;
-          appEl.innerHTML = renderWorkspaceView(me, "administration", content);
+          appEl.innerHTML = renderWorkspaceView(me, "services", content);
         }}
 
         async function renderAdminServiceForm(serviceId = null) {{
@@ -14810,6 +14976,171 @@ data:
             "services": services,
             "statuses": [{"value": key, "label": SERVICE_STATUS_LABELS.get(key, key)} for key in SERVICE_STATUSES],
             "criticalities": [{"value": key, "label": SERVICE_CRITICALITY_LABELS.get(key, key)} for key in SERVICE_CRITICALITIES],
+        })
+
+    @app.get("/api/services/<int:service_id>/context")
+    @api_login_required
+    @api_staff_required
+    def api_service_context(user, service_id):
+        if not can_view_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do katalogu usług IT.", "service_catalog.view")
+        conn = get_conn()
+        cur = conn.cursor()
+        services = fetch_service_catalog_rows(
+            cur,
+            include_inactive=can_manage_service_catalog_backend(user),
+            user_visible_only=False,
+        )
+        service = next((item for item in services if int(item["id"]) == int(service_id)), None)
+        if not service:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Usługa nie istnieje albo nie jest widoczna."}), 404
+
+        cur.execute("""
+            SELECT
+              COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days') AS last_7_days,
+              COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '30 days') AS last_30_days,
+              COUNT(*) FILTER (WHERE t.status NOT IN ('Rozwiązane', 'Zamknięte')) AS open_tickets,
+              COUNT(*) FILTER (
+                WHERE t.status NOT IN ('Rozwiązane', 'Zamknięte')
+                  AND t.priority IN ('Wysoki', 'Krytyczny')
+              ) AS high_priority_open,
+              COUNT(*) FILTER (
+                WHERE t.status NOT IN ('Rozwiązane', 'Zamknięte')
+                  AND t.first_response_at IS NULL
+              ) AS without_first_response,
+              COUNT(*) FILTER (
+                WHERE t.status NOT IN ('Rozwiązane', 'Zamknięte')
+                  AND t.sla_due_at IS NOT NULL
+                  AND t.sla_due_at < NOW()
+              ) AS overdue_sla
+            FROM tickets t
+            WHERE t.service_id = %s
+        """, (service_id,))
+        summary_row = cur.fetchone()
+        summary = {
+            "last_7_days": int(summary_row[0] or 0),
+            "last_30_days": int(summary_row[1] or 0),
+            "open_tickets": int(summary_row[2] or 0),
+            "high_priority_open": int(summary_row[3] or 0),
+            "without_first_response": int(summary_row[4] or 0),
+            "overdue_sla": int(summary_row[5] or 0),
+        }
+
+        def service_context_ticket_payload(row):
+            return {
+                "id": row[0],
+                "title": row[1],
+                "requester_name": row[2],
+                "requester_email": row[3],
+                "department": row[4],
+                "category": row[5],
+                "subcategory": row[6] or "Inne",
+                "priority": row[7],
+                "status": row[8],
+                "assigned_to_email": row[9] or "",
+                "assigned_to_name": row[10] or "",
+                "created_at": str(row[11]),
+                "updated_at": str(row[12]),
+                "sla_due_at": str(row[13]) if row[13] else "",
+                "first_response_due_at": str(row[14]) if row[14] else "",
+                "first_response_at": str(row[15]) if row[15] else "",
+                "active_incident_count": int(row[16] or 0),
+                "sla_state": sla_state(row[13], row[8]),
+                "first_response_state": first_response_state(row[14], row[15], row[8]),
+            }
+
+        cur.execute("""
+            SELECT
+              t.id, t.title, t.requester_name, t.requester_email, t.department,
+              t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+              t.priority, t.status, t.assigned_to_email,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              t.created_at, t.updated_at, t.sla_due_at, t.first_response_due_at, t.first_response_at,
+              (
+                SELECT COUNT(*)
+                FROM incident_tickets it
+                JOIN incidents i ON i.id = it.incident_id
+                WHERE it.ticket_id = t.id
+                  AND i.status <> 'resolved'
+              ) AS active_incident_count
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE t.service_id = %s
+              AND t.status NOT IN ('Rozwiązane', 'Zamknięte')
+            ORDER BY
+              CASE t.priority WHEN 'Krytyczny' THEN 1 WHEN 'Wysoki' THEN 2 WHEN 'Normalny' THEN 3 WHEN 'Niski' THEN 4 ELSE 5 END,
+              t.updated_at DESC,
+              t.id DESC
+            LIMIT 10
+        """, (service_id,))
+        active_tickets = [service_context_ticket_payload(row) for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              t.id, t.title, t.requester_name, t.requester_email, t.department,
+              t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+              t.priority, t.status, t.assigned_to_email,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              t.created_at, t.updated_at, t.sla_due_at, t.first_response_due_at, t.first_response_at,
+              (
+                SELECT COUNT(*)
+                FROM incident_tickets it
+                JOIN incidents i ON i.id = it.incident_id
+                WHERE it.ticket_id = t.id
+                  AND i.status <> 'resolved'
+              ) AS active_incident_count
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            WHERE t.service_id = %s
+            ORDER BY t.updated_at DESC, t.id DESC
+            LIMIT 8
+        """, (service_id,))
+        recent_tickets = [service_context_ticket_payload(row) for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              i.id, i.title, i.summary, COALESCE(i.impact, ''),
+              i.severity, i.status,
+              COALESCE(i.commander_email, ''),
+              COALESCE(i.commander_name, i.commander_email, ''),
+              i.updated_at,
+              COUNT(DISTINCT it.ticket_id) AS ticket_count,
+              COUNT(DISTINCT NULLIF(t.department, '')) AS department_count
+            FROM incidents i
+            JOIN incident_tickets it ON it.incident_id = i.id
+            JOIN tickets t ON t.id = it.ticket_id
+            WHERE t.service_id = %s
+              AND i.status <> 'resolved'
+            GROUP BY i.id
+            ORDER BY
+              CASE i.severity WHEN 'SEV1' THEN 1 WHEN 'SEV2' THEN 2 WHEN 'SEV3' THEN 3 ELSE 4 END,
+              i.updated_at DESC
+            LIMIT 8
+        """, (service_id,))
+        active_incidents = [{
+            "id": row[0],
+            "title": row[1],
+            "summary": row[2],
+            "impact": row[3],
+            "severity": row[4],
+            "status": row[5],
+            "commander_email": row[6],
+            "commander_name": row[7],
+            "updated_at": str(row[8]) if row[8] else "",
+            "ticket_count": int(row[9] or 0),
+            "department_count": int(row[10] or 0),
+        } for row in cur.fetchall()]
+
+        cur.close()
+        conn.close()
+        return jsonify({
+            "service": service,
+            "summary": summary,
+            "active_tickets": active_tickets,
+            "recent_tickets": recent_tickets,
+            "active_incidents": active_incidents,
         })
 
     def service_payload_from_request(payload):
