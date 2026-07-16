@@ -4281,6 +4281,7 @@ data:
         let knowledgeSuggestionTimer = null;
         let knowledgeSuggestionRequest = 0;
         let adminServiceCatalogCache = null;
+        let pendingNewTicketServiceId = null;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
@@ -4725,6 +4726,9 @@ data:
             panel.innerHTML = "";
             return;
           }}
+          const warning = isProblematicService(service)
+            ? `<div class="error" style="margin-top:8px">Ta usługa ma aktualnie status: ${{esc(service.status_label || service.status)}}. Problem może być już znany helpdeskowi, ale możesz dopisać swoje objawy jako osobne zgłoszenie.</div>`
+            : "";
           panel.innerHTML = `
             <div class="panel-soft" style="margin-top:10px">
               <strong>Usługa: ${{esc(service.name)}}</strong>
@@ -4734,6 +4738,7 @@ data:
                 krytyczność: ${{esc(service.criticality_label || service.criticality)}} ·
                 kategoria: ${{esc(service.category)}} / ${{esc(service.subcategory || "Inne")}}.
               </div>
+              ${{warning}}
             </div>
           `;
           panel.classList.remove("hidden");
@@ -5181,6 +5186,62 @@ data:
               <div class="label">${{esc(label)}}</div>
               ${{hint ? `<div class="muted">${{esc(hint)}}</div>` : ""}}
             </div>
+          `;
+        }}
+        function serviceStatusOrder(service) {{
+          const order = {{
+            outage: 1,
+            degraded: 2,
+            maintenance: 3,
+            operational: 4,
+          }};
+          return order[service?.status || "operational"] || 5;
+        }}
+        function openNewTicketForService(serviceId) {{
+          pendingNewTicketServiceId = Number(serviceId || 0) || null;
+          renderNewTicket();
+        }}
+        function userPortalServiceStatusCard(service) {{
+          const problem = isProblematicService(service);
+          const ticketCount = Number(service.open_ticket_count || 0);
+          const incidentCount = Number(service.active_incident_count || 0);
+          return `
+            <div class="notification-card ${{problem ? "unread" : ""}}">
+              <div class="notification-open">
+                <div class="ticket-section-title">
+                  <div>
+                    <div class="notification-ticket">${{esc(service.name || "Usługa IT")}}</div>
+                    <div style="margin-top:6px">${{serviceStatusBadge(service)}} ${{serviceCriticalityBadge(service)}}</div>
+                  </div>
+                  <button class="btn-secondary btn-small" onclick="openNewTicketForService(${{Number(service.id)}}); return false;">Zgłoś problem</button>
+                </div>
+                <div class="notification-meta" style="margin-top:8px">
+                  ${{esc(service.category || "-")}} / ${{esc(service.subcategory || "Inne")}} ·
+                  aktywne zgłoszenia: ${{ticketCount}} · incydenty: ${{incidentCount}}
+                </div>
+                <div class="attachment-upload-hint">${{esc(serviceStatusMessage(service))}}</div>
+              </div>
+            </div>
+          `;
+        }}
+        function userPortalServiceStatusPanel(services = []) {{
+          const visibleServices = [...(services || [])]
+            .sort((a, b) => serviceStatusOrder(a) - serviceStatusOrder(b) || String(a.name || "").localeCompare(String(b.name || "")))
+            .slice(0, 6);
+          const problemCount = (services || []).filter(isProblematicService).length;
+          return `
+            <section class="card user-service-status-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Status usług IT</h3>
+                  <div class="attachment-upload-hint">Sprawdź, czy problem nie wynika z awarii, degradacji albo prac serwisowych. Problem może być już znany helpdeskowi.</div>
+                </div>
+                <span class="counter">${{problemCount}}</span>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${{visibleServices.length ? visibleServices.map(userPortalServiceStatusCard).join("") : `<p class="muted">Brak widocznych usług w katalogu.</p>`}}
+              </div>
+            </section>
           `;
         }}
         function userPortalNextStep(ticket) {{
@@ -5917,6 +5978,7 @@ data:
               ${{userPortalMetric("Incydenty", summary.active_incident_tickets, "Twoje zgłoszenia w aktywnych incydentach.", "renderUserPortal()")}}
               ${{userPortalMetric("Powiadomienia", summary.unread_notifications, "Nieprzeczytane komunikaty.", "toggleNotifications()")}}
             </section>
+            ${{userPortalServiceStatusPanel(data.services || [])}}
             <div class="grid">
               ${{userPortalTicketSection("Czekają na moją odpowiedź", sections.waiting_for_user || [], "Nie masz zgłoszeń, które wymagają Twojej odpowiedzi.")}}
               ${{userPortalTicketSection("Moje aktywne zgłoszenia", sections.active_tickets || [], "Brak aktywnych zgłoszeń.", `<button class="btn-secondary btn-small" onclick="renderNewTicket()">Nowe zgłoszenie</button>`)}}
@@ -6653,6 +6715,21 @@ data:
             critical: "priority-Krytyczny",
           }};
           return `<span class="pill ${{classes[criticality] || ""}}">${{esc(service?.criticality_label || labels[criticality] || criticality)}}</span>`;
+        }}
+
+        function serviceStatusMessage(service) {{
+          const status = service?.status || "operational";
+          const messages = {{
+            operational: "Usługa działa prawidłowo. Jeżeli problem występuje tylko u Ciebie, utwórz zgłoszenie.",
+            degraded: "Usługa działa częściowo wolniej albo niestabilnie. Problem może być już znany helpdeskowi.",
+            outage: "Trwa awaria usługi. Problem może być już znany, więc warto sprawdzić komunikaty i aktywne incydenty.",
+            maintenance: "Trwają prace serwisowe. Część funkcji może być chwilowo niedostępna.",
+          }};
+          return messages[status] || messages.operational;
+        }}
+
+        function isProblematicService(service) {{
+          return ["degraded", "outage", "maintenance"].includes(service?.status || "");
         }}
 
         function adminServiceOptionList(options, selected, labelKey = "label", valueKey = "value") {{
@@ -11763,6 +11840,14 @@ data:
               </form>
             </section>`;
           updateSubcategorySelect(meta);
+          if (pendingNewTicketServiceId) {{
+            const serviceSelect = document.getElementById("new-ticket-service");
+            if (serviceSelect) {{
+              serviceSelect.value = String(pendingNewTicketServiceId);
+              applySelectedServiceToNewTicket(meta);
+            }}
+            pendingNewTicketServiceId = null;
+          }}
           document.getElementById("new-ticket-service").addEventListener("change", () => {{
             applySelectedServiceToNewTicket(meta);
             scheduleNewTicketKnowledgeSuggestions();
@@ -17571,6 +17656,8 @@ data:
             "ticket_title": row[6],
         } for row in cur.fetchall()]
 
+        services = fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=True)
+
         cur.close()
         conn.close()
         return jsonify({
@@ -17591,6 +17678,7 @@ data:
             },
             "knowledge_articles": knowledge_articles,
             "notifications": notifications,
+            "services": services,
         })
 
     @app.get("/api/operator-center")

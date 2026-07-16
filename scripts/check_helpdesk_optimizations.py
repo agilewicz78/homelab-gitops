@@ -552,7 +552,14 @@ def main() -> None:
     assert "async function renderAdminServiceForm" in text
     assert "function serviceCatalogMetrics" in text
     assert "function applySelectedServiceToNewTicket" in text
+    assert "let pendingNewTicketServiceId" in text
+    assert "function serviceStatusMessage" in text
+    assert "function isProblematicService" in text
+    assert "function openNewTicketForService" in text
+    assert "function userPortalServiceStatusPanel" in text
+    assert "function userPortalServiceStatusCard" in text
     assert "Katalog usług IT" in text
+    assert "Status usług IT" in text
     assert "Usługa IT" in text
     assert "new-ticket-service" in text
     assert "newTicketServiceHint" in text
@@ -563,7 +570,9 @@ def main() -> None:
     assert '"status": row[30] or "operational"' in text
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
-    assert "2026-07-16-service-catalog-ticket-list-fix-v1" in deployment_text
+    assert "Ta usługa ma aktualnie status" in text
+    assert "Problem może być już znany helpdeskowi" in text
+    assert "2026-07-16-service-status-user-portal-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
