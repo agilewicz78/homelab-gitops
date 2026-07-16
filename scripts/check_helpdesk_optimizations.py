@@ -547,6 +547,9 @@ def main() -> None:
     assert '@app.get("/api/services")' in text
     assert '@app.get("/api/services/<int:service_id>/context")' in text
     assert "def api_service_context(user, service_id)" in text
+    assert '@app.post("/api/services/<int:service_id>/incident")' in text
+    assert "def api_create_service_incident(user, service_id)" in text
+    assert "def service_incident_default_severity(service, ticket_rows)" in text
     assert '@app.get("/api/admin/services")' in text
     assert '@app.post("/api/admin/services")' in text
     assert '@app.put("/api/admin/services/<int:service_id>")' in text
@@ -555,6 +558,7 @@ def main() -> None:
     assert "function serviceCatalogMetrics" in text
     assert "function serviceContextMetric" in text
     assert "function serviceContextRecommendation" in text
+    assert "function createServiceIncident" in text
     assert "async function renderServiceContext" in text
     assert "function applySelectedServiceToNewTicket" in text
     assert "let pendingNewTicketServiceId" in text
@@ -569,6 +573,8 @@ def main() -> None:
     assert "Aktywne zgłoszenia usługi" in text
     assert "Aktywne incydenty usługi" in text
     assert "Rekomendacja operatora" in text
+    assert "Utwórz incydent z usługi" in text
+    assert "incident_created_from_service" in text
     assert "Kontekst" in text
     assert "new-ticket-service" in text
     assert "newTicketServiceHint" in text
@@ -581,7 +587,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-16-service-context-v1" in deployment_text
+    assert "2026-07-16-service-incident-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
