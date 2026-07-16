@@ -557,6 +557,9 @@ def main() -> None:
     assert "async function renderAdminServiceForm" in text
     assert "function serviceCatalogMetrics" in text
     assert "function serviceContextMetric" in text
+    assert "function serviceQualityPanel" in text
+    assert "function serviceQualityTrendBars" in text
+    assert "function serviceQualitySignal" in text
     assert "function serviceContextRecommendation" in text
     assert "function createServiceIncident" in text
     assert "function serviceIncidentActionButton" in text
@@ -574,6 +577,13 @@ def main() -> None:
     assert "Aktywne zgłoszenia usługi" in text
     assert "Aktywne incydenty usługi" in text
     assert "Rekomendacja operatora" in text
+    assert "Historia i jakość usługi" in text
+    assert "Trend zgłoszeń 14 dni" in text
+    assert "Najczęstsze objawy" in text
+    assert "Najbardziej dotknięte działy" in text
+    assert '"quality": quality' in text
+    assert '"trend_14_days": trend_14_days' in text
+    assert '"top_symptoms": top_symptoms' in text
     assert "Utwórz incydent z usługi" in text
     assert "Do utworzenia incydentu potrzebne jest aktywne zgłoszenie tej usługi." in text
     assert "incident_created_from_service" in text
@@ -589,7 +599,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-16-service-incident-button-v1" in deployment_text
+    assert "2026-07-16-service-quality-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
