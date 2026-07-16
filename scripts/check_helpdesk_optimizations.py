@@ -304,8 +304,19 @@ def main() -> None:
     assert "function ticketAssistantPriorityHint" in text
     assert "function ticketAssistantWorkflowHint" in text
     assert "function renderTicketContextPanel" in text
+    assert "function ticketContextQuickActions" in text
+    assert "async function assignTicketToMe" in text
+    assert "function prepareRequestUserInfo" in text
+    assert "function focusTicketLinkForm" in text
+    assert "function focusTicketContextSection" in text
     assert "Panel kontekstu zgłoszenia" in text
     assert "Sytuacja" in text
+    assert "Szybkie akcje" in text
+    assert "Przypisz do mnie" in text
+    assert "Poproś o informacje" in text
+    assert "Dodaj powiązanie" in text
+    assert "Podepnij do incydentu" in text
+    assert "Utwórz artykuł KB" in text
     assert "Powiązany incydent" in text
     assert "Możliwe incydenty" in text
     assert "Powiązane zgłoszenia" in text
@@ -473,6 +484,7 @@ def main() -> None:
     assert "function ticketContextSituationPanel" in text
     assert "function ticketContextCurrentIncidentList" in text
     assert "function ticketContextLinkedTicketList" in text
+    assert "function ticketContextQuickActions" in text
     assert "Panel kontekstu zgłoszenia" in text
     assert "Powiązany incydent" in text
     assert "Możliwe incydenty" in text
@@ -480,6 +492,9 @@ def main() -> None:
     assert "ticketContextPanelHtml" in text
     assert "currentIncidents: data.incidents || []" in text
     assert "linkedTickets: data.linked_tickets || []" in text
+    assert "canCreateKnowledgeArticle: !!canCreateKnowledgeArticle" in text
+    assert "currentUserEmail: me.email || \"\"" in text
+    assert "currentUserCanBeAssigned" in text
     assert '@app.post("/api/tickets/<int:ticket_id>/resolution-feedback")' in text
     assert "def api_ticket_resolution_feedback" in text
     assert "resolution_feedback_reopen_status_for_workflow" in text
@@ -501,7 +516,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-16-portal-center-newest-first-v1" in deployment_text
+    assert "2026-07-16-ticket-context-quick-actions-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

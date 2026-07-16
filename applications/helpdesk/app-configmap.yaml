@@ -3295,6 +3295,8 @@ data:
       .ticket-context-mini { color: var(--muted); font-size: 12px; font-weight: 500; margin-top: 3px; }
       .ticket-context-card details { margin-top: 12px; }
       .ticket-context-card summary { cursor: pointer; color: var(--text); }
+      .ticket-context-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(145px, 1fr)); gap: 8px; margin-top: 12px; }
+      .ticket-context-actions button { width: 100%; margin-top: 0; padding: 9px 10px; font-size: 13px; }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
       .stat .num { font-size: 32px; font-weight: 800; }
@@ -5127,6 +5129,90 @@ data:
             `).join("")}}</div>
           `;
         }}
+        function focusTicketContextSection(sectionId) {{
+          const target = document.getElementById(sectionId);
+          if (!target) return;
+          if (target.tagName.toLowerCase() === "details") target.open = true;
+          target.scrollIntoView({{ behavior: "smooth", block: "center" }});
+          target.classList.remove("section-focus");
+          void target.offsetWidth;
+          target.classList.add("section-focus");
+        }}
+        function focusTicketLinkForm() {{
+          focusTicketContextSection("linkedTicketsSection");
+          const input = document.querySelector('#ticketLinkForm input[name="linked_ticket_id"]');
+          if (input) input.focus();
+        }}
+        function prepareRequestUserInfo(ticketId) {{
+          const textarea = document.querySelector('#commentForm textarea[name="content"]');
+          if (!textarea) {{
+            showToast("Nie można przygotować prośby", "Komentarze są niedostępne dla tego zgłoszenia.");
+            return;
+          }}
+          const template = "Proszę o dodatkowe informacje, które pomogą nam rozwiązać zgłoszenie:\\n- \\n\\nDziękuję.";
+          if (!textarea.value.trim()) {{
+            textarea.value = template;
+          }}
+          const internalToggle = document.getElementById("comment-internal");
+          if (internalToggle) internalToggle.checked = false;
+          const statusSelect = document.getElementById("statusSelect");
+          if (statusSelect && Array.from(statusSelect.options).some(option => option.value === "Oczekuje na użytkownika")) {{
+            statusSelect.value = "Oczekuje na użytkownika";
+            statusSelect.dispatchEvent(new Event("change"));
+          }}
+          focusTicketContextSection("commentsSection");
+          textarea.focus();
+          showToast("Przygotowano prośbę o informacje", `Sprawdź komentarz i zapisz go w zgłoszeniu #${{ticketId}}.`);
+        }}
+        async function assignTicketToMe(ticketId, email) {{
+          if (!email) {{
+            showToast("Nie można przypisać zgłoszenia", "Brakuje adresu e-mail aktualnego operatora.");
+            return;
+          }}
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${{ticketId}}/assign`, {{
+            method: "POST",
+            body: JSON.stringify({{ assigned_to_email: email }})
+          }});
+          if (!res || !res.ok) {{
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({{ error: "Nie udało się przypisać zgłoszenia." }})) : {{ error: "Nie udało się przypisać zgłoszenia." }};
+            alert(err.error || "Nie udało się przypisać zgłoszenia.");
+            return;
+          }}
+          showToast("Przypisano zgłoszenie do Ciebie", `Zgłoszenie #${{ticketId}} trafiło do Twojej kolejki.`);
+          await renderTicket(ticketId);
+        }}
+        function ticketContextQuickActions(ticket, options = {{}}) {{
+          const currentUserEmail = String(options.currentUserEmail || "").toLowerCase();
+          const assignedToEmail = String(ticket.assigned_to_email || "").toLowerCase();
+          const isClosed = !!options.isClosed;
+          const actions = [];
+          if (!isClosed && options.currentUserCanBeAssigned && currentUserEmail && assignedToEmail !== currentUserEmail) {{
+            actions.push(`<button type="button" class="btn-secondary btn-small" onclick="assignTicketToMe(${{ticket.id}}, '${{esc(currentUserEmail)}}')">Przypisz do mnie</button>`);
+          }}
+          if (!isClosed) {{
+            actions.push(`<button type="button" class="btn-secondary btn-small" onclick="prepareRequestUserInfo(${{ticket.id}})">Poproś o informacje</button>`);
+            actions.push(`<button type="button" class="btn-secondary btn-small" onclick="focusTicketLinkForm()">Dodaj powiązanie</button>`);
+          }}
+          if (!isClosed && Number(options.suggestedIncidentCount || 0) > 0) {{
+            actions.push(`<button type="button" class="btn-secondary btn-small" onclick="focusTicketContextSection('ticketContextPossibleIncidents')">Podepnij do incydentu</button>`);
+          }}
+          if (!isClosed && options.canCreateIncident) {{
+            actions.push(`<button type="button" onclick="openIncidentFromTicketsModal()">Utwórz incydent</button>`);
+          }}
+          if (options.canCreateKnowledgeArticle) {{
+            actions.push(`<button type="button" onclick="openKnowledgeArticleModal()">Utwórz artykuł KB</button>`);
+          }}
+          if (!actions.length) return "";
+          return `
+            <div class="panel-soft">
+              <strong>Szybkie akcje</strong>
+              <div class="attachment-upload-hint" style="margin-top:6px">Skróty korzystają z istniejących formularzy i akcji zgłoszenia.</div>
+              <div class="ticket-context-actions">${{actions.join("")}}</div>
+            </div>
+          `;
+        }}
         function ticketContextSituationPanel(ticket) {{
           const firstResponseText = ticket.first_response_at
             ? `reakcja: ${{ticket.first_response_at}}`
@@ -5221,16 +5307,12 @@ data:
                 <span class="counter">${{total}}</span>
               </div>
               ${{ticketContextSituationPanel(ticket)}}
-              ${{options.canCreateIncident ? `
-                <div class="form-actions">
-                  <button type="button" onclick="openIncidentFromTicketsModal()">Utwórz incydent z powiązanych zgłoszeń</button>
-                </div>
-              ` : ""}}
+              ${{ticketContextQuickActions(ticket, Object.assign({{ suggestedIncidentCount: incidents.length }}, options))}}
               <details open>
                 <summary><strong>Powiązany incydent</strong> · ${{currentIncidents.length}}</summary>
                 ${{ticketContextCurrentIncidentList(currentIncidents)}}
               </details>
-              <details open>
+              <details id="ticketContextPossibleIncidents" open>
                 <summary><strong>Możliwe incydenty</strong> · ${{incidents.length}}</summary>
                 ${{ticketAssistantIncidentList(ticket, incidents)}}
               </details>
@@ -11180,7 +11262,7 @@ data:
             ? `${{incidentRelations}}${{directTicketRelations}}`
             : `<p class="muted">Brak powiązanych zgłoszeń ani incydentów.</p>`;
           const linkedTicketsPanel = `
-            <section class="card">
+            <section class="card" id="linkedTicketsSection">
               <div class="ticket-section-title">
                 <h3>Powiązane zgłoszenia</h3>
                 <span class="counter">${{relationCount}}</span>
@@ -11204,9 +11286,14 @@ data:
           const knowledgeSuggestions = data.suggestions?.articles || [];
           const suggestedTickets = data.suggestions?.tickets || [];
           const suggestedIncidents = data.suggestions?.incidents || [];
+          const currentUserCanBeAssigned = (data.meta.operators || []).some(op => String(op.email || "").toLowerCase() === String(me.email || "").toLowerCase());
           const ticketContextPanelHtml = canWorkTickets(me)
             ? renderTicketContextPanel(t, knowledgeSuggestions, suggestedTickets, suggestedIncidents, {{
                 canCreateIncident: !!(incidentCreationContext && !hasActiveIncident),
+                canCreateKnowledgeArticle: !!canCreateKnowledgeArticle,
+                currentUserEmail: me.email || "",
+                currentUserCanBeAssigned,
+                isClosed,
                 currentIncidents: data.incidents || [],
                 linkedTickets: data.linked_tickets || []
               }})
