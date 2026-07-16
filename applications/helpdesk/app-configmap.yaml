@@ -6778,6 +6778,116 @@ data:
           `;
         }}
 
+        function serviceQualityMetric(label, value, hint) {{
+          return `
+            <div class="dashboard-card">
+              <div class="num">${{esc(value ?? "0")}}</div>
+              <div class="label">${{esc(label)}}</div>
+              <div class="muted">${{esc(hint || "")}}</div>
+            </div>
+          `;
+        }}
+
+        function serviceQualityMinutes(minutes) {{
+          const value = Number(minutes || 0);
+          if (!value) return "brak";
+          const hours = Math.floor(value / 60);
+          const rest = value % 60;
+          if (hours && rest) return `${{hours}}h ${{rest}}m`;
+          if (hours) return `${{hours}}h`;
+          return `${{rest}}m`;
+        }}
+
+        function serviceQualitySignal(service, quality) {{
+          const summary = quality?.summary || {{}};
+          const tickets30 = Number(summary.tickets_30_days || 0);
+          const tickets90 = Number(summary.tickets_90_days || 0);
+          const incidents90 = Number(summary.incidents_90_days || 0);
+          const overdue30 = Number(summary.overdue_30_days || 0);
+          if (incidents90 >= 2) {{
+            return "Usługa ma powtarzające się incydenty w ostatnich 90 dniach. Warto zaplanować analizę przyczyny źródłowej i działania zapobiegawcze.";
+          }}
+          if (tickets30 >= 10 || (tickets90 >= 20 && isProblematicService(service))) {{
+            return "Widać podwyższony wolumen zgłoszeń. To dobry kandydat do przeglądu jakości usługi i aktualizacji bazy wiedzy.";
+          }}
+          if (overdue30 > 0) {{
+            return "Są zgłoszenia po SLA. Sprawdź, czy usługa nie wymaga innego priorytetu, workflow albo właściciela.";
+          }}
+          if (tickets30 > 0) {{
+            return "Usługa generuje zgłoszenia, ale bez silnego sygnału powtarzalnego incydentu. Obserwuj trend i najczęstsze objawy.";
+          }}
+          return "W ostatnich 30 dniach nie widać większego obciążenia tej usługi.";
+        }}
+
+        function serviceQualityTrendBars(trend = []) {{
+          const max = Math.max(1, ...((trend || []).map(item => Number(item.count || 0))));
+          const rows = (trend || []).map(item => {{
+            const count = Number(item.count || 0);
+            return `
+              <div class="dashboard-row">
+                <strong>${{esc(item.day || "")}}</strong>
+                <span class="count">${{count}}</span>
+                <div class="dashboard-bar"><span style="width:${{Math.round((count / max) * 100)}}%"></span></div>
+              </div>
+            `;
+          }}).join("");
+          return rows || `<p class="muted">Brak danych trendu.</p>`;
+        }}
+
+        function serviceQualityTopList(items = [], emptyText = "Brak danych.") {{
+          const rows = (items || []).map(item => `
+            <div class="watcher-item">
+              <div>
+                <strong>${{esc(item.label || "-")}}</strong>
+                <div class="watcher-meta">${{Number(item.count || 0)}} zgłoszeń</div>
+              </div>
+              <span class="counter">${{Number(item.count || 0)}}</span>
+            </div>
+          `).join("");
+          return rows || `<p class="muted">${{esc(emptyText)}}</p>`;
+        }}
+
+        function serviceQualityPanel(service, quality = {{}}) {{
+          const summary = quality?.summary || {{}};
+          return `
+            <section class="card service-quality-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Historia i jakość usługi</h3>
+                  <div class="attachment-upload-hint">Trend zgłoszeń, powtarzalne objawy i sygnały jakościowe z ostatnich 7/30/90 dni.</div>
+                </div>
+                <span class="counter">${{Number(summary.tickets_90_days || 0)}}</span>
+              </div>
+              <div class="panel-soft" style="margin-top:12px">
+                <strong>Sygnał jakości</strong>
+                <div class="attachment-upload-hint" style="margin-top:6px">${{esc(serviceQualitySignal(service, quality))}}</div>
+              </div>
+              <section class="dashboard-grid" style="margin-top:12px">
+                ${{serviceQualityMetric("Zgłoszenia 90 dni", Number(summary.tickets_90_days || 0), "Pełniejszy obraz obciążenia usługi.")}}
+                ${{serviceQualityMetric("Incydenty 90 dni", Number(summary.incidents_90_days || 0), "Incydenty powiązane z usługą.")}}
+                ${{serviceQualityMetric("Rozwiązane 30 dni", Number(summary.resolved_30_days || 0), "Zamknięte lub rozwiązane ostatnio.")}}
+                ${{serviceQualityMetric("Śr. rozwiązanie", serviceQualityMinutes(summary.avg_resolution_minutes_90_days), "Na podstawie rozwiązanych zgłoszeń z 90 dni.")}}
+                ${{serviceQualityMetric("Wysoki priorytet 30 dni", Number(summary.high_priority_30_days || 0), "Zgłoszenia Wysoki/Krytyczny.")}}
+                ${{serviceQualityMetric("Po SLA 30 dni", Number(summary.overdue_30_days || 0), "Otwarte zgłoszenia po terminie.")}}
+              </section>
+              <div class="grid" style="margin-top:12px">
+                <section class="panel-soft">
+                  <h4>Trend zgłoszeń 14 dni</h4>
+                  <div class="dashboard-list">${{serviceQualityTrendBars(quality.trend_14_days || [])}}</div>
+                </section>
+                <section class="panel-soft">
+                  <h4>Najczęstsze objawy</h4>
+                  <div class="watcher-list">${{serviceQualityTopList(quality.top_symptoms || [], "Brak powtarzalnych słów w ostatnich zgłoszeniach.")}}</div>
+                </section>
+              </div>
+              <section class="panel-soft" style="margin-top:12px">
+                <h4>Najbardziej dotknięte działy</h4>
+                <div class="watcher-list">${{serviceQualityTopList(quality.top_departments || [], "Brak danych o działach w ostatnich 90 dniach.")}}</div>
+              </section>
+            </section>
+          `;
+        }}
+
         function serviceContextTicketCard(ticket) {{
           return `
             <button class="notification-card" onclick="renderTicket(${{Number(ticket.id)}}); return false;">
@@ -6950,6 +7060,7 @@ data:
               ${{serviceContextMetric("7 dni", summary.last_7_days, "Nowe zgłoszenia w ostatnim tygodniu.")}}
               ${{serviceContextMetric("30 dni", summary.last_30_days, "Nowe zgłoszenia w ostatnich 30 dniach.")}}
             </section>
+            ${{serviceQualityPanel(service, data.quality || {{}})}}
             <div class="grid">
               ${{serviceContextIncidentSection(data.active_incidents || [])}}
               ${{serviceContextTicketSection("Aktywne zgłoszenia usługi", data.active_tickets || [], "Brak aktywnych zgłoszeń dla tej usługi.")}}
@@ -15164,6 +15275,126 @@ data:
             "department_count": int(row[10] or 0),
         } for row in cur.fetchall()]
 
+        cur.execute("""
+            SELECT
+              COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '90 days') AS tickets_90_days,
+              COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '30 days') AS tickets_30_days,
+              COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days') AS tickets_7_days,
+              COUNT(*) FILTER (
+                WHERE t.updated_at >= NOW() - INTERVAL '30 days'
+                  AND t.status IN ('Rozwiązane', 'Zamknięte')
+              ) AS resolved_30_days,
+              COALESCE(
+                ROUND(AVG(t.resolution_minutes) FILTER (
+                  WHERE t.resolution_minutes IS NOT NULL
+                    AND t.updated_at >= NOW() - INTERVAL '90 days'
+                ))::INT,
+                0
+              ) AS avg_resolution_minutes_90_days,
+              COUNT(*) FILTER (
+                WHERE t.created_at >= NOW() - INTERVAL '30 days'
+                  AND t.priority IN ('Wysoki', 'Krytyczny')
+              ) AS high_priority_30_days,
+              COUNT(*) FILTER (
+                WHERE t.created_at >= NOW() - INTERVAL '30 days'
+                  AND t.status NOT IN ('Rozwiązane', 'Zamknięte')
+                  AND t.sla_due_at IS NOT NULL
+                  AND t.sla_due_at < NOW()
+              ) AS overdue_30_days
+            FROM tickets t
+            WHERE t.service_id = %s
+        """, (service_id,))
+        quality_row = cur.fetchone()
+        cur.execute("""
+            SELECT COUNT(DISTINCT i.id)
+            FROM incidents i
+            JOIN incident_tickets it ON it.incident_id = i.id
+            JOIN tickets t ON t.id = it.ticket_id
+            WHERE t.service_id = %s
+              AND i.created_at >= NOW() - INTERVAL '90 days'
+        """, (service_id,))
+        incidents_90_days = int(cur.fetchone()[0] or 0)
+        quality_summary = {
+            "tickets_90_days": int(quality_row[0] or 0),
+            "tickets_30_days": int(quality_row[1] or 0),
+            "tickets_7_days": int(quality_row[2] or 0),
+            "resolved_30_days": int(quality_row[3] or 0),
+            "avg_resolution_minutes_90_days": int(quality_row[4] or 0),
+            "high_priority_30_days": int(quality_row[5] or 0),
+            "overdue_30_days": int(quality_row[6] or 0),
+            "incidents_90_days": incidents_90_days,
+        }
+
+        cur.execute("""
+            WITH days AS (
+              SELECT generate_series(
+                (CURRENT_DATE - INTERVAL '13 days')::date,
+                CURRENT_DATE,
+                INTERVAL '1 day'
+              )::date AS day
+            )
+            SELECT
+              to_char(days.day, 'YYYY-MM-DD') AS day,
+              COUNT(t.id) AS ticket_count
+            FROM days
+            LEFT JOIN tickets t
+              ON t.service_id = %s
+             AND t.created_at::date = days.day
+            GROUP BY days.day
+            ORDER BY days.day
+        """, (service_id,))
+        trend_14_days = [{
+            "day": row[0],
+            "count": int(row[1] or 0),
+        } for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              COALESCE(NULLIF(t.department, ''), 'Brak działu') AS department,
+              COUNT(*) AS ticket_count
+            FROM tickets t
+            WHERE t.service_id = %s
+              AND t.created_at >= NOW() - INTERVAL '90 days'
+            GROUP BY 1
+            ORDER BY ticket_count DESC, department ASC
+            LIMIT 6
+        """, (service_id,))
+        top_departments = [{
+            "label": row[0],
+            "count": int(row[1] or 0),
+        } for row in cur.fetchall()]
+
+        cur.execute("""
+            SELECT
+              t.title,
+              COALESCE(t.description, '')
+            FROM tickets t
+            WHERE t.service_id = %s
+              AND t.created_at >= NOW() - INTERVAL '90 days'
+            ORDER BY t.created_at DESC, t.id DESC
+            LIMIT 200
+        """, (service_id,))
+        symptom_counts = {}
+        for title, description in cur.fetchall():
+            for token in similarity_tokens(title, description):
+                if token.isdigit():
+                    continue
+                symptom_counts[token] = symptom_counts.get(token, 0) + 1
+        top_symptoms = [
+            {"label": token, "count": count}
+            for token, count in sorted(
+                symptom_counts.items(),
+                key=lambda item: (-item[1], item[0]),
+            )[:8]
+        ]
+
+        quality = {
+            "summary": quality_summary,
+            "trend_14_days": trend_14_days,
+            "top_departments": top_departments,
+            "top_symptoms": top_symptoms,
+        }
+
         cur.close()
         conn.close()
         return jsonify({
@@ -15172,6 +15403,7 @@ data:
             "active_tickets": active_tickets,
             "recent_tickets": recent_tickets,
             "active_incidents": active_incidents,
+            "quality": quality,
         })
 
     def service_incident_default_severity(service, ticket_rows):
