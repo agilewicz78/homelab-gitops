@@ -156,6 +156,118 @@ data:
     INCIDENT_SEVERITIES = ["SEV1", "SEV2", "SEV3", "SEV4"]
     INCIDENT_STATUSES = ["investigating", "identified", "monitoring", "resolved"]
     KNOWLEDGE_STATUSES = ["draft", "published", "archived"]
+    SERVICE_STATUSES = ["operational", "degraded", "outage", "maintenance"]
+    SERVICE_STATUS_LABELS = {
+        "operational": "Działa",
+        "degraded": "Degradacja",
+        "outage": "Awaria",
+        "maintenance": "Prace serwisowe",
+    }
+    SERVICE_CRITICALITIES = ["low", "medium", "high", "critical"]
+    SERVICE_CRITICALITY_LABELS = {
+        "low": "Niska",
+        "medium": "Średnia",
+        "high": "Wysoka",
+        "critical": "Krytyczna",
+    }
+    DEFAULT_SERVICE_CATALOG = [
+        {
+            "service_key": "email",
+            "name": "Poczta firmowa",
+            "description": "Outlook, webmail, skrzynki współdzielone, wysyłka i odbiór wiadomości.",
+            "category": "Poczta e-mail",
+            "subcategory": "Inne",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "high",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "wifi",
+            "name": "Wi-Fi biurowe",
+            "description": "Sieć bezprzewodowa w biurze, zasięg, logowanie i dostęp do stron.",
+            "category": "Sieć i Wi-Fi",
+            "subcategory": "Słaby zasięg",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "high",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "vpn",
+            "name": "VPN i praca zdalna",
+            "description": "Dostęp VPN, MFA, certyfikaty i połączenie z domu.",
+            "category": "VPN i praca zdalna",
+            "subcategory": "Brak połączenia",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "high",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "printing",
+            "name": "Drukowanie i skanowanie",
+            "description": "Drukarki, skanery, kolejka wydruku, toner i sterowniki.",
+            "category": "Drukarki i skanery",
+            "subcategory": "Brak wydruku",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "medium",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "accounts",
+            "name": "Konta, hasła i MFA",
+            "description": "Reset hasła, blokada konta, MFA i podstawowe uprawnienia użytkownika.",
+            "category": "Konta i hasła",
+            "subcategory": "Reset hasła",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "high",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "business-access",
+            "name": "Dostępy do systemów",
+            "description": "Wnioski o dostęp, zmiany uprawnień i dostęp do aplikacji biznesowych.",
+            "category": "Dostępy do systemów",
+            "subcategory": "Nowy dostęp",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "medium",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "workstation",
+            "name": "Komputer i stanowisko pracy",
+            "description": "Laptop, komputer, system operacyjny, oprogramowanie i akcesoria stanowiska.",
+            "category": "Komputer i laptop",
+            "subcategory": "Inne",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "medium",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+        {
+            "service_key": "m365",
+            "name": "Microsoft 365",
+            "description": "Word, Excel, Teams, OneDrive, SharePoint i licencje Microsoft 365.",
+            "category": "Microsoft 365 / Office",
+            "subcategory": "Teams",
+            "owner_email": "operator@incoprp.local",
+            "status": "operational",
+            "criticality": "medium",
+            "default_priority": "Normalny",
+            "user_visible": True,
+        },
+    ]
     KNOWLEDGE_FEEDBACK_REASONS = {
         "outdated": "Informacja jest nieaktualna",
         "unclear": "Instrukcja jest niejasna",
@@ -343,6 +455,43 @@ data:
                         ON CONFLICT (workflow_id, step_name) DO NOTHING
                     """, (workflow_id, step_name, idx, step_name == "Zamknięte"))
             seed_workflow_automations(cur, workflow_id, statuses)
+
+    # Zakłada podstawowy katalog usług IT powiązany z obecnymi kategoriami.
+    def seed_service_catalog(cur):
+        for service in DEFAULT_SERVICE_CATALOG:
+            cur.execute("""
+                INSERT INTO service_catalog (
+                    service_key, name, description, category, subcategory,
+                    owner_email, status, criticality, default_priority, user_visible,
+                    is_active, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())
+                ON CONFLICT (service_key) DO UPDATE
+                SET
+                    name = EXCLUDED.name,
+                    description = EXCLUDED.description,
+                    category = EXCLUDED.category,
+                    subcategory = EXCLUDED.subcategory,
+                    owner_email = EXCLUDED.owner_email,
+                    default_priority = EXCLUDED.default_priority,
+                    user_visible = EXCLUDED.user_visible,
+                    updated_at = NOW()
+                WHERE service_catalog.name = service_catalog.service_key
+                   OR service_catalog.description IS NULL
+                   OR service_catalog.description = ''
+                   OR service_catalog.owner_email IS NULL
+            """, (
+                service["service_key"],
+                service["name"],
+                service["description"],
+                service["category"],
+                service["subcategory"],
+                service["owner_email"],
+                service["status"],
+                service["criticality"],
+                service["default_priority"],
+                service["user_visible"],
+            ))
     
     # Pobiera statusy workflow bezpośrednio z bazy danych.
     def db_workflow_statuses(workflow_key):
@@ -562,6 +711,7 @@ data:
             "tickets.comment_own",
             "tickets.attach_own",
             "notifications.view_own",
+            "service_catalog.view",
         },
         "operator": {
             "tickets.view_all",
@@ -583,6 +733,7 @@ data:
             "workflow.test_rules",
             "workflow.view_logs",
             "workflow.export_logs_csv",
+            "service_catalog.manage",
             "audit.view",
             "audit.export_csv",
             "sla.manage",
@@ -721,6 +872,7 @@ data:
         "tickets.comment_own": "Komentarze do własnych zgłoszeń",
         "tickets.attach_own": "Załączniki do własnych zgłoszeń",
         "notifications.view_own": "Powiadomienia użytkownika",
+        "service_catalog.view": "Podgląd katalogu usług IT",
         "tickets.view_all": "Podgląd wszystkich zgłoszeń",
         "tickets.work": "Obsługa zgłoszeń",
         "tickets.assign": "Przypisywanie zgłoszeń",
@@ -738,6 +890,7 @@ data:
         "workflow.test_rules": "Testowanie reguł workflow",
         "workflow.view_logs": "Log automatyzacji workflow",
         "workflow.export_logs_csv": "Eksport logu workflow CSV",
+        "service_catalog.manage": "Zarządzanie katalogiem usług IT",
         "audit.view": "Audyt",
         "audit.export_csv": "Eksport audytu CSV",
         "sla.manage": "Polityki SLA",
@@ -907,6 +1060,41 @@ data:
                 # Edytowalna macierz uprawnień ról.
                 ensure_role_permissions_schema(cur)
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS service_catalog (
+                        id SERIAL PRIMARY KEY,
+                        service_key TEXT UNIQUE NOT NULL,
+                        name TEXT NOT NULL,
+                        description TEXT,
+                        category TEXT NOT NULL,
+                        subcategory TEXT NOT NULL DEFAULT 'Inne',
+                        owner_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        status TEXT NOT NULL DEFAULT 'operational',
+                        criticality TEXT NOT NULL DEFAULT 'medium',
+                        default_priority TEXT NOT NULL DEFAULT 'Normalny',
+                        user_visible BOOLEAN DEFAULT TRUE,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS description TEXT")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS category TEXT")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS subcategory TEXT DEFAULT 'Inne'")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS owner_email TEXT REFERENCES users(email) ON DELETE SET NULL")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'operational'")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS criticality TEXT DEFAULT 'medium'")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS default_priority TEXT DEFAULT 'Normalny'")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS user_visible BOOLEAN DEFAULT TRUE")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
+                cur.execute("UPDATE service_catalog SET subcategory = 'Inne' WHERE subcategory IS NULL OR trim(subcategory) = ''")
+                cur.execute("UPDATE service_catalog SET status = 'operational' WHERE status IS NULL OR status = ''")
+                cur.execute("UPDATE service_catalog SET criticality = 'medium' WHERE criticality IS NULL OR criticality = ''")
+                cur.execute("UPDATE service_catalog SET default_priority = 'Normalny' WHERE default_priority IS NULL OR default_priority = ''")
+                cur.execute("UPDATE service_catalog SET user_visible = TRUE WHERE user_visible IS NULL")
+                cur.execute("UPDATE service_catalog SET is_active = TRUE WHERE is_active IS NULL")
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS tickets (
                         id SERIAL PRIMARY KEY,
                         title TEXT NOT NULL,
@@ -1028,6 +1216,10 @@ data:
                 cur.execute("""
                     ALTER TABLE tickets
                     ADD COLUMN IF NOT EXISTS workflow_name TEXT
+                """)
+                cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES service_catalog(id) ON DELETE SET NULL
                 """)
                 cur.execute("""
                     CREATE TABLE IF NOT EXISTS sla_policies (
@@ -1437,6 +1629,7 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_tickets_updated_at ON tickets (updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_tickets_status ON tickets (status)",
                     "CREATE INDEX IF NOT EXISTS idx_tickets_priority ON tickets (priority)",
+                    "CREATE INDEX IF NOT EXISTS idx_tickets_service_id ON tickets (service_id)",
                     "CREATE INDEX IF NOT EXISTS idx_tickets_sla_due_at ON tickets (sla_due_at)",
                     "CREATE INDEX IF NOT EXISTS idx_tickets_assigned_email_lower ON tickets (lower(assigned_to_email))",
                     "CREATE INDEX IF NOT EXISTS idx_tickets_requester_email_lower ON tickets (lower(requester_email))",
@@ -1456,6 +1649,9 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_status_updated ON knowledge_articles (status, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_articles_category ON knowledge_articles (category, subcategory, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_knowledge_feedback_article_helpful ON knowledge_article_feedback (article_id, helpful)",
+                    "CREATE INDEX IF NOT EXISTS idx_service_catalog_active ON service_catalog (is_active, name)",
+                    "CREATE INDEX IF NOT EXISTS idx_service_catalog_category ON service_catalog (category, subcategory)",
+                    "CREATE INDEX IF NOT EXISTS idx_service_catalog_status ON service_catalog (status, updated_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_created ON workflow_rule_executions (created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_workflow_id ON workflow_rule_executions (workflow_id, id DESC)",
@@ -1522,6 +1718,7 @@ data:
                         END
                         WHERE email = %s AND (roles IS NULL OR array_length(roles, 1) IS NULL)
                     """, (role, role, role, role, email))
+                seed_service_catalog(cur)
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
                 if count == 0:
@@ -1546,6 +1743,24 @@ data:
                             )
                             VALUES (%s, %s, %s, %s, %s, %s, 'Inne', %s, %s, %s, %s, %s, %s)
                         """, ticket + (first_response_due_at, sla_due_at, workflow_key, workflow_name))
+                cur.execute("""
+                    UPDATE tickets t
+                    SET service_id = (
+                        SELECT sc.id
+                        FROM service_catalog sc
+                        WHERE COALESCE(sc.is_active, TRUE) = TRUE
+                          AND sc.category = t.category
+                        ORDER BY
+                          CASE
+                            WHEN sc.subcategory = COALESCE(t.subcategory, 'Inne') THEN 0
+                            WHEN sc.subcategory = 'Inne' THEN 1
+                            ELSE 2
+                          END,
+                          sc.id
+                        LIMIT 1
+                    )
+                    WHERE t.service_id IS NULL
+                """)
                 conn.commit()
                 cur.close()
                 conn.close()
@@ -1559,6 +1774,78 @@ data:
         return html.escape(str(value or ""))
     def clean(value):
         return str(value or "").strip()
+
+    def normalize_service_key(value):
+        normalized = re.sub(r"[^a-z0-9]+", "-", clean(value).lower()).strip("-")
+        return normalized or f"service-{uuid.uuid4().hex[:8]}"
+
+    def service_row_payload(row):
+        owner_name = " ".join(part for part in [row[13] or "", row[14] or ""] if part).strip()
+        return {
+            "id": row[0],
+            "service_key": row[1],
+            "name": row[2],
+            "description": row[3] or "",
+            "category": row[4],
+            "subcategory": row[5] or "Inne",
+            "owner_email": row[6] or "",
+            "status": row[7] or "operational",
+            "status_label": SERVICE_STATUS_LABELS.get(row[7] or "operational", row[7] or "operational"),
+            "criticality": row[8] or "medium",
+            "criticality_label": SERVICE_CRITICALITY_LABELS.get(row[8] or "medium", row[8] or "medium"),
+            "default_priority": row[9] or "Normalny",
+            "user_visible": bool(row[10]),
+            "is_active": bool(row[11]),
+            "updated_at": str(row[12]) if row[12] else "",
+            "owner_name": owner_name or row[6] or "",
+            "open_ticket_count": int(row[15] or 0),
+            "active_incident_count": int(row[16] or 0),
+        }
+
+    def fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=False):
+        clauses = []
+        if not include_inactive:
+            clauses.append("COALESCE(sc.is_active, TRUE) = TRUE")
+        if user_visible_only:
+            clauses.append("COALESCE(sc.user_visible, TRUE) = TRUE")
+        where_sql = "WHERE " + " AND ".join(clauses) if clauses else ""
+        cur.execute(f"""
+            SELECT
+              sc.id, sc.service_key, sc.name, COALESCE(sc.description, ''),
+              sc.category, COALESCE(sc.subcategory, 'Inne'), sc.owner_email,
+              COALESCE(sc.status, 'operational'), COALESCE(sc.criticality, 'medium'),
+              COALESCE(sc.default_priority, 'Normalny'),
+              COALESCE(sc.user_visible, TRUE), COALESCE(sc.is_active, TRUE),
+              sc.updated_at,
+              u.first_name,
+              u.last_name,
+              (
+                SELECT COUNT(*)
+                FROM tickets t
+                WHERE t.service_id = sc.id
+                  AND t.status NOT IN ('Rozwiązane', 'Zamknięte')
+              ) AS open_ticket_count,
+              (
+                SELECT COUNT(DISTINCT i.id)
+                FROM incidents i
+                JOIN incident_tickets it ON it.incident_id = i.id
+                JOIN tickets t ON t.id = it.ticket_id
+                WHERE t.service_id = sc.id
+                  AND i.status <> 'resolved'
+              ) AS active_incident_count
+            FROM service_catalog sc
+            LEFT JOIN users u ON lower(u.email) = lower(sc.owner_email)
+            {where_sql}
+            ORDER BY
+              CASE COALESCE(sc.status, 'operational')
+                WHEN 'outage' THEN 1
+                WHEN 'degraded' THEN 2
+                WHEN 'maintenance' THEN 3
+                ELSE 4
+              END,
+              lower(sc.name)
+        """)
+        return [service_row_payload(row) for row in cur.fetchall()]
 
     SIMILARITY_STOP_WORDS = {
         "aby", "ale", "bez", "blad", "brak", "byc", "czy", "dla", "dziala",
@@ -1983,6 +2270,12 @@ data:
     
     def can_manage_workflow_backend(user):
         return has_permission(user, "workflow.manage")
+
+    def can_view_service_catalog_backend(user):
+        return has_permission(user, "service_catalog.view") or has_permission(user, "service_catalog.manage")
+
+    def can_manage_service_catalog_backend(user):
+        return has_permission(user, "service_catalog.manage")
     
     def can_view_workflow_logs_backend(user):
         return has_permission(user, "workflow.view_logs")
@@ -3987,6 +4280,7 @@ data:
         let knowledgeFeedbackContext = null;
         let knowledgeSuggestionTimer = null;
         let knowledgeSuggestionRequest = 0;
+        let adminServiceCatalogCache = null;
         function getSid() {{ return sessionStorage.getItem("helpdesk_sid") || ""; }}
         function setSid(sid) {{ sessionStorage.setItem("helpdesk_sid", sid); }}
         function clearSid() {{ sessionStorage.removeItem("helpdesk_sid"); }}
@@ -4270,7 +4564,7 @@ data:
         }}
         function userHasPermission(user, permissionCode) {{
           if (Array.isArray(user?.permissions)) return user.permissions.includes(permissionCode);
-          if (permissionCode.startsWith("workflow.") || permissionCode.startsWith("audit.") || permissionCode.startsWith("users.") || permissionCode === "permissions.view") return isAdmin(user);
+          if (permissionCode.startsWith("workflow.") || permissionCode.startsWith("audit.") || permissionCode.startsWith("users.") || permissionCode.startsWith("service_catalog.") || permissionCode === "permissions.view") return isAdmin(user);
           if (permissionCode.startsWith("reports.") || permissionCode.startsWith("sla.") || permissionCode.startsWith("tickets.") || permissionCode === "dashboard.operator") return canWorkTickets(user) || permissionCode.includes("own") || permissionCode === "tickets.create";
           return false;
         }}
@@ -4281,6 +4575,8 @@ data:
         function canViewSlaCalendar(user) {{ return userHasPermission(user, "sla.view") || userHasPermission(user, "sla.manage"); }}
         function canManageUsers(user) {{ return userHasPermission(user, "users.manage"); }}
         function canManageWorkflow(user) {{ return userHasPermission(user, "workflow.manage"); }}
+        function canManageServiceCatalog(user) {{ return userHasPermission(user, "service_catalog.manage"); }}
+        function canViewServiceCatalog(user) {{ return userHasPermission(user, "service_catalog.view") || canManageServiceCatalog(user); }}
         function canViewAudit(user) {{ return userHasPermission(user, "audit.view"); }}
         function canViewPermissions(user) {{ return userHasPermission(user, "permissions.view"); }}
         function moduleAction(label, action, primary = false) {{
@@ -4322,7 +4618,7 @@ data:
               canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;", active === "reports") : ""
             ], active),
             moduleCard("administration", "Administracja", "Konfiguracja systemu, workflow, automatyzacji, SLA, użytkowników i audytu.", [
-              (canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me))
+              (canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canManageServiceCatalog(me) || canViewAudit(me) || canViewSlaCalendar(me))
                 ? moduleAction("Centrum administracji", "renderAdministration();return false;", active === "administration")
                 : ""
             ], active)
@@ -4345,7 +4641,7 @@ data:
           return `<button class="${{activeClass}}" onclick="${{action}}">${{esc(label)}}</button>`;
         }}
         function renderAppSidebar(me, active = "") {{
-          const canOpenAdmin = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me);
+          const canOpenAdmin = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canManageServiceCatalog(me) || canViewAudit(me) || canViewSlaCalendar(me);
           return `
             <aside class="operator-sidebar">
               <div class="operator-sidebar-title">Helpdesk</div>
@@ -4407,12 +4703,58 @@ data:
           const all = meta?.subcategories || {{}};
           return all[category] || all["Inne"] || ["Inne"];
         }}
-        function updateSubcategorySelect(meta) {{
+        function updateSubcategorySelect(meta, selected = "") {{
           const categorySelect = document.getElementById("new-ticket-category");
           const subcategorySelect = document.getElementById("new-ticket-subcategory");
           if (!categorySelect || !subcategorySelect) return;
           const values = subcategoriesForCategory(meta, categorySelect.value);
-          subcategorySelect.innerHTML = values.map(x => `<option>${{esc(x)}}</option>`).join("");
+          const effective = values.includes(selected) ? selected : (values.includes("Inne") ? "Inne" : values[0]);
+          subcategorySelect.innerHTML = values.map(x => `<option value="${{esc(x)}}" ${{x === effective ? "selected" : ""}}>${{esc(x)}}</option>`).join("");
+        }}
+        function selectedService(meta) {{
+          const serviceSelect = document.getElementById("new-ticket-service");
+          const serviceId = Number(serviceSelect?.value || 0);
+          if (!serviceId) return null;
+          return (meta.services || []).find(service => Number(service.id) === serviceId) || null;
+        }}
+        function renderNewTicketServiceHint(service) {{
+          const panel = document.getElementById("newTicketServiceHint");
+          if (!panel) return;
+          if (!service) {{
+            panel.classList.add("hidden");
+            panel.innerHTML = "";
+            return;
+          }}
+          panel.innerHTML = `
+            <div class="panel-soft" style="margin-top:10px">
+              <strong>Usługa: ${{esc(service.name)}}</strong>
+              <div class="attachment-upload-hint" style="margin-top:6px">
+                ${{esc(service.description || "Brak opisu usługi.")}}
+                Status: ${{esc(service.status_label || service.status)}} ·
+                krytyczność: ${{esc(service.criticality_label || service.criticality)}} ·
+                kategoria: ${{esc(service.category)}} / ${{esc(service.subcategory || "Inne")}}.
+              </div>
+            </div>
+          `;
+          panel.classList.remove("hidden");
+        }}
+        function applySelectedServiceToNewTicket(meta) {{
+          const service = selectedService(meta);
+          renderNewTicketServiceHint(service);
+          if (!service) return;
+          const categorySelect = document.getElementById("new-ticket-category");
+          const subcategorySelect = document.getElementById("new-ticket-subcategory");
+          const prioritySelect = document.querySelector('#ticketForm select[name="priority"]');
+          if (categorySelect && service.category) {{
+            categorySelect.value = service.category;
+            updateSubcategorySelect(meta, service.subcategory || "Inne");
+          }}
+          if (subcategorySelect && service.subcategory) {{
+            subcategorySelect.value = service.subcategory;
+          }}
+          if (prioritySelect && service.default_priority) {{
+            prioritySelect.value = service.default_priority;
+          }}
         }}
         function setWsStatus(text, connected) {{
           wsStatus.textContent = text;
@@ -5241,6 +5583,7 @@ data:
           const currentUserEmail = String(options.currentUserEmail || "").toLowerCase();
           const assignedToEmail = String(ticket.assigned_to_email || "").toLowerCase();
           const isClosed = !!options.isClosed;
+          const service = ticket.service || null;
           const recommendations = [];
           const add = (title, reason, actionHtml = "", tone = "info") => {{
             recommendations.push(ticketRecommendationCard(title, reason, actionHtml, tone));
@@ -5253,6 +5596,17 @@ data:
               `Zgłoszenie jest już częścią aktywnego incydentu #${{incident.id}}. Najlepiej aktualizować komunikat incydentu, żeby wszystkie powiązane zgłoszenia dostały spójną informację.`,
               ticketRecommendationButton("Otwórz incydent", `renderIncident(${{Number(incident.id)}})`, true),
               "success"
+            );
+          }}
+
+          if (!isClosed && service && ["degraded", "outage", "maintenance"].includes(service.status)) {{
+            add(
+              "Sprawdź status usługi IT",
+              `Usługa „${{service.name}}” ma status: ${{service.status_label || service.status}}. To może oznaczać, że zgłoszenie jest częścią szerszego problemu lub planowanych prac.`,
+              incidents.length
+                ? ticketRecommendationButton("Pokaż możliwe incydenty", "focusTicketContextSection('ticketContextPossibleIncidents')", true)
+                : ticketRecommendationButton("Pokaż podobne zgłoszenia", "focusTicketContextSection('ticketContextSimilarTickets')"),
+              service.status === "outage" ? "danger" : "warning"
             );
           }}
 
@@ -5350,6 +5704,7 @@ data:
           return `<div class="ticket-recommendation-list">${{recommendations.slice(0, 4).join("")}}</div>`;
         }}
         function ticketContextSituationPanel(ticket) {{
+          const service = ticket.service || null;
           const firstResponseText = ticket.first_response_at
             ? `reakcja: ${{ticket.first_response_at}}`
             : (ticket.first_response_due_at || "brak terminu");
@@ -5361,6 +5716,13 @@ data:
                 <div class="ticket-context-row">
                   <span class="ticket-context-label">Status</span>
                   <span class="ticket-context-value"><span class="pill ${{statusClass(ticket.status)}}">${{esc(ticket.status || "-")}}</span></span>
+                </div>
+                <div class="ticket-context-row">
+                  <span class="ticket-context-label">Usługa IT</span>
+                  <span class="ticket-context-value">
+                    ${{service ? esc(service.name) : "Nie wskazano"}}
+                    ${{service ? `<div class="ticket-context-mini">${{esc(service.status_label || service.status)}} · ${{esc(service.criticality_label || service.criticality)}}${{service.owner_name ? " · właściciel: " + esc(service.owner_name) : ""}}</div>` : ""}}
+                  </span>
                 </div>
                 <div class="ticket-context-row">
                   <span class="ticket-context-label">Priorytet</span>
@@ -6216,7 +6578,7 @@ data:
           currentView = {{ name: "administration", ticketId: null }};
           const me = await loadMe();
           if (!me) return;
-          const canOpen = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canViewAudit(me) || canViewSlaCalendar(me);
+          const canOpen = canManageUsers(me) || canViewPermissions(me) || canManageWorkflow(me) || canManageServiceCatalog(me) || canViewAudit(me) || canViewSlaCalendar(me);
           if (!canOpen) {{
             appEl.innerHTML = `
               <section class="card">
@@ -6233,6 +6595,9 @@ data:
             ]),
             moduleCard("admin-workflow", "Workflow i automatyzacje", "Procesy obsługi, reguły automatyzacji i centrum automatyzacji.", [
               canManageWorkflow(me) ? moduleAction("Workflow", "renderAdminWorkflows();return false;") : ""
+            ]),
+            moduleCard("admin-services", "Katalog usług IT", "Usługi biznesowe i techniczne powiązane z kategoriami, SLA, incydentami i zgłoszeniami.", [
+              canManageServiceCatalog(me) ? moduleAction("Usługi IT", "renderAdminServices();return false;") : ""
             ]),
             moduleCard("admin-sla", "SLA", "Terminy reakcji, kalendarz SLA i zgłoszenia wymagające uwagi.", [
               canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;") : ""
@@ -6255,6 +6620,244 @@ data:
           `;
           appEl.innerHTML = renderWorkspaceView(me, "administration", administrationContent);
         }}
+
+        function serviceStatusBadge(service) {{
+          const status = service?.status || "operational";
+          const labels = {{
+            operational: "Działa",
+            degraded: "Degradacja",
+            outage: "Awaria",
+            maintenance: "Prace serwisowe",
+          }};
+          const classes = {{
+            operational: "status-new",
+            degraded: "status-wait",
+            outage: "status-closed",
+            maintenance: "status-open",
+          }};
+          return `<span class="status-badge ${{classes[status] || "status-open"}}">${{esc(service?.status_label || labels[status] || status)}}</span>`;
+        }}
+
+        function serviceCriticalityBadge(service) {{
+          const criticality = service?.criticality || "medium";
+          const labels = {{
+            low: "Niska",
+            medium: "Średnia",
+            high: "Wysoka",
+            critical: "Krytyczna",
+          }};
+          const classes = {{
+            low: "priority-Niski",
+            medium: "priority-Normalny",
+            high: "priority-Wysoki",
+            critical: "priority-Krytyczny",
+          }};
+          return `<span class="pill ${{classes[criticality] || ""}}">${{esc(service?.criticality_label || labels[criticality] || criticality)}}</span>`;
+        }}
+
+        function adminServiceOptionList(options, selected, labelKey = "label", valueKey = "value") {{
+          return (options || []).map(option => {{
+            const value = option?.[valueKey] ?? option;
+            const label = option?.[labelKey] ?? option;
+            return `<option value="${{esc(value)}}" ${{String(value) === String(selected) ? "selected" : ""}}>${{esc(label)}}</option>`;
+          }}).join("");
+        }}
+
+        function updateAdminServiceSubcategories(selected = "Inne") {{
+          const categorySelect = document.getElementById("adminServiceCategory");
+          const subcategorySelect = document.getElementById("adminServiceSubcategory");
+          if (!categorySelect || !subcategorySelect || !adminServiceCatalogCache) return;
+          const values = adminServiceCatalogCache.subcategories?.[categorySelect.value] || ["Inne"];
+          const effective = values.includes(selected) ? selected : (values.includes("Inne") ? "Inne" : values[0]);
+          subcategorySelect.innerHTML = values.map(value =>
+            `<option value="${{esc(value)}}" ${{value === effective ? "selected" : ""}}>${{esc(value)}}</option>`
+          ).join("");
+        }}
+
+        function serviceCatalogMetrics(services = []) {{
+          const active = services.filter(service => service.is_active !== false);
+          const unstable = active.filter(service => ["degraded", "outage", "maintenance"].includes(service.status));
+          const openTickets = active.reduce((sum, service) => sum + Number(service.open_ticket_count || 0), 0);
+          const activeIncidents = active.reduce((sum, service) => sum + Number(service.active_incident_count || 0), 0);
+          return `
+            <div class="stats">
+              <div class="stat"><div class="num">${{active.length}}</div><div class="label">Aktywne usługi</div></div>
+              <div class="stat"><div class="num">${{unstable.length}}</div><div class="label">Usługi z komunikatem</div></div>
+              <div class="stat"><div class="num">${{openTickets}}</div><div class="label">Otwarte zgłoszenia usług</div></div>
+              <div class="stat"><div class="num">${{activeIncidents}}</div><div class="label">Aktywne incydenty usług</div></div>
+            </div>
+          `;
+        }}
+
+        async function renderAdminServices() {{
+          currentView = {{ name: "admin-services", ticketId: null }};
+          const me = await loadMe();
+          if (!me || !canManageServiceCatalog(me)) {{
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Katalog usług IT wymaga uprawnienia service_catalog.manage.</p></section>`;
+            return;
+          }}
+          const res = await api("/api/admin/services");
+          const data = res ? await res.json().catch(() => ({{}})) : {{}};
+          if (!res || !res.ok) {{
+            appEl.innerHTML = `<section class="card"><h2>Katalog usług IT</h2><p class="error">${{esc(data.error || "Nie udało się pobrać katalogu usług.")}}</p></section>`;
+            return;
+          }}
+          adminServiceCatalogCache = data;
+          const services = data.services || [];
+          const rows = services.map(service => `
+            <tr>
+              <td>
+                <strong>${{esc(service.name)}}</strong><br>
+                <span class="muted">${{esc(service.description || "Brak opisu")}}</span><br>
+                <span class="ticket-context-mini">Klucz: ${{esc(service.service_key)}}${{service.is_active ? "" : " · nieaktywna"}}</span>
+              </td>
+              <td>${{serviceStatusBadge(service)}}<br>${{serviceCriticalityBadge(service)}}</td>
+              <td>${{esc(service.category)}}<br><span class="muted">${{esc(service.subcategory || "Inne")}}</span></td>
+              <td>${{esc(service.owner_name || service.owner_email || "Brak właściciela")}}</td>
+              <td>${{esc(service.default_priority || "Normalny")}}</td>
+              <td>
+                <strong>${{Number(service.open_ticket_count || 0)}}</strong> otwarte<br>
+                <span class="muted">${{Number(service.active_incident_count || 0)}} aktywne incydenty</span>
+              </td>
+              <td><button class="btn-secondary btn-small" onclick="renderAdminServiceForm(${{Number(service.id)}})">Edytuj</button></td>
+            </tr>
+          `).join("");
+          const content = `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Katalog usług IT</h2>
+                  <p class="muted">Usługi są warstwą nad kategoriami: pomagają użytkownikowi zgłosić problem, operatorowi zobaczyć kontekst, a administratorowi kontrolować status usług.</p>
+                </div>
+                <div class="actions">
+                  <button onclick="renderAdminServiceForm()">Dodaj usługę</button>
+                  <button class="btn-secondary" onclick="renderAdministration()">← Administracja</button>
+                </div>
+              </div>
+            </section>
+            ${{serviceCatalogMetrics(services)}}
+            <section class="card">
+              <h3>Usługi</h3>
+              <table>
+                <thead><tr><th>Usługa</th><th>Status</th><th>Kategoria</th><th>Właściciel</th><th>Priorytet</th><th>Obciążenie</th><th>Akcje</th></tr></thead>
+                <tbody>${{rows || `<tr><td colspan="7" class="muted">Brak usług w katalogu.</td></tr>`}}</tbody>
+              </table>
+            </section>
+          `;
+          appEl.innerHTML = renderWorkspaceView(me, "administration", content);
+        }}
+
+        async function renderAdminServiceForm(serviceId = null) {{
+          const me = await loadMe();
+          if (!me || !canManageServiceCatalog(me)) return;
+          if (!adminServiceCatalogCache) {{
+            const res = await api("/api/admin/services");
+            adminServiceCatalogCache = res ? await res.json().catch(() => ({{}})) : {{}};
+          }}
+          const services = adminServiceCatalogCache.services || [];
+          const editing = Number(serviceId || 0) > 0;
+          const service = editing
+            ? services.find(item => Number(item.id) === Number(serviceId))
+            : {{
+                service_key: "",
+                name: "",
+                description: "",
+                category: (adminServiceCatalogCache.categories || [])[0] || "Inne",
+                subcategory: "Inne",
+                owner_email: "",
+                status: "operational",
+                criticality: "medium",
+                default_priority: "Normalny",
+                user_visible: true,
+                is_active: true,
+              }};
+          if (!service) {{
+            alert("Nie znaleziono usługi.");
+            await renderAdminServices();
+            return;
+          }}
+          const content = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminServices()">← Katalog usług IT</button>
+              <h2>${{editing ? "Edytuj usługę IT" : "Dodaj usługę IT"}}</h2>
+              <p class="muted">Usługa wskazuje kategorię i podkategorię, które trafią do zgłoszenia po wyborze usługi przez użytkownika.</p>
+              <form id="adminServiceForm">
+                <div class="grid">
+                  <div>
+                    <label>Nazwa usługi</label>
+                    <input name="name" value="${{esc(service.name)}}" required placeholder="Np. Poczta firmowa">
+                  </div>
+                  <div>
+                    <label>Klucz techniczny</label>
+                    <input name="service_key" value="${{esc(service.service_key)}}" placeholder="np. email">
+                  </div>
+                </div>
+                <label>Opis dla użytkownika i operatora</label>
+                <textarea name="description" placeholder="Co obejmuje ta usługa?">${{esc(service.description || "")}}</textarea>
+                <div class="grid">
+                  <div>
+                    <label>Kategoria zgłoszenia</label>
+                    <select id="adminServiceCategory" name="category">${{adminServiceOptionList(adminServiceCatalogCache.categories || [], service.category)}}</select>
+                  </div>
+                  <div>
+                    <label>Podkategoria zgłoszenia</label>
+                    <select id="adminServiceSubcategory" name="subcategory"></select>
+                  </div>
+                </div>
+                <div class="grid">
+                  <div>
+                    <label>Status usługi</label>
+                    <select name="status">${{adminServiceOptionList(adminServiceCatalogCache.statuses || [], service.status)}}</select>
+                  </div>
+                  <div>
+                    <label>Krytyczność</label>
+                    <select name="criticality">${{adminServiceOptionList(adminServiceCatalogCache.criticalities || [], service.criticality)}}</select>
+                  </div>
+                </div>
+                <div class="grid">
+                  <div>
+                    <label>Domyślny priorytet zgłoszenia</label>
+                    <select name="default_priority">${{adminServiceOptionList(adminServiceCatalogCache.priorities || [], service.default_priority)}}</select>
+                  </div>
+                  <div>
+                    <label>Właściciel usługi</label>
+                    <input name="owner_email" type="email" value="${{esc(service.owner_email || "")}}" placeholder="operator@incoprp.local">
+                  </div>
+                </div>
+                <div class="panel-soft" style="margin-top:12px">
+                  <label><input type="checkbox" name="user_visible" ${{service.user_visible !== false ? "checked" : ""}}> Widoczna dla użytkowników w formularzu zgłoszenia</label>
+                  <label><input type="checkbox" name="is_active" ${{service.is_active !== false ? "checked" : ""}}> Aktywna w katalogu</label>
+                </div>
+                <div class="actions" style="margin-top:12px">
+                  <button type="submit">Zapisz usługę</button>
+                  <button type="button" class="btn-secondary" onclick="renderAdminServices()">Anuluj</button>
+                </div>
+              </form>
+            </section>
+          `;
+          appEl.innerHTML = renderWorkspaceView(me, "administration", content);
+          updateAdminServiceSubcategories(service.subcategory || "Inne");
+          document.getElementById("adminServiceCategory").addEventListener("change", () => updateAdminServiceSubcategories("Inne"));
+          document.getElementById("adminServiceForm").addEventListener("submit", async (e) => {{
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const payload = Object.fromEntries(formData.entries());
+            payload.user_visible = formData.has("user_visible");
+            payload.is_active = formData.has("is_active");
+            const endpoint = editing ? `/api/admin/services/${{Number(service.id)}}` : "/api/admin/services";
+            const method = editing ? "PUT" : "POST";
+            const res = await api(endpoint, {{ method, body: JSON.stringify(payload) }});
+            const data = res ? await res.json().catch(() => ({{}})) : {{}};
+            if (!res || !res.ok) {{
+              alert(data.error || "Nie udało się zapisać usługi.");
+              return;
+            }}
+            adminServiceCatalogCache = null;
+            showToast("Zapisano usługę IT", payload.name || "");
+            await renderAdminServices();
+          }});
+        }}
+
         async function renderAdminPermissions() {{
           const me = await loadMe();
           if (!me) return;
@@ -11016,7 +11619,9 @@ data:
               <td>#${{t.id}}</td>
               <td><a class="ticket-title ${{statusClass(t.status)}}" href="#" onclick="renderTicket(${{t.id}});return false;">${{esc(t.title)}}</a></td>
               <td>${{esc(t.requester_name)}}<br><span class="muted">${{esc(t.department)}}</span></td>
-              <td>${{esc(t.category)}}<br><span class="muted">${{esc(t.subcategory || "Inne")}}</span></td>
+              <td>
+                ${{t.service ? `<strong>${{esc(t.service.name)}}</strong><br><span class="muted">${{esc(t.service.status_label || t.service.status)}} · ${{esc(t.category)}} / ${{esc(t.subcategory || "Inne")}}</span>` : `${{esc(t.category)}}<br><span class="muted">${{esc(t.subcategory || "Inne")}}</span>`}}
+              </td>
               <td><span class="pill ${{priorityClass(t.priority)}}">${{esc(t.priority)}}</span></td>
               <td><span class="pill ${{statusClass(t.status)}}">${{esc(t.status)}}</span></td>
               <td>${{t.assigned_to_name ? esc(t.assigned_to_name) : '<span class="muted">Nieprzypisane</span>'}}</td>
@@ -11120,6 +11725,14 @@ data:
                 <input id="new-ticket-title" name="title" required placeholder="Np. Outlook nie odbiera poczty">
                 <label>Opis</label>
                 <textarea id="new-ticket-description" name="description" required placeholder="Opisz problem, komunikat błędu, od kiedy występuje..."></textarea>
+                <label>Usługa IT</label>
+                <select id="new-ticket-service" name="service_id">
+                  <option value="">Nie wiem / wybiorę kategorię ręcznie</option>
+                  ${{(meta.services || []).map(service => `
+                    <option value="${{Number(service.id)}}">${{esc(service.name)}} · ${{esc(service.status_label || service.status)}} · ${{esc(service.category)}}</option>
+                  `).join("")}}
+                </select>
+                <div id="newTicketServiceHint" class="hidden"></div>
                 <div class="grid">
                   <div><label>Zgłaszający</label><input value="${{esc(me.name)}}" disabled></div>
                   <div><label>E-mail</label><input value="${{esc(me.email)}}" disabled></div>
@@ -11150,13 +11763,25 @@ data:
               </form>
             </section>`;
           updateSubcategorySelect(meta);
+          document.getElementById("new-ticket-service").addEventListener("change", () => {{
+            applySelectedServiceToNewTicket(meta);
+            scheduleNewTicketKnowledgeSuggestions();
+          }});
           document.getElementById("new-ticket-title").addEventListener("input", scheduleNewTicketKnowledgeSuggestions);
           document.getElementById("new-ticket-description").addEventListener("input", scheduleNewTicketKnowledgeSuggestions);
           document.getElementById("new-ticket-category").addEventListener("change", () => {{
+            const serviceSelect = document.getElementById("new-ticket-service");
+            if (serviceSelect) serviceSelect.value = "";
+            renderNewTicketServiceHint(null);
             updateSubcategorySelect(meta);
             scheduleNewTicketKnowledgeSuggestions();
           }});
-          document.getElementById("new-ticket-subcategory").addEventListener("change", scheduleNewTicketKnowledgeSuggestions);
+          document.getElementById("new-ticket-subcategory").addEventListener("change", () => {{
+            const serviceSelect = document.getElementById("new-ticket-service");
+            if (serviceSelect) serviceSelect.value = "";
+            renderNewTicketServiceHint(null);
+            scheduleNewTicketKnowledgeSuggestions();
+          }});
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }}
         function scheduleNewTicketKnowledgeSuggestions() {{
@@ -11227,6 +11852,7 @@ data:
           const payload = {{
             title: formData.get("title") || "",
             description: formData.get("description") || "",
+            service_id: formData.get("service_id") || "",
             category: formData.get("category") || "",
             subcategory: formData.get("subcategory") || "Inne",
             priority: formData.get("priority") || "Normalny"
@@ -14069,6 +14695,7 @@ data:
             {"name": f"{r[0]} {r[1]}".strip(), "email": r[2], "role": role_label(list(r[4] or ["user"])), "roles": list(r[4] or ["user"])}
             for r in cur.fetchall()
         ]
+        services = fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=True)
         cur.close()
         conn.close()
         return jsonify({
@@ -14077,9 +14704,186 @@ data:
             "subcategories": SUBCATEGORIES,
             "priorities": PRIORITIES,
             "statuses": all_statuses(),
+            "service_statuses": [{"value": key, "label": SERVICE_STATUS_LABELS.get(key, key)} for key in SERVICE_STATUSES],
+            "service_criticalities": [{"value": key, "label": SERVICE_CRITICALITY_LABELS.get(key, key)} for key in SERVICE_CRITICALITIES],
+            "services": services,
             "roles": VALID_ROLES,
             "operators": operators,
         })
+
+    @app.get("/api/services")
+    @api_login_required
+    def api_services(user):
+        if not can_view_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do katalogu usług IT.", "service_catalog.view")
+        conn = get_conn()
+        cur = conn.cursor()
+        services = fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=not is_staff(user))
+        cur.close()
+        conn.close()
+        return jsonify({
+            "services": services,
+            "statuses": [{"value": key, "label": SERVICE_STATUS_LABELS.get(key, key)} for key in SERVICE_STATUSES],
+            "criticalities": [{"value": key, "label": SERVICE_CRITICALITY_LABELS.get(key, key)} for key in SERVICE_CRITICALITIES],
+        })
+
+    def service_payload_from_request(payload):
+        name = clean(payload.get("name"))
+        service_key = normalize_service_key(payload.get("service_key") or name)
+        description = clean(payload.get("description"))
+        category = clean(payload.get("category"))
+        subcategory = clean(payload.get("subcategory")) or "Inne"
+        owner_email = clean(payload.get("owner_email")) or None
+        status = clean(payload.get("status")) or "operational"
+        criticality = clean(payload.get("criticality")) or "medium"
+        default_priority = clean(payload.get("default_priority")) or "Normalny"
+        user_visible = bool(payload.get("user_visible", True))
+        is_active = bool(payload.get("is_active", True))
+        if not name:
+            return None, "Nazwa usługi jest wymagana."
+        if category not in CATEGORIES:
+            return None, "Nieprawidłowa kategoria usługi."
+        if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            return None, "Nieprawidłowa podkategoria usługi."
+        if status not in SERVICE_STATUSES:
+            return None, "Nieprawidłowy status usługi."
+        if criticality not in SERVICE_CRITICALITIES:
+            return None, "Nieprawidłowa krytyczność usługi."
+        if default_priority not in PRIORITIES:
+            return None, "Nieprawidłowy domyślny priorytet usługi."
+        return {
+            "service_key": service_key,
+            "name": name,
+            "description": description,
+            "category": category,
+            "subcategory": subcategory,
+            "owner_email": owner_email,
+            "status": status,
+            "criticality": criticality,
+            "default_priority": default_priority,
+            "user_visible": user_visible,
+            "is_active": is_active,
+        }, None
+
+    @app.get("/api/admin/services")
+    @api_login_required
+    def api_admin_services(user):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania katalogiem usług IT.", "service_catalog.manage")
+        conn = get_conn()
+        cur = conn.cursor()
+        services = fetch_service_catalog_rows(cur, include_inactive=True, user_visible_only=False)
+        cur.close()
+        conn.close()
+        return jsonify({
+            "services": services,
+            "statuses": [{"value": key, "label": SERVICE_STATUS_LABELS.get(key, key)} for key in SERVICE_STATUSES],
+            "criticalities": [{"value": key, "label": SERVICE_CRITICALITY_LABELS.get(key, key)} for key in SERVICE_CRITICALITIES],
+            "categories": CATEGORIES,
+            "subcategories": SUBCATEGORIES,
+            "priorities": PRIORITIES,
+        })
+
+    @app.post("/api/admin/services")
+    @api_login_required
+    def api_admin_create_service(user):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania katalogiem usług IT.", "service_catalog.manage")
+        payload, error = service_payload_from_request(request.get_json(silent=True) or {})
+        if error:
+            return jsonify({"error": error}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        if payload["owner_email"]:
+            cur.execute("SELECT 1 FROM users WHERE lower(email) = lower(%s)", (payload["owner_email"],))
+            if not cur.fetchone():
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Właściciel usługi nie istnieje."}), 400
+        try:
+            cur.execute("""
+                INSERT INTO service_catalog (
+                    service_key, name, description, category, subcategory,
+                    owner_email, status, criticality, default_priority,
+                    user_visible, is_active, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                RETURNING id
+            """, (
+                payload["service_key"], payload["name"], payload["description"],
+                payload["category"], payload["subcategory"], payload["owner_email"],
+                payload["status"], payload["criticality"], payload["default_priority"],
+                payload["user_visible"], payload["is_active"],
+            ))
+            service_id = cur.fetchone()[0]
+            log_audit(cur, user, "service_created", "service_catalog", service_id, payload)
+            conn.commit()
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Usługa z takim kluczem już istnieje."}), 400
+        cur.close()
+        conn.close()
+        publish_event(f"Utworzono usługę IT: {payload['name']}", "service_created", None, staff_only=True)
+        return jsonify({"id": service_id}), 201
+
+    @app.put("/api/admin/services/<int:service_id>")
+    @api_login_required
+    def api_admin_update_service(user, service_id):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania katalogiem usług IT.", "service_catalog.manage")
+        payload, error = service_payload_from_request(request.get_json(silent=True) or {})
+        if error:
+            return jsonify({"error": error}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        if payload["owner_email"]:
+            cur.execute("SELECT 1 FROM users WHERE lower(email) = lower(%s)", (payload["owner_email"],))
+            if not cur.fetchone():
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Właściciel usługi nie istnieje."}), 400
+        try:
+            cur.execute("""
+                UPDATE service_catalog
+                SET service_key = %s,
+                    name = %s,
+                    description = %s,
+                    category = %s,
+                    subcategory = %s,
+                    owner_email = %s,
+                    status = %s,
+                    criticality = %s,
+                    default_priority = %s,
+                    user_visible = %s,
+                    is_active = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+            """, (
+                payload["service_key"], payload["name"], payload["description"],
+                payload["category"], payload["subcategory"], payload["owner_email"],
+                payload["status"], payload["criticality"], payload["default_priority"],
+                payload["user_visible"], payload["is_active"], service_id,
+            ))
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Usługa nie istnieje."}), 404
+            log_audit(cur, user, "service_updated", "service_catalog", service_id, payload)
+            conn.commit()
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Usługa z takim kluczem już istnieje."}), 400
+        cur.close()
+        conn.close()
+        publish_event(f"Zaktualizowano usługę IT: {payload['name']}", "service_updated", None, staff_only=True)
+        return jsonify({"status": "ok"})
 
     @app.get("/api/knowledge-articles")
     @api_login_required
@@ -16419,12 +17223,13 @@ data:
                 "t.category ILIKE %s",
                 "COALESCE(t.subcategory, '') ILIKE %s",
                 "COALESCE(t.workflow_name, '') ILIKE %s",
+                "COALESCE(sc.name, '') ILIKE %s",
                 "t.status ILIKE %s",
                 "t.priority ILIKE %s",
                 "COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email, '') ILIKE %s",
                 "COALESCE(t.assigned_to_email, '') ILIKE %s",
             ])
-            search_params.extend([like] * 13)
+            search_params.extend([like] * 14)
             filtered_clauses.append("(" + " OR ".join(search_terms) + ")")
             filtered_params.extend(search_params)
         filtered_where_sql = "WHERE " + " AND ".join(filtered_clauses) if filtered_clauses else ""
@@ -16443,6 +17248,7 @@ data:
             SELECT COUNT(*)
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            LEFT JOIN service_catalog sc ON sc.id = t.service_id
             {filtered_where_sql}
         """, tuple(filtered_params))
         total_filtered = cur.fetchone()[0] or 0
@@ -16480,10 +17286,14 @@ data:
                    COALESCE(t.resolution_feedback_comment, '') AS resolution_feedback_comment,
                    COALESCE(t.resolution_feedback_by_email, '') AS resolution_feedback_by_email,
                    COALESCE(t.resolution_feedback_by_name, '') AS resolution_feedback_by_name,
-                   t.resolution_feedback_at
+                   t.resolution_feedback_at,
+                   t.service_id,
+                   sc.name AS service_name,
+                   COALESCE(sc.status, 'operational') AS service_status
             FROM tickets t
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            LEFT JOIN service_catalog sc ON sc.id = t.service_id
             {filtered_where_sql}
             ORDER BY {sort_expr} {sort_order.upper()} {nulls}, t.id DESC
             LIMIT %s OFFSET %s
@@ -16511,6 +17321,12 @@ data:
                 "workflow_key": row[19] or "default",
                 "workflow_name": row[20] or WORKFLOWS["default"]["name"],
                 "sla_state": sla_state(row[13], row[8]),
+                "service": {
+                    "id": row[29],
+                    "name": row[30] or "",
+                    "status": row[31] or "operational",
+                    "status_label": SERVICE_STATUS_LABELS.get(row[31] or "operational", row[31] or "operational"),
+                } if row[29] else None,
             })
         return jsonify({
             "stats": {
@@ -17642,17 +18458,49 @@ data:
         description = clean(payload.get("description"))
         category = clean(payload.get("category"))
         subcategory = clean(payload.get("subcategory")) or "Inne"
-        priority = clean(payload.get("priority")) or "Normalny"
+        priority = clean(payload.get("priority"))
+        service_id_raw = clean(payload.get("service_id"))
         if not title or not description:
             return jsonify({"error": "title and description are required"}), 400
-        if priority not in PRIORITIES:
-            return jsonify({"error": "Nieprawidłowy priorytet."}), 400
-        if category not in CATEGORIES:
-            return jsonify({"error": "Nieprawidłowa kategoria."}), 400
-        if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
-            return jsonify({"error": "Nieprawidłowa podkategoria."}), 400
         conn = get_conn()
         cur = conn.cursor()
+        service_id = None
+        if service_id_raw:
+            try:
+                service_id = int(service_id_raw)
+            except ValueError:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Nieprawidłowa usługa IT."}), 400
+            cur.execute("""
+                SELECT id, category, COALESCE(subcategory, 'Inne'), COALESCE(default_priority, 'Normalny')
+                FROM service_catalog
+                WHERE id = %s
+                  AND COALESCE(is_active, TRUE) = TRUE
+                  AND (COALESCE(user_visible, TRUE) = TRUE OR %s = TRUE)
+            """, (service_id, is_staff(user)))
+            service_row = cur.fetchone()
+            if not service_row:
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Usługa IT nie istnieje albo jest nieaktywna."}), 400
+            category = service_row[1]
+            subcategory = service_row[2] or "Inne"
+            if not priority:
+                priority = service_row[3] or "Normalny"
+        priority = priority or "Normalny"
+        if priority not in PRIORITIES:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nieprawidłowy priorytet."}), 400
+        if category not in CATEGORIES:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nieprawidłowa kategoria."}), 400
+        if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Nieprawidłowa podkategoria."}), 400
         first_response_due_at, sla_due_at = sla_times_for_priority(cur, priority)
         workflow_key, workflow_name = choose_workflow(category, subcategory)
         initial_status = workflow_initial_status(cur, workflow_key)
@@ -17660,14 +18508,16 @@ data:
             INSERT INTO tickets (
                 title, description, requester_name, requester_email,
                 department, category, subcategory, priority, status,
+                service_id,
                 first_response_due_at, sla_due_at,
                 workflow_key, workflow_name
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
         """, (
             title, description, user["name"], user["email"],
             user["department"], category, subcategory, priority, initial_status,
+            service_id,
             first_response_due_at, sla_due_at,
             workflow_key, workflow_name,
         ))
@@ -17679,6 +18529,7 @@ data:
             "category": category,
             "subcategory": subcategory,
             "priority": priority,
+            "service_id": service_id,
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
             "workflow_watchers": workflow_watchers,
@@ -18074,10 +18925,22 @@ data:
                    COALESCE(t.resolution_feedback_comment, '') AS resolution_feedback_comment,
                    COALESCE(t.resolution_feedback_by_email, '') AS resolution_feedback_by_email,
                    COALESCE(t.resolution_feedback_by_name, '') AS resolution_feedback_by_name,
-                   t.resolution_feedback_at
+                   t.resolution_feedback_at,
+                   t.service_id,
+                   sc.service_key,
+                   sc.name AS service_name,
+                   COALESCE(sc.description, '') AS service_description,
+                   COALESCE(sc.status, 'operational') AS service_status,
+                   COALESCE(sc.criticality, 'medium') AS service_criticality,
+                   COALESCE(sc.default_priority, 'Normalny') AS service_default_priority,
+                   sc.owner_email AS service_owner_email,
+                   su.first_name AS service_owner_first_name,
+                   su.last_name AS service_owner_last_name
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
+            LEFT JOIN service_catalog sc ON sc.id = t.service_id
+            LEFT JOIN users su ON lower(su.email) = lower(sc.owner_email)
             WHERE t.id = %s
         """, (WORKFLOWS["default"]["name"], ticket_id,))
         row = cur.fetchone()
@@ -18450,6 +19313,23 @@ data:
             "resolution_feedback_at": str(row[28]) if row[28] else "",
             "sla_state": sla_state(row[14], row[9]),
         }
+        if row[29]:
+            service_owner_name = " ".join(part for part in [row[37] or "", row[38] or ""] if part).strip()
+            ticket["service"] = {
+                "id": row[29],
+                "service_key": row[30] or "",
+                "name": row[31] or "",
+                "description": row[32] or "",
+                "status": row[33] or "operational",
+                "status_label": SERVICE_STATUS_LABELS.get(row[33] or "operational", row[33] or "operational"),
+                "criticality": row[34] or "medium",
+                "criticality_label": SERVICE_CRITICALITY_LABELS.get(row[34] or "medium", row[34] or "medium"),
+                "default_priority": row[35] or "Normalny",
+                "owner_email": row[36] or "",
+                "owner_name": service_owner_name or row[36] or "",
+            }
+        else:
+            ticket["service"] = None
         comments = [
             {"author": c[0], "content": c[1], "created_at": str(c[2]), "visibility": c[3] or "public"}
             for c in comment_rows
