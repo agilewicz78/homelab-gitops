@@ -397,6 +397,8 @@ const requiredTicketAssistant = [
   "Sugerowany workflow",
   "Sugestie operatora",
   "Podobne zgłoszenia",
+  "Brak podobnych zgłoszeń od innych użytkowników.",
+  "zgłaszający: ",
   "Artykuły bazy wiedzy",
   "currentIncidents: data.incidents || []",
   "linkedTickets: data.linked_tickets || []",
