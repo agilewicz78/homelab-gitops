@@ -545,12 +545,17 @@ def main() -> None:
     assert "def seed_service_catalog(cur)" in text
     assert "def fetch_service_catalog_rows(cur" in text
     assert '@app.get("/api/services")' in text
+    assert '@app.get("/api/services/<int:service_id>/context")' in text
+    assert "def api_service_context(user, service_id)" in text
     assert '@app.get("/api/admin/services")' in text
     assert '@app.post("/api/admin/services")' in text
     assert '@app.put("/api/admin/services/<int:service_id>")' in text
     assert "async function renderAdminServices" in text
     assert "async function renderAdminServiceForm" in text
     assert "function serviceCatalogMetrics" in text
+    assert "function serviceContextMetric" in text
+    assert "function serviceContextRecommendation" in text
+    assert "async function renderServiceContext" in text
     assert "function applySelectedServiceToNewTicket" in text
     assert "let pendingNewTicketServiceId" in text
     assert "function serviceStatusMessage" in text
@@ -561,6 +566,10 @@ def main() -> None:
     assert "Katalog usług IT" in text
     assert "Status usług IT" in text
     assert "Usługa IT" in text
+    assert "Aktywne zgłoszenia usługi" in text
+    assert "Aktywne incydenty usługi" in text
+    assert "Rekomendacja operatora" in text
+    assert "Kontekst" in text
     assert "new-ticket-service" in text
     assert "newTicketServiceHint" in text
     assert '"services": services' in text
@@ -572,7 +581,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-16-service-status-user-portal-v1" in deployment_text
+    assert "2026-07-16-service-context-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
