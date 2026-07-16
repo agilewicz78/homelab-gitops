@@ -16411,13 +16411,8 @@ data:
                 WHERE {visible_ticket_sql}
                   {where_extra}
                 ORDER BY
-                  CASE WHEN t.status = 'Oczekuje na użytkownika' THEN 1 ELSE 2 END,
-                  CASE
-                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at < NOW() THEN 1
-                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours' THEN 2
-                    ELSE 3
-                  END,
                   t.updated_at DESC,
+                  t.created_at DESC,
                   t.id DESC
                 LIMIT %s
             """, tuple([WORKFLOWS["default"]["name"]] + visible_params + list(params or []) + [limit]))
@@ -16624,20 +16619,8 @@ data:
                 ) lp ON TRUE
                 {where_sql}
                 ORDER BY
-                  CASE
-                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at < NOW() THEN 1
-                    WHEN t.sla_due_at IS NOT NULL AND t.sla_due_at <= NOW() + INTERVAL '4 hours' THEN 2
-                    ELSE 3
-                  END,
-                  CASE t.priority
-                    WHEN 'Krytyczny' THEN 1
-                    WHEN 'Wysoki' THEN 2
-                    WHEN 'Normalny' THEN 3
-                    WHEN 'Niski' THEN 4
-                    ELSE 5
-                  END,
-                  COALESCE(t.sla_due_at, t.updated_at) ASC NULLS LAST,
                   t.updated_at DESC,
+                  t.created_at DESC,
                   t.id DESC
                 LIMIT %s
             """, tuple([WORKFLOWS["default"]["name"]] + list(params or []) + [limit]))
