@@ -309,6 +309,12 @@ def main() -> None:
     assert "Powiązany incydent" in text
     assert "Możliwe incydenty" in text
     assert "Powiązane zgłoszenia" in text
+    assert "Brak podobnych zgłoszeń od innych użytkowników." in text
+    assert "zgłaszający: " in text
+    assert "lower(COALESCE(t.requester_email, '')) <> lower(COALESCE(%s, ''))" in text
+    assert "source_tokens = similarity_tokens(row[1], row[2], row[6])" in text
+    assert "similarity_tokens(candidate[1], candidate[2], candidate[3])" in text
+    assert '"requester_name": candidate[8] or ""' in text
     assert "Krótka diagnoza" in text
     assert "Sugerowany priorytet" in text
     assert "Sugerowany workflow" in text
@@ -494,7 +500,7 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-15-ticket-context-panel-v1" in deployment_text
+    assert "2026-07-16-cross-user-ticket-similarity-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
