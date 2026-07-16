@@ -535,7 +535,31 @@ def main() -> None:
     assert "Centrum administracji" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
-    assert "2026-07-16-ticket-context-recommendations-v1" in deployment_text
+    assert "SERVICE_STATUSES" in text
+    assert "SERVICE_CRITICALITIES" in text
+    assert "DEFAULT_SERVICE_CATALOG" in text
+    assert "CREATE TABLE IF NOT EXISTS service_catalog" in text
+    assert "ALTER TABLE tickets" in text and "service_id INTEGER REFERENCES service_catalog" in text
+    assert "service_catalog.view" in text
+    assert "service_catalog.manage" in text
+    assert "def seed_service_catalog(cur)" in text
+    assert "def fetch_service_catalog_rows(cur" in text
+    assert '@app.get("/api/services")' in text
+    assert '@app.get("/api/admin/services")' in text
+    assert '@app.post("/api/admin/services")' in text
+    assert '@app.put("/api/admin/services/<int:service_id>")' in text
+    assert "async function renderAdminServices" in text
+    assert "async function renderAdminServiceForm" in text
+    assert "function serviceCatalogMetrics" in text
+    assert "function applySelectedServiceToNewTicket" in text
+    assert "Katalog usług IT" in text
+    assert "Usługa IT" in text
+    assert "new-ticket-service" in text
+    assert "newTicketServiceHint" in text
+    assert '"services": services' in text
+    assert '"service": {' in text
+    assert "Sprawdź status usługi IT" in text
+    assert "2026-07-16-service-catalog-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

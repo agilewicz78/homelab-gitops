@@ -195,6 +195,37 @@ for (const fragment of requiredGroupedNavigation) {
   }
 }
 
+const requiredServiceCatalog = [
+  "SERVICE_STATUSES",
+  "SERVICE_CRITICALITIES",
+  "DEFAULT_SERVICE_CATALOG",
+  "CREATE TABLE IF NOT EXISTS service_catalog",
+  "service_catalog.view",
+  "service_catalog.manage",
+  "seed_service_catalog(cur)",
+  "fetch_service_catalog_rows",
+  "/api/services",
+  "/api/admin/services",
+  "async function renderAdminServices",
+  "async function renderAdminServiceForm",
+  "serviceCatalogMetrics",
+  "serviceStatusBadge",
+  "serviceCriticalityBadge",
+  "Katalog usług IT",
+  "Usługi IT",
+  "Usługa IT",
+  "new-ticket-service",
+  "newTicketServiceHint",
+  "applySelectedServiceToNewTicket",
+  "service_id: formData.get(\"service_id\")",
+  "Sprawdź status usługi IT",
+];
+for (const fragment of requiredServiceCatalog) {
+  if (!text.includes(fragment)) {
+    throw new Error(`Missing service catalog fragment: ${fragment}`);
+  }
+}
+
 const requiredAutomationCenter = [
   "/automation-center",
   "renderWorkflowAutomationCenter",
