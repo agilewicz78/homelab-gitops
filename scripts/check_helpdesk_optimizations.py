@@ -559,6 +559,7 @@ def main() -> None:
     assert "function serviceContextMetric" in text
     assert "function serviceContextRecommendation" in text
     assert "function createServiceIncident" in text
+    assert "function serviceIncidentActionButton" in text
     assert "async function renderServiceContext" in text
     assert "function applySelectedServiceToNewTicket" in text
     assert "let pendingNewTicketServiceId" in text
@@ -574,6 +575,7 @@ def main() -> None:
     assert "Aktywne incydenty usługi" in text
     assert "Rekomendacja operatora" in text
     assert "Utwórz incydent z usługi" in text
+    assert "Do utworzenia incydentu potrzebne jest aktywne zgłoszenie tej usługi." in text
     assert "incident_created_from_service" in text
     assert "Kontekst" in text
     assert "new-ticket-service" in text
@@ -587,7 +589,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-16-service-incident-v1" in deployment_text
+    assert "2026-07-16-service-incident-button-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
