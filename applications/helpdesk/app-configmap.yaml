@@ -1240,6 +1240,10 @@ data:
                     ADD COLUMN IF NOT EXISTS service_id INTEGER REFERENCES service_catalog(id) ON DELETE SET NULL
                 """)
                 cur.execute("""
+                    ALTER TABLE tickets
+                    ADD COLUMN IF NOT EXISTS service_form_data JSONB DEFAULT '{}'::jsonb
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS sla_policies (
                         priority TEXT PRIMARY KEY,
                         first_response_hours INTEGER NOT NULL DEFAULT 4,
@@ -1793,6 +1797,54 @@ data:
         return html.escape(str(value or ""))
     def clean(value):
         return str(value or "").strip()
+
+    def normalize_service_form_answers(raw_value):
+        if not raw_value:
+            return []
+        if isinstance(raw_value, str):
+            try:
+                raw_value = json.loads(raw_value)
+            except Exception:
+                return []
+        if isinstance(raw_value, dict):
+            raw_items = raw_value.get("answers", [])
+        elif isinstance(raw_value, list):
+            raw_items = raw_value
+        else:
+            return []
+        answers = []
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            key = clean(item.get("key"))[:80]
+            label = clean(item.get("label"))[:140] or key
+            value = clean(item.get("value"))[:800]
+            if not key or not value:
+                continue
+            answers.append({
+                "key": key,
+                "label": label,
+                "value": value,
+            })
+            if len(answers) >= 20:
+                break
+        return answers
+
+    def normalize_service_form_payload(raw_value, service_key="", template=""):
+        answers = normalize_service_form_answers(raw_value)
+        if isinstance(raw_value, str):
+            try:
+                raw_value = json.loads(raw_value)
+            except Exception:
+                raw_value = {}
+        if isinstance(raw_value, dict):
+            service_key = clean(raw_value.get("service_key")) or service_key
+            template = clean(raw_value.get("template")) or template
+        return {
+            "service_key": service_key,
+            "template": template,
+            "answers": answers,
+        }
 
     def normalize_service_key(value):
         normalized = re.sub(r"[^a-z0-9]+", "-", clean(value).lower()).strip("-")
@@ -10855,11 +10907,13 @@ data:
         subcategory = clean(payload.get("subcategory")) or "Inne"
         priority = clean(payload.get("priority"))
         service_id_raw = clean(payload.get("service_id"))
+        service_form_payload = normalize_service_form_payload(payload.get("service_form"))
         if not title or not description:
             return jsonify({"error": "title and description are required"}), 400
         conn = get_conn()
         cur = conn.cursor()
         service_id = None
+        service_key = ""
         service_name = ""
         service_owner_email = ""
         service_plan = None
@@ -10885,8 +10939,11 @@ data:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Usługa IT nie istnieje albo jest nieaktywna."}), 400
+            service_key = service_row[1] or ""
             service_name = service_row[2] or ""
             service_owner_email = service_row[6] or ""
+            service_form_payload["service_key"] = service_form_payload.get("service_key") or service_key
+            service_form_payload["template"] = service_form_payload.get("template") or f"Formularz usługi: {service_name}"
             service_plan = service_ticket_plan(cur, {
                 "id": service_row[0],
                 "service_key": service_row[1],
@@ -10901,6 +10958,8 @@ data:
             category = service_plan["category"]
             subcategory = service_plan["subcategory"]
             priority = service_plan["priority"]
+        else:
+            service_form_payload = {"service_key": "", "template": "", "answers": []}
         priority = priority or "Normalny"
         if priority not in PRIORITIES:
             cur.close()
@@ -10921,16 +10980,16 @@ data:
             INSERT INTO tickets (
                 title, description, requester_name, requester_email,
                 department, category, subcategory, priority, status,
-                service_id,
+                service_id, service_form_data,
                 first_response_due_at, sla_due_at,
                 workflow_key, workflow_name
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, %s, %s)
             RETURNING id
         """, (
             title, description, user["name"], user["email"],
             user["department"], category, subcategory, priority, initial_status,
-            service_id,
+            service_id, json.dumps(service_form_payload, ensure_ascii=False),
             first_response_due_at, sla_due_at,
             workflow_key, workflow_name,
         ))
@@ -11006,6 +11065,14 @@ data:
                     f"{category} / {subcategory}, priorytet {priority}, workflow {workflow_name}."
                 ),
             )
+        if service_form_payload.get("answers"):
+            add_ticket_event(
+                cur,
+                ticket_id,
+                user,
+                "service_form_completed",
+                f"Uzupełniono formularz usługi: {len(service_form_payload['answers'])} odpowiedzi.",
+            )
         log_audit(cur, user, "ticket_created", "ticket", ticket_id, {
             "title": title,
             "category": category,
@@ -11015,6 +11082,7 @@ data:
             "service_name": service_name,
             "service_owner_watcher": service_owner_watcher,
             "service_routing_plan": service_plan or {},
+            "service_form": service_form_payload,
             "auto_linked_incident_id": auto_linked_incident_id,
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
@@ -11421,7 +11489,8 @@ data:
                    COALESCE(sc.default_priority, 'Normalny') AS service_default_priority,
                    sc.owner_email AS service_owner_email,
                    su.first_name AS service_owner_first_name,
-                   su.last_name AS service_owner_last_name
+                   su.last_name AS service_owner_last_name,
+                   COALESCE(t.service_form_data, '{}'::jsonb) AS service_form_data
             FROM tickets t
             LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
             LEFT JOIN users cu ON lower(cu.email) = lower(t.closed_by_email)
@@ -11798,6 +11867,7 @@ data:
             "resolution_feedback_by_name": row[27] or "",
             "resolution_feedback_at": str(row[28]) if row[28] else "",
             "sla_state": sla_state(row[14], row[9]),
+            "service_form": normalize_service_form_payload(row[39] if len(row) > 39 else {}),
         }
         if row[29]:
             service_owner_name = " ".join(part for part in [row[37] or "", row[38] or ""] if part).strip()
