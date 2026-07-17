@@ -163,6 +163,11 @@ data:
         "outage": "Awaria",
         "maintenance": "Prace serwisowe",
     }
+    SERVICE_STATUS_MIN_PRIORITIES = {
+        "degraded": "Wysoki",
+        "maintenance": "Wysoki",
+        "outage": "Krytyczny",
+    }
     SERVICE_CRITICALITIES = ["low", "medium", "high", "critical"]
     SERVICE_CRITICALITY_LABELS = {
         "low": "Niska",
@@ -1932,6 +1937,16 @@ data:
         priority = clean(service.get("default_priority")) or "Normalny"
         if priority not in PRIORITIES:
             priority = "Normalny"
+        base_priority = priority
+        status = service.get("status") or "operational"
+        minimum_priority = SERVICE_STATUS_MIN_PRIORITIES.get(status, "")
+        priority_escalated = False
+        if (
+            minimum_priority in PRIORITIES
+            and PRIORITIES.index(priority) < PRIORITIES.index(minimum_priority)
+        ):
+            priority = minimum_priority
+            priority_escalated = True
         if category not in CATEGORIES:
             category = CATEGORIES[0] if CATEGORIES else "Inne"
         if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
@@ -1943,10 +1958,11 @@ data:
             "warning_hours": 4,
         }
         signals = []
-        status = service.get("status") or "operational"
         criticality = service.get("criticality") or "medium"
         if status != "operational":
             signals.append("status uslugi wymaga uwagi")
+        if priority_escalated:
+            signals.append("priorytet podniesiony przez status uslugi")
         if int(service.get("active_incident_count") or 0) > 0:
             signals.append("usluga ma aktywny incydent")
         if criticality in ("high", "critical"):
@@ -1955,7 +1971,14 @@ data:
         return {
             "category": category,
             "subcategory": subcategory,
+            "base_priority": base_priority,
+            "minimum_priority": minimum_priority,
             "priority": priority,
+            "priority_escalated": priority_escalated,
+            "priority_reason": (
+                f"Status uslugi wymaga minimum {minimum_priority}"
+                if priority_escalated else ""
+            ),
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
             "first_response_hours": int(policy["first_response_hours"]),
