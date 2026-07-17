@@ -4,26 +4,37 @@
 const fs = require("fs");
 const vm = require("vm");
 
-const file = "applications/helpdesk/app-configmap.yaml";
-const text = fs.readFileSync(file, "utf8").replaceAll("\r\n", "\n");
-const spaStart = text.indexOf("    SPA_HTML");
-if (spaStart < 0) {
-  throw new Error("SPA_HTML was not found");
+const appFile = "applications/helpdesk/app-configmap.yaml";
+const spaFile = "applications/helpdesk/spa-configmap.yaml";
+const appText = fs.readFileSync(appFile, "utf8").replaceAll("\r\n", "\n");
+const spaText = fs.readFileSync(spaFile, "utf8").replaceAll("\r\n", "\n");
+const text = `${appText}\n${spaText}`;
+
+if (!appText.includes("SPA_HTML_PATH") || !appText.includes("load_spa_html")) {
+  throw new Error("SPA loader was not found in app ConfigMap");
+}
+if (!spaText.includes("name: helpdesk-spa") || !spaText.includes("spa.html: |")) {
+  throw new Error("SPA ConfigMap was not found");
 }
 
-const scriptMarker = "      <script>\n";
-const scriptStart = text.indexOf(scriptMarker, spaStart);
-const scriptEnd = text.indexOf("      </script>", scriptStart);
+const scriptMarker = "<script>";
+const scriptStart = spaText.indexOf(scriptMarker);
+const scriptEnd = spaText.indexOf("</script>", scriptStart);
 if (scriptStart < 0 || scriptEnd < 0) {
   throw new Error("Helpdesk SPA script block was not found");
 }
 
-const script = text
-  .slice(scriptStart + scriptMarker.length, scriptEnd)
-  .replaceAll("{{", "{")
-  .replaceAll("}}", "}");
+const script = spaText.slice(scriptStart + scriptMarker.length, scriptEnd);
 
 new vm.Script(script, { filename: "helpdesk-spa.js" });
+
+function hasFragment(fragment) {
+  if (text.includes(fragment)) return true;
+  if (fragment.includes("{{") || fragment.includes("}}")) {
+    return text.includes(fragment.replaceAll("{{", "{").replaceAll("}}", "}"));
+  }
+  return false;
+}
 
 const requiredFeedbackFlow = [
   'id="knowledgeFeedbackModal"',
@@ -36,7 +47,7 @@ const requiredFeedbackFlow = [
   "payload.reason_comment",
 ];
 for (const fragment of requiredFeedbackFlow) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing knowledge feedback UI fragment: ${fragment}`);
   }
 }
@@ -53,7 +64,7 @@ const requiredWorkflowDiagram = [
   "preview.innerHTML = workflowAutomationRuleDiagram",
 ];
 for (const fragment of requiredWorkflowDiagram) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing workflow diagram fragment: ${fragment}`);
   }
 }
@@ -68,7 +79,7 @@ const requiredAutomationExplanation = [
   "Wykonane działania:",
 ];
 for (const fragment of requiredAutomationExplanation) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing ticket automation explanation fragment: ${fragment}`);
   }
 }
@@ -85,7 +96,7 @@ const requiredWorkflowSafety = [
   "Pozostaw wyłączone, aby zapisać bezpieczną wersję roboczą",
 ];
 for (const fragment of requiredWorkflowSafety) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing workflow safety fragment: ${fragment}`);
   }
 }
@@ -112,7 +123,7 @@ const requiredWorkflowWizard = [
   'id="workflowSaveButton"',
 ];
 for (const fragment of requiredWorkflowWizard) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing workflow wizard fragment: ${fragment}`);
   }
 }
@@ -138,7 +149,7 @@ const requiredAutomationRuleWizard = [
   'id="workflowRuleSaveButton"',
 ];
 for (const fragment of requiredAutomationRuleWizard) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing automation rule wizard fragment: ${fragment}`);
   }
 }
@@ -169,7 +180,7 @@ const requiredFriendlyConditionBuilder = [
   "Kategorii i podkategorii ustawionych w workflow nie trzeba wybierać ponownie.",
 ];
 for (const fragment of requiredFriendlyConditionBuilder) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing friendly condition builder fragment: ${fragment}`);
   }
 }
@@ -190,7 +201,7 @@ const requiredGroupedNavigation = [
   "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń.",
 ];
 for (const fragment of requiredGroupedNavigation) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing grouped navigation fragment: ${fragment}`);
   }
 }
@@ -250,7 +261,7 @@ const requiredServiceCatalog = [
   "Sprawdź status usługi IT",
 ];
 for (const fragment of requiredServiceCatalog) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing service catalog fragment: ${fragment}`);
   }
 }
@@ -276,7 +287,7 @@ const requiredAutomationCenter = [
   "Co zrobi?",
 ];
 for (const fragment of requiredAutomationCenter) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing automation center fragment: ${fragment}`);
   }
 }
@@ -294,7 +305,7 @@ const requiredWorkflowHub = [
   "renderWorkflowManagement(${{w.id}})",
 ];
 for (const fragment of requiredWorkflowHub) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing workflow hub fragment: ${fragment}`);
   }
 }
@@ -319,7 +330,7 @@ const requiredAutomationStarterPacks = [
   "reguł dodanych jako wersje robocze",
 ];
 for (const fragment of requiredAutomationStarterPacks) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing automation starter pack fragment: ${fragment}`);
   }
 }
@@ -337,7 +348,7 @@ const requiredAutomationDashboard = [
   "Otwórz dashboard",
 ];
 for (const fragment of requiredAutomationDashboard) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing automation dashboard fragment: ${fragment}`);
   }
 }
@@ -375,7 +386,7 @@ const requiredOperatorCenter = [
   "workflow_rule_notification",
 ];
 for (const fragment of requiredOperatorCenter) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing operator center fragment: ${fragment}`);
   }
 }
@@ -399,7 +410,7 @@ const requiredResponsiveLayout = [
   ".workflow-wizard-steps { grid-template-columns: 1fr; }",
 ];
 for (const fragment of requiredResponsiveLayout) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing responsive layout fragment: ${fragment}`);
   }
 }
@@ -428,7 +439,7 @@ const requiredUserPortal = [
   "Widok odświeża się przez WebSocket",
 ];
 for (const fragment of requiredUserPortal) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing user portal fragment: ${fragment}`);
   }
 }
@@ -490,7 +501,7 @@ const requiredTicketAssistant = [
   "currentUserCanBeAssigned",
 ];
 for (const fragment of requiredTicketAssistant) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing ticket assistant fragment: ${fragment}`);
   }
 }
@@ -542,7 +553,7 @@ const requiredIncidentCenterV2 = [
   "Zadania:",
 ];
 for (const fragment of requiredIncidentCenterV2) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing incident center v2 fragment: ${fragment}`);
   }
 }
@@ -569,7 +580,7 @@ const requiredWorkflowChangeHistory = [
   "Usunięto regułę automatyzacji",
 ];
 for (const fragment of requiredWorkflowChangeHistory) {
-  if (!text.includes(fragment)) {
+  if (!hasFragment(fragment)) {
     throw new Error(`Missing workflow change history fragment: ${fragment}`);
   }
 }

@@ -167,8 +167,9 @@ else
   ok "Brak podów z wysoką liczbą restartów"
 fi
 
-section "7. ConfigMap helpdesk-app"
+section "7. ConfigMaps helpdesk-app / helpdesk-spa"
 run_required "ConfigMap helpdesk-app istnieje" kubectl get configmap -n "${NAMESPACE}" helpdesk-app
+run_required "ConfigMap helpdesk-spa istnieje" kubectl get configmap -n "${NAMESPACE}" helpdesk-spa
 
 echo
 echo ">> Kontrola znanej regresji: wyciek treści notatki internal"
