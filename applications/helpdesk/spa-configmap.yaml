@@ -3371,8 +3371,93 @@ data:
           return rows || `<p class="muted">${esc(emptyText)}</p>`;
         }
     
+        function serviceQualityHealthPanel(quality = {}) {
+          const health = quality?.health || {};
+          const score = Math.max(0, Math.min(100, Number(health.score || 0)));
+          const state = health.state || "healthy";
+          const tone = state === "critical"
+            ? "ticket-recommendation-danger"
+            : state === "risk" || state === "watch"
+              ? "ticket-recommendation-warning"
+              : "ticket-recommendation-success";
+          const reasons = Array.isArray(health.reasons) ? health.reasons : [];
+          return `
+            <section class="panel-soft ticket-recommendation ${tone}">
+              <div class="ticket-section-title">
+                <div>
+                  <h4>Kondycja us&#322;ugi</h4>
+                  <div class="attachment-upload-hint">Szybka ocena ryzyka na podstawie statusu, SLA, incydent&#243;w i trendu.</div>
+                </div>
+                <span class="counter">${score}/100</span>
+              </div>
+              <div class="incident-meta" style="margin-top:8px">
+                <span class="pill">${esc(health.label || "Stabilna")}</span>
+                ${reasons.map(reason => `<span class="chip">${esc(reason)}</span>`).join("")}
+              </div>
+              <div class="dashboard-bar" style="margin-top:10px"><span style="width:${score}%"></span></div>
+            </section>
+          `;
+        }
+
+        function serviceQualityActionList(actions = []) {
+          const rows = (actions || []).map(action => {
+            const tone = ["danger", "warning", "success"].includes(action.tone) ? action.tone : "info";
+            return `
+              <div class="panel-soft ticket-recommendation ticket-recommendation-${tone}">
+                <strong>${esc(action.title || "Działanie")}</strong>
+                <div class="attachment-upload-hint" style="margin-top:6px">${esc(action.detail || "")}</div>
+              </div>
+            `;
+          }).join("");
+          return `
+            <section class="panel-soft">
+              <h4>Rekomendowane działania</h4>
+              <div class="ticket-recommendation-list">
+                ${rows || `<p class="muted">Brak pilnych działań dla tej usługi.</p>`}
+              </div>
+            </section>
+          `;
+        }
+
+        function serviceContextTimelineCard(item) {
+          const id = Number(item.id || 0);
+          const type = item.type === "incident" ? "incydent" : "zgłoszenie";
+          const action = item.type === "incident" ? `renderIncident(${id})` : `renderTicket(${id})`;
+          return `
+            <button class="notification-card" onclick="${action}; return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">${esc(item.title || "Zdarzenie usługi")}</div>
+                <div class="incident-meta">
+                  <span class="chip">${esc(type)}</span>
+                  <span class="chip">${esc(item.at || "brak daty")}</span>
+                </div>
+                <div class="attachment-upload-hint">${esc(item.hint || "")}</div>
+              </div>
+            </button>
+          `;
+        }
+
+        function serviceContextTimelinePanel(timeline = []) {
+          const rows = (timeline || []).map(serviceContextTimelineCard).join("");
+          return `
+            <section class="panel-soft" style="margin-top:12px">
+              <div class="ticket-section-title">
+                <div>
+                  <h4>Oś czasu usługi</h4>
+                  <div class="attachment-upload-hint">Wspólny widok najnowszych zgłoszeń i aktywnych incydentów tej usługi.</div>
+                </div>
+                <span class="counter">${Number((timeline || []).length)}</span>
+              </div>
+              <div class="notification-list" style="margin-top:12px">
+                ${rows || `<p class="muted">Brak zdarzeń dla tej usługi.</p>`}
+              </div>
+            </section>
+          `;
+        }
+
         function serviceQualityPanel(service, quality = {}) {
           const summary = quality?.summary || {};
+          const delta30 = Number(summary.ticket_delta_30_days || 0);
           return `
             <section class="card service-quality-panel">
               <div class="ticket-section-title">
@@ -3386,7 +3471,12 @@ data:
                 <strong>Sygnał jakości</strong>
                 <div class="attachment-upload-hint" style="margin-top:6px">${esc(serviceQualitySignal(service, quality))}</div>
               </div>
+              <div class="grid" style="margin-top:12px">
+                ${serviceQualityHealthPanel(quality)}
+                ${serviceQualityActionList(quality.actions || [])}
+              </div>
               <section class="dashboard-grid" style="margin-top:12px">
+                ${serviceQualityMetric("Trend 30 dni", delta30 > 0 ? `+${delta30}` : String(delta30), "Zmiana wobec poprzednich 30 dni.")}
                 ${serviceQualityMetric("Zgłoszenia 90 dni", Number(summary.tickets_90_days || 0), "Pełniejszy obraz obciążenia usługi.")}
                 ${serviceQualityMetric("Incydenty 90 dni", Number(summary.incidents_90_days || 0), "Incydenty powiązane z usługą.")}
                 ${serviceQualityMetric("Rozwiązane 30 dni", Number(summary.resolved_30_days || 0), "Zamknięte lub rozwiązane ostatnio.")}
@@ -3408,6 +3498,7 @@ data:
                 <h4>Najbardziej dotknięte działy</h4>
                 <div class="watcher-list">${serviceQualityTopList(quality.top_departments || [], "Brak danych o działach w ostatnich 90 dniach.")}</div>
               </section>
+              ${serviceContextTimelinePanel(quality.timeline || [])}
             </section>
           `;
         }

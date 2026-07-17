@@ -6380,6 +6380,10 @@ data:
             SELECT
               COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '90 days') AS tickets_90_days,
               COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '30 days') AS tickets_30_days,
+              COUNT(*) FILTER (
+                WHERE t.created_at >= NOW() - INTERVAL '60 days'
+                  AND t.created_at < NOW() - INTERVAL '30 days'
+              ) AS tickets_previous_30_days,
               COUNT(*) FILTER (WHERE t.created_at >= NOW() - INTERVAL '7 days') AS tickets_7_days,
               COUNT(*) FILTER (
                 WHERE t.updated_at >= NOW() - INTERVAL '30 days'
@@ -6418,13 +6422,18 @@ data:
         quality_summary = {
             "tickets_90_days": int(quality_row[0] or 0),
             "tickets_30_days": int(quality_row[1] or 0),
-            "tickets_7_days": int(quality_row[2] or 0),
-            "resolved_30_days": int(quality_row[3] or 0),
-            "avg_resolution_minutes_90_days": int(quality_row[4] or 0),
-            "high_priority_30_days": int(quality_row[5] or 0),
-            "overdue_30_days": int(quality_row[6] or 0),
+            "tickets_previous_30_days": int(quality_row[2] or 0),
+            "tickets_7_days": int(quality_row[3] or 0),
+            "resolved_30_days": int(quality_row[4] or 0),
+            "avg_resolution_minutes_90_days": int(quality_row[5] or 0),
+            "high_priority_30_days": int(quality_row[6] or 0),
+            "overdue_30_days": int(quality_row[7] or 0),
             "incidents_90_days": incidents_90_days,
         }
+        quality_summary["ticket_delta_30_days"] = (
+            quality_summary["tickets_30_days"]
+            - quality_summary["tickets_previous_30_days"]
+        )
 
         cur.execute("""
             WITH days AS (
@@ -6489,8 +6498,158 @@ data:
             )[:8]
         ]
 
+        health_score = 100
+        health_reasons = []
+        service_status = service.get("status") or "operational"
+        if service_status == "outage":
+            health_score -= 35
+            health_reasons.append("Status usługi: awaria")
+        elif service_status == "degraded":
+            health_score -= 22
+            health_reasons.append("Status usługi: degradacja")
+        elif service_status == "maintenance":
+            health_score -= 10
+            health_reasons.append("Trwa praca serwisowa")
+        if active_incidents:
+            health_score -= 25
+            health_reasons.append("Aktywny incydent usługi")
+        if summary["overdue_sla"] > 0:
+            health_score -= 18
+            health_reasons.append("Otwarte zgłoszenia po SLA")
+        if summary["without_first_response"] > 0:
+            health_score -= 10
+            health_reasons.append("Zgłoszenia bez pierwszej reakcji")
+        if quality_summary["ticket_delta_30_days"] >= 5:
+            health_score -= 10
+            health_reasons.append("Wolumen rośnie względem poprzednich 30 dni")
+        if quality_summary["incidents_90_days"] >= 2:
+            health_score -= 12
+            health_reasons.append("Powtarzające się incydenty w 90 dni")
+        health_score = max(0, min(100, health_score))
+        if health_score < 45:
+            health_state = "critical"
+            health_label = "Krytyczna"
+        elif health_score < 70:
+            health_state = "risk"
+            health_label = "Ryzyko"
+        elif health_score < 88:
+            health_state = "watch"
+            health_label = "Obserwuj"
+        else:
+            health_state = "healthy"
+            health_label = "Stabilna"
+        if not health_reasons:
+            health_reasons.append("Brak mocnych sygnałów ryzyka")
+
+        quality_actions = []
+
+        def add_quality_action(action_type, title, detail, tone="info"):
+            quality_actions.append({
+                "type": action_type,
+                "title": title,
+                "detail": detail,
+                "tone": tone,
+            })
+
+        if active_incidents:
+            add_quality_action(
+                "incident",
+                "Publikuj aktualizacje w incydencie",
+                "Usługa ma aktywny incydent. Komunikaty publiczne z incydentu trafią do powiązanych zgłoszeń.",
+                "danger" if any(item.get("severity") == "SEV1" for item in active_incidents) else "warning",
+            )
+        if quality_summary["incidents_90_days"] >= 2:
+            add_quality_action(
+                "rca",
+                "Zaplanuj analizę przyczyny źródłowej",
+                "W ostatnich 90 dniach wracały incydenty tej usługi. To dobry moment na działania zapobiegawcze.",
+                "warning",
+            )
+        if summary["overdue_sla"] > 0:
+            add_quality_action(
+                "sla",
+                "Sprawdź SLA i workflow",
+                "Są otwarte zgłoszenia po terminie. Zweryfikuj priorytet, automatyzacje i kolejkę operatorów.",
+                "danger",
+            )
+        if quality_summary["tickets_30_days"] >= 10 or (
+            top_symptoms and int(top_symptoms[0]["count"] or 0) >= 3
+        ):
+            symptom = top_symptoms[0]["label"] if top_symptoms else "powtarzalny objaw"
+            add_quality_action(
+                "knowledge",
+                "Wzmocnij bazę wiedzy",
+                f"Powtarza się temat: {symptom}. Artykuł KB może ograniczyć liczbę nowych zgłoszeń.",
+                "info",
+            )
+        if quality_summary["high_priority_30_days"] >= 3:
+            add_quality_action(
+                "routing",
+                "Zweryfikuj plan obsługi usługi",
+                "Wiele zgłoszeń ma wysoki priorytet. Sprawdź domyślny priorytet, właściciela i reguły routingu.",
+                "warning",
+            )
+        if summary["open_tickets"] >= 5 and not active_incidents:
+            add_quality_action(
+                "incident_candidate",
+                "Rozważ incydent zbiorczy",
+                "Usługa ma kilka aktywnych zgłoszeń bez wspólnego incydentu.",
+                "warning",
+            )
+        if not service.get("owner_email"):
+            add_quality_action(
+                "owner",
+                "Uzupełnij właściciela usługi",
+                "Właściciel pomaga przy eskalacji, przeglądach jakości i obserwowaniu nowych zgłoszeń.",
+                "info",
+            )
+        if not quality_actions:
+            add_quality_action(
+                "monitor",
+                "Obserwuj trend",
+                "Usługa wygląda stabilnie. Wystarczy okresowo kontrolować trend i powtarzalne objawy.",
+                "success",
+            )
+
+        service_timeline = []
+        for incident in active_incidents[:5]:
+            service_timeline.append({
+                "type": "incident",
+                "id": incident["id"],
+                "title": f"Incydent #{incident['id']}: {incident['title']}",
+                "hint": (
+                    f"{incident['severity']} · {incident['ticket_count']} zgłoszeń · "
+                    f"{incident['department_count']} działów"
+                ),
+                "at": incident["updated_at"],
+            })
+        for ticket in recent_tickets[:8]:
+            service_timeline.append({
+                "type": "ticket",
+                "id": ticket["id"],
+                "title": f"Zgłoszenie #{ticket['id']}: {ticket['title']}",
+                "hint": (
+                    f"{ticket['status']} · {ticket['priority']} · "
+                    f"{ticket['requester_name'] or ticket['requester_email']}"
+                ),
+                "at": ticket["updated_at"],
+            })
+        service_timeline = sorted(
+            service_timeline,
+            key=lambda item: item.get("at") or "",
+            reverse=True,
+        )[:10]
+
         quality = {
             "summary": quality_summary,
+            "health": {
+                "score": health_score,
+                "state": health_state,
+                "label": health_label,
+                "reasons": health_reasons,
+            },
+            "actions": quality_actions[:5],
+            "timeline": service_timeline,
             "trend_14_days": trend_14_days,
             "top_departments": top_departments,
             "top_symptoms": top_symptoms,

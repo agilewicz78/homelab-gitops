@@ -605,6 +605,9 @@ def main() -> None:
     assert "function serviceQualityPanel" in text
     assert "function serviceQualityTrendBars" in text
     assert "function serviceQualitySignal" in text
+    assert "function serviceQualityHealthPanel" in text
+    assert "function serviceQualityActionList" in text
+    assert "function serviceContextTimelinePanel" in text
     assert "function serviceRoutingPlan" in text
     assert "function serviceRoutingPlanPanel" in text
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
@@ -630,11 +633,19 @@ def main() -> None:
     assert "Aktywne zgłoszenia usługi" in text
     assert "Aktywne incydenty usługi" in text
     assert "Rekomendacja operatora" in text
+    assert "Kondycja us&#322;ugi" in text
+    assert "Rekomendowane działania" in text
+    assert "Oś czasu usługi" in text
+    assert "Trend 30 dni" in text
     assert "Historia i jakość usługi" in text
     assert "Trend zgłoszeń 14 dni" in text
     assert "Najczęstsze objawy" in text
     assert "Najbardziej dotknięte działy" in text
     assert '"quality": quality' in text
+    assert '"health": {' in text
+    assert '"actions": quality_actions[:5]' in text
+    assert '"timeline": service_timeline' in text
+    assert '"ticket_delta_30_days"' in text
     assert '"trend_14_days": trend_14_days' in text
     assert '"top_symptoms": top_symptoms' in text
     assert "Utwórz incydent z usługi" in text
@@ -654,7 +665,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-incident-link-v1" in deployment_text
+    assert "2026-07-17-service-quality-center-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
