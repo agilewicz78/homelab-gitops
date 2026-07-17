@@ -1201,6 +1201,7 @@ data:
                 krytyczność: ${esc(service.criticality_label || service.criticality)} ·
                 kategoria: ${esc(service.category)} / ${esc(service.subcategory || "Inne")}.
               </div>
+              ${serviceRoutingPlanPanel(service)}
               ${warning}
             </div>
           `;
@@ -1210,18 +1211,19 @@ data:
           const service = selectedService(meta);
           renderNewTicketServiceHint(service);
           if (!service) return;
+          const plan = serviceRoutingPlan(service);
           const categorySelect = document.getElementById("new-ticket-category");
           const subcategorySelect = document.getElementById("new-ticket-subcategory");
           const prioritySelect = document.querySelector('#ticketForm select[name="priority"]');
-          if (categorySelect && service.category) {
-            categorySelect.value = service.category;
-            updateSubcategorySelect(meta, service.subcategory || "Inne");
+          if (categorySelect && plan.category) {
+            categorySelect.value = plan.category;
+            updateSubcategorySelect(meta, plan.subcategory || "Inne");
           }
-          if (subcategorySelect && service.subcategory) {
-            subcategorySelect.value = service.subcategory;
+          if (subcategorySelect && plan.subcategory) {
+            subcategorySelect.value = plan.subcategory;
           }
-          if (prioritySelect && service.default_priority) {
-            prioritySelect.value = service.default_priority;
+          if (prioritySelect && plan.priority) {
+            prioritySelect.value = plan.priority;
           }
         }
         function setWsStatus(text, connected) {
@@ -3194,6 +3196,43 @@ data:
         function isProblematicService(service) {
           return ["degraded", "outage", "maintenance"].includes(service?.status || "");
         }
+
+        function serviceRoutingPlan(service) {
+          const plan = service?.routing_plan || {};
+          return {
+            category: plan.category || service?.category || "-",
+            subcategory: plan.subcategory || service?.subcategory || "Inne",
+            priority: plan.priority || service?.default_priority || "Normalny",
+            workflow_name: plan.workflow_name || "Standardowy workflow zgloszenia",
+            sla_label: plan.sla_label || "",
+            owner_name: plan.owner_name || service?.owner_name || service?.owner_email || "",
+            signals: Array.isArray(plan.signals) ? plan.signals : [],
+          };
+        }
+
+        function serviceRoutingPlanPanel(service) {
+          if (!service) return "";
+          const plan = serviceRoutingPlan(service);
+          const signals = plan.signals.length
+            ? `<div class="attachment-upload-hint" style="margin-top:6px">Sygna&#322;y: ${plan.signals.map(esc).join(", ")}.</div>`
+            : "";
+          return `
+            <div class="ticket-context-mini" style="margin-top:10px">
+              <strong>Plan obs&#322;ugi z katalogu us&#322;ug</strong>
+              <div class="incident-meta" style="margin-top:8px">
+                <span class="chip">Kategoria: ${esc(plan.category)} / ${esc(plan.subcategory)}</span>
+                <span class="chip">Priorytet: ${esc(plan.priority)}</span>
+                <span class="chip">Workflow: ${esc(plan.workflow_name)}</span>
+                ${plan.sla_label ? `<span class="chip">SLA: ${esc(plan.sla_label)}</span>` : ""}
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:6px">
+                Po wybraniu tej us&#322;ugi Helpdesk zapisze zg&#322;oszenie z powy&#380;sz&#261; klasyfikacj&#261; i SLA.
+                ${plan.owner_name ? `W&#322;a&#347;ciciel us&#322;ugi zostanie dodany jako obserwator: ${esc(plan.owner_name)}.` : "Brak wskazanego w&#322;a&#347;ciciela us&#322;ugi."}
+              </div>
+              ${signals}
+            </div>
+          `;
+        }
     
         function adminServiceOptionList(options, selected, labelKey = "label", valueKey = "value") {
           return (options || []).map(option => {
@@ -3508,6 +3547,7 @@ data:
                 <span class="chip">${esc(service.category || "-")} / ${esc(service.subcategory || "Inne")}</span>
                 <span class="chip">właściciel: ${esc(service.owner_name || service.owner_email || "brak")}</span>
               </div>
+              ${serviceRoutingPlanPanel(service)}
               <div class="panel-soft" style="margin-top:12px">
                 <strong>Rekomendacja operatora</strong>
                 <div class="attachment-upload-hint" style="margin-top:6px">${esc(serviceContextRecommendation(service, summary, data.active_incidents || []))}</div>
@@ -8635,6 +8675,11 @@ data:
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
             scheduleNewTicketKnowledgeSuggestions();
+          });
+          document.querySelector('#ticketForm select[name="priority"]').addEventListener("change", () => {
+            const serviceSelect = document.getElementById("new-ticket-service");
+            if (serviceSelect) serviceSelect.value = "";
+            renderNewTicketServiceHint(null);
           });
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }

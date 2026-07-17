@@ -568,6 +568,12 @@ def main() -> None:
     assert "service_catalog.manage" in text
     assert "def seed_service_catalog(cur)" in text
     assert "def fetch_service_catalog_rows(cur" in text
+    assert "def service_ticket_plan(cur, service)" in text
+    assert 'payload["routing_plan"] = service_ticket_plan(cur, payload)' in text
+    assert 'priority = service_plan["priority"]' in text
+    assert '"service_routing_applied"' in text
+    assert '"service_routing_plan": service_plan or {}' in text
+    assert '"service_owner_watcher": service_owner_watcher' in text
     assert '@app.get("/api/services")' in text
     assert '@app.get("/api/services/<int:service_id>/context")' in text
     assert "def api_service_context(user, service_id)" in text
@@ -584,6 +590,9 @@ def main() -> None:
     assert "function serviceQualityPanel" in text
     assert "function serviceQualityTrendBars" in text
     assert "function serviceQualitySignal" in text
+    assert "function serviceRoutingPlan" in text
+    assert "function serviceRoutingPlanPanel" in text
+    assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
     assert "function serviceContextRecommendation" in text
     assert "function createServiceIncident" in text
     assert "function serviceIncidentActionButton" in text
@@ -614,6 +623,8 @@ def main() -> None:
     assert "Kontekst" in text
     assert "new-ticket-service" in text
     assert "newTicketServiceHint" in text
+    assert "Po wybraniu tej us&#322;ugi Helpdesk zapisze zg&#322;oszenie" in text
+    assert "W&#322;a&#347;ciciel us&#322;ugi zostanie dodany jako obserwator" in text
     assert '"services": services' in text
     assert '"service": {' in text
     assert '"id": row[28]' in text
@@ -623,7 +634,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-split-spa-configmap-v1" in deployment_text
+    assert "2026-07-17-service-routing-plan-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
