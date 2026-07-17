@@ -617,6 +617,9 @@ def main() -> None:
     assert "function serviceReviewPanel" in text
     assert "function submitServiceReview" in text
     assert "let lastServiceReviewContext" in text
+    assert "function serviceUserGuidance" in text
+    assert "function serviceUserIncidentList" in text
+    assert "function serviceUserHelpCard" in text
     assert "function serviceRoutingPlan" in text
     assert "function serviceRoutingPlanPanel" in text
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
@@ -636,6 +639,11 @@ def main() -> None:
     assert "function openNewTicketForService" in text
     assert "function userPortalServiceStatusPanel" in text
     assert "function userPortalServiceStatusCard" in text
+    assert "Karta usługi dla użytkownika" in text
+    assert "Co możesz zrobić teraz" in text
+    assert "Czy warto tworzyć zgłoszenie?" in text
+    assert "Helpdesk może już znać ten problem" in text
+    assert "Nie ma znanej awarii tej usługi" in text
     assert "Katalog usług IT" in text
     assert "Status usług IT" in text
     assert "Usługa IT" in text
@@ -678,9 +686,8 @@ def main() -> None:
     assert '"status": row[30] or "operational"' in text
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
-    assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-review-center-v1" in deployment_text
+    assert "2026-07-17-user-service-card-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

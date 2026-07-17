@@ -1190,21 +1190,9 @@ data:
             panel.innerHTML = "";
             return;
           }
-          const warning = isProblematicService(service)
-            ? `<div class="error" style="margin-top:8px">Ta usługa ma aktualnie status: ${esc(service.status_label || service.status)}. Problem może być już znany helpdeskowi, ale możesz dopisać swoje objawy jako osobne zgłoszenie.</div>`
-            : "";
           panel.innerHTML = `
-            <div class="panel-soft" style="margin-top:10px">
-              <strong>Usługa: ${esc(service.name)}</strong>
-              <div class="attachment-upload-hint" style="margin-top:6px">
-                ${esc(service.description || "Brak opisu usługi.")}
-                Status: ${esc(service.status_label || service.status)} ·
-                krytyczność: ${esc(service.criticality_label || service.criticality)} ·
-                kategoria: ${esc(service.category)} / ${esc(service.subcategory || "Inne")}.
-              </div>
-              ${serviceRoutingPlanPanel(service)}
-              ${warning}
-            </div>
+            ${serviceUserHelpCard(service, { inForm: true })}
+            ${serviceRoutingPlanPanel(service)}
           `;
           panel.classList.remove("hidden");
         }
@@ -1686,6 +1674,7 @@ data:
                   aktywne zgłoszenia: ${ticketCount} · incydenty: ${incidentCount}
                 </div>
                 <div class="attachment-upload-hint">${esc(serviceStatusMessage(service))}</div>
+                ${serviceUserHelpCard(service, { compact: true })}
               </div>
             </div>
           `;
@@ -3196,6 +3185,110 @@ data:
     
         function isProblematicService(service) {
           return ["degraded", "outage", "maintenance"].includes(service?.status || "");
+        }
+
+        function serviceUserGuidance(service) {
+          const status = service?.status || "operational";
+          const plan = serviceRoutingPlan(service);
+          const incidentCount = Number(plan.active_incident_count || 0);
+          if (incidentCount > 0) {
+            return {
+              tone: plan.active_incidents.some(item => item.severity === "SEV1") ? "danger" : "warning",
+              headline: "Helpdesk może już znać ten problem",
+              message: plan.auto_link_incident_id
+                ? `Po wysłaniu zgłoszenie zostanie automatycznie powiązane z incydentem #${Number(plan.auto_link_incident_id)}.`
+                : "Usługa ma aktywny incydent. Operator zobaczy go przy obsłudze zgłoszenia.",
+              action: "Utwórz zgłoszenie, jeśli problem dotyczy Twojego konta, sprzętu albo chcesz otrzymywać aktualizacje w swojej sprawie.",
+              createHint: "Jeżeli chcesz tylko sprawdzić status, obserwuj komunikaty w portalu. Jeżeli masz własne objawy, wyślij zgłoszenie.",
+            };
+          }
+          if (status === "outage") {
+            return {
+              tone: "danger",
+              headline: "Trwa awaria usługi",
+              message: "Problem może dotyczyć wielu osób. Helpdesk najpewniej pracuje nad przywróceniem usługi.",
+              action: "Zgłoszenie utwórz wtedy, gdy masz dodatkowe informacje albo problem wpływa na ważną pracę.",
+              createHint: "Jeżeli objawy są takie same jak komunikat o awarii, samo zgłoszenie może nie przyspieszyć naprawy.",
+            };
+          }
+          if (status === "degraded") {
+            return {
+              tone: "warning",
+              headline: "Usługa działa niestabilnie",
+              message: "Możesz odczuwać wolniejsze działanie lub błędy części funkcji.",
+              action: "Zgłoś problem, jeśli utrudnia Ci pracę albo widzisz konkretny błąd.",
+              createHint: "Opis objawów pomoże operatorowi ocenić skalę degradacji.",
+            };
+          }
+          if (status === "maintenance") {
+            return {
+              tone: "warning",
+              headline: "Trwają prace serwisowe",
+              message: "Część funkcji może być chwilowo niedostępna lub działać wolniej.",
+              action: "Poczekaj do zakończenia prac, chyba że problem wygląda inaczej niż komunikat serwisowy.",
+              createHint: "Zgłoszenie warto wysłać, gdy problem zostaje po zakończeniu prac albo dotyczy tylko Ciebie.",
+            };
+          }
+          return {
+            tone: "success",
+            headline: "Nie ma znanej awarii tej usługi",
+            message: "Jeżeli problem występuje u Ciebie, Helpdesk potraktuje go jako nowe zgłoszenie.",
+            action: "Opisz, co dokładnie nie działa, od kiedy i czy pojawia się komunikat błędu.",
+            createHint: "Tak, warto utworzyć zgłoszenie, jeżeli problem nadal występuje po podstawowym sprawdzeniu.",
+          };
+        }
+
+        function serviceUserIncidentList(service) {
+          const plan = serviceRoutingPlan(service);
+          const incidents = plan.active_incidents || [];
+          if (!incidents.length) return "";
+          return `
+            <div class="attachment-upload-hint" style="margin-top:8px">
+              Aktywne incydenty: ${incidents.map(item => `#${Number(item.id)} ${esc(item.severity || "")}: ${esc(item.title || "")}`).join("<br>")}
+            </div>
+          `;
+        }
+
+        function serviceUserHelpCard(service, options = {}) {
+          if (!service) return "";
+          const guidance = serviceUserGuidance(service);
+          const compact = Boolean(options.compact);
+          const inForm = Boolean(options.inForm);
+          return `
+            <div class="panel-soft ticket-recommendation ticket-recommendation-${guidance.tone}" style="margin-top:10px">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Karta usługi dla użytkownika</strong>
+                  <div class="notification-ticket" style="margin-top:4px">${esc(service.name || "Usługa IT")}</div>
+                </div>
+                <div>${serviceStatusBadge(service)} ${serviceCriticalityBadge(service)}</div>
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:8px">${esc(service.description || "Brak opisu usługi.")}</div>
+              <div class="incident-meta" style="margin-top:8px">
+                <span class="chip">${esc(service.category || "-")} / ${esc(service.subcategory || "Inne")}</span>
+                <span class="chip">aktywne zgłoszenia: ${Number(service.open_ticket_count || 0)}</span>
+                <span class="chip">incydenty: ${Number(service.active_incident_count || 0)}</span>
+              </div>
+              <div class="panel-soft" style="margin-top:10px">
+                <strong>${esc(guidance.headline)}</strong>
+                <div class="attachment-upload-hint" style="margin-top:6px">${esc(guidance.message)}</div>
+                ${serviceUserIncidentList(service)}
+              </div>
+              ${compact ? "" : `
+                <div class="grid" style="margin-top:10px">
+                  <div class="panel-soft">
+                    <strong>Co możesz zrobić teraz</strong>
+                    <div class="attachment-upload-hint" style="margin-top:6px">${esc(guidance.action)}</div>
+                  </div>
+                  <div class="panel-soft">
+                    <strong>Czy warto tworzyć zgłoszenie?</strong>
+                    <div class="attachment-upload-hint" style="margin-top:6px">${esc(guidance.createHint)}</div>
+                  </div>
+                </div>
+              `}
+              ${!inForm && !compact ? `<button class="btn-secondary btn-small" onclick="openNewTicketForService(${Number(service.id)}); return false;">Zgłoś problem z tą usługą</button>` : ""}
+            </div>
+          `;
         }
 
         function serviceRoutingPlan(service) {

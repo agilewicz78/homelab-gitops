@@ -27,7 +27,7 @@ spec:
         app: helpdesk
       annotations:
         # Zmiana rewizji wymusza odtworzenie poda po aktualizacji kodu w ConfigMap.
-        helpdesk.incoprp.local/app-config-revision: "2026-07-17-service-review-center-v1"
+        helpdesk.incoprp.local/app-config-revision: "2026-07-17-user-service-card-v1"
 
     spec:
       # Pod-level securityContext:
