@@ -1779,9 +1779,9 @@ data:
         normalized = re.sub(r"[^a-z0-9]+", "-", clean(value).lower()).strip("-")
         return normalized or f"service-{uuid.uuid4().hex[:8]}"
 
-    def service_row_payload(row):
+    def service_row_payload(row, cur=None):
         owner_name = " ".join(part for part in [row[13] or "", row[14] or ""] if part).strip()
-        return {
+        payload = {
             "id": row[0],
             "service_key": row[1],
             "name": row[2],
@@ -1801,6 +1801,8 @@ data:
             "open_ticket_count": int(row[15] or 0),
             "active_incident_count": int(row[16] or 0),
         }
+        payload["routing_plan"] = service_ticket_plan(cur, payload)
+        return payload
 
     def fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=False):
         clauses = []
@@ -1845,7 +1847,7 @@ data:
               END,
               lower(sc.name)
         """)
-        return [service_row_payload(row) for row in cur.fetchall()]
+        return [service_row_payload(row, cur) for row in cur.fetchall()]
 
     SIMILARITY_STOP_WORDS = {
         "aby", "ale", "bez", "blad", "brak", "byc", "czy", "dla", "dziala",
@@ -1922,6 +1924,56 @@ data:
             "Niski": {"first_response_hours": 24, "resolution_hours": 120, "warning_hours": 8},
         }
         return defaults.get(priority, {"first_response_hours": 8, "resolution_hours": 48, "warning_hours": 4})
+
+    def service_ticket_plan(cur, service):
+        service = service or {}
+        category = clean(service.get("category"))
+        subcategory = clean(service.get("subcategory")) or "Inne"
+        priority = clean(service.get("default_priority")) or "Normalny"
+        if priority not in PRIORITIES:
+            priority = "Normalny"
+        if category not in CATEGORIES:
+            category = CATEGORIES[0] if CATEGORIES else "Inne"
+        if subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            subcategory = "Inne"
+        workflow_key, workflow_name = choose_workflow(category, subcategory)
+        policy = sla_policy_for_priority(cur, priority) if cur else {
+            "first_response_hours": 8,
+            "resolution_hours": SLA_HOURS.get(priority, 48),
+            "warning_hours": 4,
+        }
+        signals = []
+        status = service.get("status") or "operational"
+        criticality = service.get("criticality") or "medium"
+        if status != "operational":
+            signals.append("status uslugi wymaga uwagi")
+        if int(service.get("active_incident_count") or 0) > 0:
+            signals.append("usluga ma aktywny incydent")
+        if criticality in ("high", "critical"):
+            signals.append("usluga jest krytyczna dla biznesu")
+        owner = service.get("owner_name") or service.get("owner_email") or ""
+        return {
+            "category": category,
+            "subcategory": subcategory,
+            "priority": priority,
+            "workflow_key": workflow_key,
+            "workflow_name": workflow_name,
+            "first_response_hours": int(policy["first_response_hours"]),
+            "resolution_hours": int(policy["resolution_hours"]),
+            "warning_hours": int(policy["warning_hours"]),
+            "owner_email": service.get("owner_email") or "",
+            "owner_name": owner,
+            "sla_label": (
+                f"pierwsza reakcja do {int(policy['first_response_hours'])}h, "
+                f"rozwiazanie do {int(policy['resolution_hours'])}h"
+            ),
+            "routing_label": (
+                f"{category} / {subcategory}, priorytet {priority}, "
+                f"workflow: {workflow_name}"
+            ),
+            "signals": signals,
+        }
+
     def sla_due_for_priority(priority):
         return datetime.now() + timedelta(hours=SLA_HOURS.get(priority, 48))
 
@@ -10342,6 +10394,9 @@ data:
         conn = get_conn()
         cur = conn.cursor()
         service_id = None
+        service_name = ""
+        service_owner_email = ""
+        service_plan = None
         if service_id_raw:
             try:
                 service_id = int(service_id_raw)
@@ -10350,7 +10405,10 @@ data:
                 conn.close()
                 return jsonify({"error": "Nieprawidłowa usługa IT."}), 400
             cur.execute("""
-                SELECT id, category, COALESCE(subcategory, 'Inne'), COALESCE(default_priority, 'Normalny')
+                SELECT
+                  id, service_key, name, category, COALESCE(subcategory, 'Inne'),
+                  COALESCE(default_priority, 'Normalny'), COALESCE(owner_email, ''),
+                  COALESCE(status, 'operational'), COALESCE(criticality, 'medium')
                 FROM service_catalog
                 WHERE id = %s
                   AND COALESCE(is_active, TRUE) = TRUE
@@ -10361,10 +10419,22 @@ data:
                 cur.close()
                 conn.close()
                 return jsonify({"error": "Usługa IT nie istnieje albo jest nieaktywna."}), 400
-            category = service_row[1]
-            subcategory = service_row[2] or "Inne"
-            if not priority:
-                priority = service_row[3] or "Normalny"
+            service_name = service_row[2] or ""
+            service_owner_email = service_row[6] or ""
+            service_plan = service_ticket_plan(cur, {
+                "id": service_row[0],
+                "service_key": service_row[1],
+                "name": service_name,
+                "category": service_row[3],
+                "subcategory": service_row[4] or "Inne",
+                "default_priority": service_row[5] or "Normalny",
+                "owner_email": service_owner_email,
+                "status": service_row[7] or "operational",
+                "criticality": service_row[8] or "medium",
+            })
+            category = service_plan["category"]
+            subcategory = service_plan["subcategory"]
+            priority = service_plan["priority"]
         priority = priority or "Normalny"
         if priority not in PRIORITIES:
             cur.close()
@@ -10400,13 +10470,31 @@ data:
         ))
         ticket_id = cur.fetchone()[0]
         workflow_watchers = add_workflow_watchers_to_ticket(cur, ticket_id, workflow_key)
+        service_owner_watcher = ""
+        if service_owner_email:
+            add_ticket_watcher(cur, ticket_id, service_owner_email, None)
+            service_owner_watcher = service_owner_email
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
+        if service_plan:
+            add_ticket_event(
+                cur,
+                ticket_id,
+                user,
+                "service_routing_applied",
+                (
+                    f"Usluga IT {service_name} ustawila obsluge: "
+                    f"{category} / {subcategory}, priorytet {priority}, workflow {workflow_name}."
+                ),
+            )
         log_audit(cur, user, "ticket_created", "ticket", ticket_id, {
             "title": title,
             "category": category,
             "subcategory": subcategory,
             "priority": priority,
             "service_id": service_id,
+            "service_name": service_name,
+            "service_owner_watcher": service_owner_watcher,
+            "service_routing_plan": service_plan or {},
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
             "workflow_watchers": workflow_watchers,
