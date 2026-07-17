@@ -566,6 +566,8 @@ def main() -> None:
     assert '"degraded": "Wysoki"' in text
     assert "DEFAULT_SERVICE_CATALOG" in text
     assert "CREATE TABLE IF NOT EXISTS service_catalog" in text
+    assert "CREATE TABLE IF NOT EXISTS service_reviews" in text
+    assert "idx_service_reviews_service_reviewed" in text
     assert "ALTER TABLE tickets" in text and "service_id INTEGER REFERENCES service_catalog" in text
     assert "service_catalog.view" in text
     assert "service_catalog.manage" in text
@@ -592,6 +594,9 @@ def main() -> None:
     assert '@app.get("/api/services")' in text
     assert '@app.get("/api/services/<int:service_id>/context")' in text
     assert "def api_service_context(user, service_id)" in text
+    assert "def api_review_service(user, service_id)" in text
+    assert '@app.post("/api/services/<int:service_id>/review")' in text
+    assert "def can_review_service_backend" in text
     assert '@app.post("/api/services/<int:service_id>/incident")' in text
     assert "def api_create_service_incident(user, service_id)" in text
     assert "def service_incident_default_severity(service, ticket_rows)" in text
@@ -608,6 +613,10 @@ def main() -> None:
     assert "function serviceQualityHealthPanel" in text
     assert "function serviceQualityActionList" in text
     assert "function serviceContextTimelinePanel" in text
+    assert "function serviceReviewBadge" in text
+    assert "function serviceReviewPanel" in text
+    assert "function submitServiceReview" in text
+    assert "let lastServiceReviewContext" in text
     assert "function serviceRoutingPlan" in text
     assert "function serviceRoutingPlanPanel" in text
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
@@ -636,6 +645,9 @@ def main() -> None:
     assert "Kondycja us&#322;ugi" in text
     assert "Rekomendowane działania" in text
     assert "Oś czasu usługi" in text
+    assert "Przegląd usługi" in text
+    assert "Historia przeglądów" in text
+    assert "przegląd wymagany" in text
     assert "Trend 30 dni" in text
     assert "Historia i jakość usługi" in text
     assert "Trend zgłoszeń 14 dni" in text
@@ -645,6 +657,9 @@ def main() -> None:
     assert '"health": {' in text
     assert '"actions": quality_actions[:5]' in text
     assert '"timeline": service_timeline' in text
+    assert '"review": {' in text
+    assert '"history": review_history' in text
+    assert '"last_review": review_history[0] if review_history else None' in text
     assert '"ticket_delta_30_days"' in text
     assert '"trend_14_days": trend_14_days' in text
     assert '"top_symptoms": top_symptoms' in text
@@ -665,7 +680,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-quality-center-v1" in deployment_text
+    assert "2026-07-17-service-review-center-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

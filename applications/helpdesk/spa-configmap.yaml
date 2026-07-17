@@ -743,6 +743,7 @@ data:
         let knowledgeSuggestionRequest = 0;
         let adminServiceCatalogCache = null;
         let pendingNewTicketServiceId = null;
+        let lastServiceReviewContext = null;
         function getSid() { return sessionStorage.getItem("helpdesk_sid") || ""; }
         function setSid(sid) { sessionStorage.setItem("helpdesk_sid", sid); }
         function clearSid() { sessionStorage.removeItem("helpdesk_sid"); }
@@ -3282,12 +3283,14 @@ data:
           const unstable = active.filter(service => ["degraded", "outage", "maintenance"].includes(service.status));
           const openTickets = active.reduce((sum, service) => sum + Number(service.open_ticket_count || 0), 0);
           const activeIncidents = active.reduce((sum, service) => sum + Number(service.active_incident_count || 0), 0);
+          const reviewDue = active.filter(service => service.review_due).length;
           return `
             <div class="stats">
               <div class="stat"><div class="num">${active.length}</div><div class="label">Aktywne usługi</div></div>
               <div class="stat"><div class="num">${unstable.length}</div><div class="label">Usługi z komunikatem</div></div>
               <div class="stat"><div class="num">${openTickets}</div><div class="label">Otwarte zgłoszenia usług</div></div>
               <div class="stat"><div class="num">${activeIncidents}</div><div class="label">Aktywne incydenty usług</div></div>
+              <div class="stat"><div class="num">${reviewDue}</div><div class="label">Wymagają przeglądu</div></div>
             </div>
           `;
         }
@@ -3300,6 +3303,14 @@ data:
               <div class="muted">${esc(hint || "")}</div>
             </div>
           `;
+        }
+
+        function serviceReviewBadge(service) {
+          if (service?.review_due) {
+            const reasons = (service.review_due_reasons || []).slice(0, 2).join(", ");
+            return `<span class="pill priority-Wysoki">przegląd wymagany</span>${reasons ? `<br><span class="muted">${esc(reasons)}</span>` : ""}`;
+          }
+          return `<span class="chip">przegląd OK</span>${service?.last_reviewed_at ? `<br><span class="muted">ostatnio: ${esc(service.last_reviewed_at)}</span>` : ""}`;
         }
     
         function serviceQualityMetric(label, value, hint) {
@@ -3450,6 +3461,88 @@ data:
               </div>
               <div class="notification-list" style="margin-top:12px">
                 ${rows || `<p class="muted">Brak zdarzeń dla tej usługi.</p>`}
+              </div>
+            </section>
+          `;
+        }
+
+        function serviceReviewHistoryList(history = []) {
+          const rows = (history || []).map(item => `
+            <div class="watcher-item">
+              <div>
+                <strong>${esc(item.reviewer || "Helpdesk")}</strong>
+                <div class="watcher-meta">${esc(item.reviewed_at || "")} · wynik ${Number(item.health_score || 0)}/100</div>
+                <div class="attachment-upload-hint">${esc(item.note || "")}</div>
+              </div>
+              <span class="pill">${esc(item.health_state || "review")}</span>
+            </div>
+          `).join("");
+          return rows || `<p class="muted">Brak historii przeglądów tej usługi.</p>`;
+        }
+
+        async function submitServiceReview(serviceId) {
+          const noteEl = document.getElementById("serviceReviewNote");
+          const note = (noteEl?.value || "").trim();
+          if (!note) {
+            alert("Dodaj krótką notatkę z przeglądu.");
+            return;
+          }
+          const context = lastServiceReviewContext || {};
+          const res = await api(`/api/services/${Number(serviceId)}/review`, {
+            method: "POST",
+            body: JSON.stringify({
+              note,
+              health_score: Number(context.health_score || 0),
+              health_state: context.health_state || "",
+              due_reasons: context.due_reasons || [],
+            })
+          });
+          const data = res ? await res.json().catch(() => ({})) : {};
+          if (!res || !res.ok) {
+            alert(data.error || "Nie udało się zapisać przeglądu usługi.");
+            return;
+          }
+          showToast("Przegląd usługi zapisany", data.reviewed_at || "");
+          await renderServiceContext(Number(serviceId));
+        }
+
+        function serviceReviewPanel(service, quality = {}) {
+          const review = quality?.review || {};
+          const reasons = Array.isArray(review.due_reasons) ? review.due_reasons : [];
+          const history = Array.isArray(review.history) ? review.history : [];
+          const last = review.last_review || null;
+          const canReview = Boolean(review.can_review);
+          const statusText = review.due ? "Wymaga przeglądu" : "Przegląd aktualny";
+          const tone = review.due ? "ticket-recommendation-warning" : "ticket-recommendation-success";
+          return `
+            <section class="card service-review-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Przegląd usługi</h3>
+                  <div class="attachment-upload-hint">Właściciel usługi lub administrator może potwierdzić, że kondycja usługi została oceniona.</div>
+                </div>
+                <span class="pill">${esc(statusText)}</span>
+              </div>
+              <div class="panel-soft ticket-recommendation ${tone}" style="margin-top:12px">
+                <strong>Powody przeglądu</strong>
+                <div class="incident-meta" style="margin-top:8px">
+                  ${reasons.length ? reasons.map(reason => `<span class="chip">${esc(reason)}</span>`).join("") : `<span class="chip">brak pilnych powodów</span>`}
+                </div>
+                <div class="attachment-upload-hint" style="margin-top:8px">
+                  ${last ? `Ostatni przegląd: ${esc(last.reviewed_at || "")}, ${esc(last.reviewer || "Helpdesk")}.` : "Ta usługa nie ma jeszcze zapisanego przeglądu."}
+                </div>
+              </div>
+              <div class="grid" style="margin-top:12px">
+                <section class="panel-soft">
+                  <h4>Oznacz przegląd jako wykonany</h4>
+                  <textarea id="serviceReviewNote" rows="4" placeholder="Np. Zweryfikowano trend, SLA i aktywne incydenty. Plan działań: aktualizacja KB i obserwacja przez 7 dni." ${canReview ? "" : "disabled"}></textarea>
+                  <button ${canReview ? "" : "disabled"} onclick="submitServiceReview(${Number(service?.id || 0)})">Zapisz przegląd</button>
+                  ${canReview ? "" : `<p class="muted">Przegląd może zapisać właściciel usługi albo administrator katalogu.</p>`}
+                </section>
+                <section class="panel-soft">
+                  <h4>Historia przeglądów</h4>
+                  <div class="watcher-list">${serviceReviewHistoryList(history)}</div>
+                </section>
               </div>
             </section>
           `;
@@ -3643,6 +3736,13 @@ data:
           }
           const service = data.service || {};
           const summary = data.summary || {};
+          const quality = data.quality || {};
+          lastServiceReviewContext = {
+            serviceId: Number(service.id || serviceId),
+            health_score: Number(quality.health?.score || 0),
+            health_state: quality.health?.state || "",
+            due_reasons: quality.review?.due_reasons || [],
+          };
           const content = `
             <section class="card">
               <div class="ticket-section-title">
@@ -3676,7 +3776,8 @@ data:
               ${serviceContextMetric("7 dni", summary.last_7_days, "Nowe zgłoszenia w ostatnim tygodniu.")}
               ${serviceContextMetric("30 dni", summary.last_30_days, "Nowe zgłoszenia w ostatnich 30 dniach.")}
             </section>
-            ${serviceQualityPanel(service, data.quality || {})}
+            ${serviceQualityPanel(service, quality)}
+            ${serviceReviewPanel(service, quality)}
             <div class="grid">
               ${serviceContextIncidentSection(data.active_incidents || [])}
               ${serviceContextTicketSection("Aktywne zgłoszenia usługi", data.active_tickets || [], "Brak aktywnych zgłoszeń dla tej usługi.")}
@@ -3711,7 +3812,7 @@ data:
               </td>
               <td>${serviceStatusBadge(service)}<br>${serviceCriticalityBadge(service)}</td>
               <td>${esc(service.category)}<br><span class="muted">${esc(service.subcategory || "Inne")}</span></td>
-              <td>${esc(service.owner_name || service.owner_email || "Brak właściciela")}</td>
+              <td>${esc(service.owner_name || service.owner_email || "Brak właściciela")}<br>${serviceReviewBadge(service)}</td>
               <td>${esc(service.default_priority || "Normalny")}</td>
               <td>
                 <strong>${Number(service.open_ticket_count || 0)}</strong> otwarte<br>

@@ -1100,6 +1100,19 @@ data:
                 cur.execute("UPDATE service_catalog SET user_visible = TRUE WHERE user_visible IS NULL")
                 cur.execute("UPDATE service_catalog SET is_active = TRUE WHERE is_active IS NULL")
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS service_reviews (
+                        id SERIAL PRIMARY KEY,
+                        service_id INTEGER NOT NULL REFERENCES service_catalog(id) ON DELETE CASCADE,
+                        reviewer_email TEXT REFERENCES users(email) ON DELETE SET NULL,
+                        reviewer_name TEXT,
+                        note TEXT NOT NULL,
+                        health_state TEXT,
+                        health_score INTEGER DEFAULT 0,
+                        due_reasons TEXT,
+                        reviewed_at TIMESTAMP DEFAULT NOW()
+                    );
+                """)
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS tickets (
                         id SERIAL PRIMARY KEY,
                         title TEXT NOT NULL,
@@ -1657,6 +1670,7 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_active ON service_catalog (is_active, name)",
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_category ON service_catalog (category, subcategory)",
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_status ON service_catalog (status, updated_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_service_reviews_service_reviewed ON service_reviews (service_id, reviewed_at DESC, id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_created ON workflow_rule_executions (created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_workflow_id ON workflow_rule_executions (workflow_id, id DESC)",
@@ -1805,7 +1819,30 @@ data:
             "owner_name": owner_name or row[6] or "",
             "open_ticket_count": int(row[15] or 0),
             "active_incident_count": int(row[16] or 0),
+            "last_reviewed_at": str(row[17]) if row[17] else "",
+            "last_reviewed_by": row[18] or row[19] or "",
+            "last_review_note": row[20] or "",
+            "last_review_health_state": row[21] or "",
+            "last_review_health_score": int(row[22] or 0),
         }
+        review_signal_reasons = []
+        if not payload["owner_email"]:
+            review_signal_reasons.append("brak właściciela")
+        if payload["status"] != "operational":
+            review_signal_reasons.append("status usługi wymaga uwagi")
+        if payload["active_incident_count"] > 0:
+            review_signal_reasons.append("aktywny incydent")
+        if payload["open_ticket_count"] >= 5:
+            review_signal_reasons.append("dużo aktywnych zgłoszeń")
+        review_reasons = []
+        if not row[17]:
+            review_reasons = review_signal_reasons + ["brak historii przeglądu"]
+        elif row[17] < datetime.now() - timedelta(days=90):
+            review_reasons = review_signal_reasons + ["przegląd starszy niż 90 dni"]
+        elif review_signal_reasons and row[17] < datetime.now() - timedelta(days=7):
+            review_reasons = review_signal_reasons
+        payload["review_due"] = bool(review_reasons)
+        payload["review_due_reasons"] = review_reasons
         payload["routing_plan"] = service_ticket_plan(cur, payload)
         return payload
 
@@ -1839,9 +1876,24 @@ data:
                 JOIN tickets t ON t.id = it.ticket_id
                 WHERE t.service_id = sc.id
                   AND i.status <> 'resolved'
-              ) AS active_incident_count
+              ) AS active_incident_count,
+              sr.reviewed_at,
+              sr.reviewer_name,
+              sr.reviewer_email,
+              sr.note,
+              sr.health_state,
+              sr.health_score
             FROM service_catalog sc
             LEFT JOIN users u ON lower(u.email) = lower(sc.owner_email)
+            LEFT JOIN LATERAL (
+              SELECT
+                reviewed_at, reviewer_name, reviewer_email, note,
+                health_state, health_score
+              FROM service_reviews
+              WHERE service_id = sc.id
+              ORDER BY reviewed_at DESC, id DESC
+              LIMIT 1
+            ) sr ON TRUE
             {where_sql}
             ORDER BY
               CASE COALESCE(sc.status, 'operational')
@@ -2383,6 +2435,14 @@ data:
 
     def can_manage_service_catalog_backend(user):
         return has_permission(user, "service_catalog.manage")
+
+    def can_review_service_backend(user, service):
+        if not user or not service:
+            return False
+        if can_manage_service_catalog_backend(user):
+            return True
+        owner_email = (service.get("owner_email") or "").lower()
+        return bool(owner_email and owner_email == user["email"].lower())
 
     def can_view_workflow_logs_backend(user):
         return has_permission(user, "workflow.view_logs")
@@ -6498,6 +6558,37 @@ data:
             )[:8]
         ]
 
+        cur.execute("""
+            SELECT
+              id,
+              COALESCE(reviewer_name, reviewer_email, 'Helpdesk') AS reviewer,
+              COALESCE(reviewer_email, '') AS reviewer_email,
+              note,
+              COALESCE(health_state, ''),
+              COALESCE(health_score, 0),
+              COALESCE(due_reasons, ''),
+              reviewed_at
+            FROM service_reviews
+            WHERE service_id = %s
+            ORDER BY reviewed_at DESC, id DESC
+            LIMIT 8
+        """, (service_id,))
+        review_history = []
+        latest_reviewed_at = None
+        for row in cur.fetchall():
+            if latest_reviewed_at is None:
+                latest_reviewed_at = row[7]
+            review_history.append({
+                "id": row[0],
+                "reviewer": row[1],
+                "reviewer_email": row[2],
+                "note": row[3],
+                "health_state": row[4],
+                "health_score": int(row[5] or 0),
+                "due_reasons": row[6],
+                "reviewed_at": str(row[7]) if row[7] else "",
+            })
+
         health_score = 100
         health_reasons = []
         service_status = service.get("status") or "operational"
@@ -6540,6 +6631,33 @@ data:
             health_label = "Stabilna"
         if not health_reasons:
             health_reasons.append("Brak mocnych sygnałów ryzyka")
+
+        review_signal_reasons = []
+        if not service.get("owner_email"):
+            review_signal_reasons.append("Brak właściciela usługi")
+        if service_status != "operational":
+            review_signal_reasons.append("Status usługi wymaga uwagi")
+        if active_incidents:
+            review_signal_reasons.append("Usługa ma aktywny incydent")
+        if summary["overdue_sla"] > 0:
+            review_signal_reasons.append("Są otwarte zgłoszenia po SLA")
+        if summary["without_first_response"] > 0:
+            review_signal_reasons.append("Są zgłoszenia bez pierwszej reakcji")
+        if quality_summary["ticket_delta_30_days"] >= 5:
+            review_signal_reasons.append("Wolumen rośnie względem poprzednich 30 dni")
+        if summary["open_tickets"] >= 5:
+            review_signal_reasons.append("Dużo aktywnych zgłoszeń usługi")
+        if quality_summary["tickets_30_days"] >= 10:
+            review_signal_reasons.append("Wysoki wolumen zgłoszeń w ostatnich 30 dniach")
+        if quality_summary["incidents_90_days"] >= 2:
+            review_signal_reasons.append("Powtarzające się incydenty w ostatnich 90 dniach")
+        review_due_reasons = []
+        if latest_reviewed_at is None:
+            review_due_reasons = review_signal_reasons + ["Brak wcześniejszego przeglądu usługi"]
+        elif latest_reviewed_at < datetime.now() - timedelta(days=90):
+            review_due_reasons = review_signal_reasons + ["Ostatni przegląd jest starszy niż 90 dni"]
+        elif review_signal_reasons and latest_reviewed_at < datetime.now() - timedelta(days=7):
+            review_due_reasons = review_signal_reasons
 
         quality_actions = []
 
@@ -6650,6 +6768,18 @@ data:
             },
             "actions": quality_actions[:5],
             "timeline": service_timeline,
+            "review": {
+                "due": bool(review_due_reasons),
+                "status": "requires_review" if review_due_reasons else "current",
+                "due_reasons": review_due_reasons,
+                "can_review": can_review_service_backend(user, service),
+                "owner_is_current_user": (
+                    bool(service.get("owner_email"))
+                    and service.get("owner_email").lower() == user["email"].lower()
+                ),
+                "history": review_history,
+                "last_review": review_history[0] if review_history else None,
+            },
             "trend_14_days": trend_14_days,
             "top_departments": top_departments,
             "top_symptoms": top_symptoms,
@@ -6665,6 +6795,94 @@ data:
             "active_incidents": active_incidents,
             "quality": quality,
         })
+
+    @app.post("/api/services/<int:service_id>/review")
+    @api_login_required
+    @api_staff_required
+    def api_review_service(user, service_id):
+        if not can_view_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do katalogu usług IT.", "service_catalog.view")
+        payload = request.get_json(silent=True) or {}
+        note = clean(payload.get("note"))[:2000]
+        if not note:
+            return jsonify({"error": "Notatka z przeglądu jest wymagana."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        services = fetch_service_catalog_rows(
+            cur,
+            include_inactive=can_manage_service_catalog_backend(user),
+            user_visible_only=False,
+        )
+        service = next((item for item in services if int(item["id"]) == int(service_id)), None)
+        if not service:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Usługa nie istnieje albo nie jest widoczna."}), 404
+        if not can_review_service_backend(user, service):
+            cur.close()
+            conn.close()
+            return api_forbidden(
+                "Przegląd usługi może oznaczyć właściciel usługi albo administrator katalogu.",
+                "service_catalog.manage",
+            )
+        try:
+            health_score = int(payload.get("health_score") or 0)
+        except (TypeError, ValueError):
+            health_score = 0
+        health_score = max(0, min(100, health_score))
+        health_state = clean(payload.get("health_state"))[:32]
+        due_reasons_raw = payload.get("due_reasons") or []
+        if isinstance(due_reasons_raw, list):
+            due_reasons = "\n".join(
+                clean(reason)
+                for reason in due_reasons_raw
+                if clean(reason)
+            )
+        else:
+            due_reasons = clean(due_reasons_raw)
+        due_reasons = due_reasons[:4000]
+        cur.execute("""
+            INSERT INTO service_reviews (
+              service_id, reviewer_email, reviewer_name, note,
+              health_state, health_score, due_reasons, reviewed_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+            RETURNING id, reviewed_at
+        """, (
+            service_id,
+            user["email"],
+            user["name"],
+            note,
+            health_state,
+            health_score,
+            due_reasons,
+        ))
+        review_id, reviewed_at = cur.fetchone()
+        log_audit(cur, user, "service_reviewed", "service_catalog", service_id, {
+            "service_name": service.get("name"),
+            "note": note,
+            "health_state": health_state,
+            "health_score": health_score,
+            "due_reasons": due_reasons,
+        })
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} wykonał przegląd usługi IT: {service.get('name')}",
+            "service_reviewed",
+            None,
+            staff_only=True,
+        )
+        return jsonify({
+            "id": review_id,
+            "service_id": service_id,
+            "reviewed_at": str(reviewed_at),
+            "reviewer": user["name"],
+            "note": note,
+            "health_state": health_state,
+            "health_score": health_score,
+        }), 201
 
     def service_incident_default_severity(service, ticket_rows):
         ticket_count = len(ticket_rows or [])
