@@ -3,6 +3,8 @@ kind: ConfigMap
 metadata:
   name: helpdesk-spa
   namespace: helpdesk
+  annotations:
+    argocd.argoproj.io/sync-options: Replace=true
 data:
   spa.html: |
     
