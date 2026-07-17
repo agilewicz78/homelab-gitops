@@ -33,6 +33,8 @@ def main() -> None:
     assert SPA_CONFIG.stat().st_size < 1_048_576
     assert "name: helpdesk-spa" in spa_text
     assert "spa.html: |" in spa_text
+    assert "argocd.argoproj.io/sync-options: Replace=true" in app_text
+    assert "argocd.argoproj.io/sync-options: Replace=true" in spa_text
     assert "SPA_HTML_PATH" in app_text
     assert "def load_spa_html()" in app_text
     assert "name: helpdesk-spa" in deployment_text
