@@ -561,6 +561,9 @@ def main() -> None:
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
     assert "SERVICE_STATUSES" in text
     assert "SERVICE_CRITICALITIES" in text
+    assert "SERVICE_STATUS_MIN_PRIORITIES" in text
+    assert '"outage": "Krytyczny"' in text
+    assert '"degraded": "Wysoki"' in text
     assert "DEFAULT_SERVICE_CATALOG" in text
     assert "CREATE TABLE IF NOT EXISTS service_catalog" in text
     assert "ALTER TABLE tickets" in text and "service_id INTEGER REFERENCES service_catalog" in text
@@ -570,6 +573,11 @@ def main() -> None:
     assert "def fetch_service_catalog_rows(cur" in text
     assert "def service_ticket_plan(cur, service)" in text
     assert 'payload["routing_plan"] = service_ticket_plan(cur, payload)' in text
+    assert 'minimum_priority = SERVICE_STATUS_MIN_PRIORITIES.get(status, "")' in text
+    assert "PRIORITIES.index(priority) < PRIORITIES.index(minimum_priority)" in text
+    assert '"base_priority": base_priority' in text
+    assert '"priority_escalated": priority_escalated' in text
+    assert '"priority_reason": (' in text
     assert 'priority = service_plan["priority"]' in text
     assert '"service_routing_applied"' in text
     assert '"service_routing_plan": service_plan or {}' in text
@@ -593,6 +601,8 @@ def main() -> None:
     assert "function serviceRoutingPlan" in text
     assert "function serviceRoutingPlanPanel" in text
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
+    assert "priority_escalated: Boolean(plan.priority_escalated)" in text
+    assert "Priorytet zosta&#322; podniesiony" in text
     assert "function serviceContextRecommendation" in text
     assert "function createServiceIncident" in text
     assert "function serviceIncidentActionButton" in text
@@ -634,7 +644,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-routing-plan-v1" in deployment_text
+    assert "2026-07-17-service-status-priority-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

@@ -3202,7 +3202,11 @@ data:
           return {
             category: plan.category || service?.category || "-",
             subcategory: plan.subcategory || service?.subcategory || "Inne",
+            base_priority: plan.base_priority || service?.default_priority || "Normalny",
+            minimum_priority: plan.minimum_priority || "",
             priority: plan.priority || service?.default_priority || "Normalny",
+            priority_escalated: Boolean(plan.priority_escalated),
+            priority_reason: plan.priority_reason || "",
             workflow_name: plan.workflow_name || "Standardowy workflow zgloszenia",
             sla_label: plan.sla_label || "",
             owner_name: plan.owner_name || service?.owner_name || service?.owner_email || "",
@@ -3215,6 +3219,9 @@ data:
           const plan = serviceRoutingPlan(service);
           const signals = plan.signals.length
             ? `<div class="attachment-upload-hint" style="margin-top:6px">Sygna&#322;y: ${plan.signals.map(esc).join(", ")}.</div>`
+            : "";
+          const priorityInfo = plan.priority_escalated
+            ? `<div class="workflow-condition-warning">Priorytet zosta&#322; podniesiony z ${esc(plan.base_priority)} do ${esc(plan.priority)}. ${esc(plan.priority_reason)}</div>`
             : "";
           return `
             <div class="ticket-context-mini" style="margin-top:10px">
@@ -3229,6 +3236,7 @@ data:
                 Po wybraniu tej us&#322;ugi Helpdesk zapisze zg&#322;oszenie z powy&#380;sz&#261; klasyfikacj&#261; i SLA.
                 ${plan.owner_name ? `W&#322;a&#347;ciciel us&#322;ugi zostanie dodany jako obserwator: ${esc(plan.owner_name)}.` : "Brak wskazanego w&#322;a&#347;ciciela us&#322;ugi."}
               </div>
+              ${priorityInfo}
               ${signals}
             </div>
           `;

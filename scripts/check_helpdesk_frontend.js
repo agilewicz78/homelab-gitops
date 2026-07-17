@@ -229,6 +229,8 @@ const requiredServiceCatalog = [
   "function serviceRoutingPlan",
   "function serviceRoutingPlanPanel",
   "Plan obs&#322;ugi z katalogu us&#322;ug",
+  "priority_escalated: Boolean(plan.priority_escalated)",
+  "Priorytet zosta&#322; podniesiony",
   "serviceContextRecommendation",
   "function createServiceIncident",
   "function serviceIncidentActionButton",
