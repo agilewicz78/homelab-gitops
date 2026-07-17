@@ -3211,6 +3211,9 @@ data:
             sla_label: plan.sla_label || "",
             owner_name: plan.owner_name || service?.owner_name || service?.owner_email || "",
             signals: Array.isArray(plan.signals) ? plan.signals : [],
+            active_incidents: Array.isArray(plan.active_incidents) ? plan.active_incidents : [],
+            active_incident_count: Number(plan.active_incident_count || service?.active_incident_count || 0),
+            auto_link_incident_id: Number(plan.auto_link_incident_id || 0),
           };
         }
 
@@ -3222,6 +3225,18 @@ data:
             : "";
           const priorityInfo = plan.priority_escalated
             ? `<div class="workflow-condition-warning">Priorytet zosta&#322; podniesiony z ${esc(plan.base_priority)} do ${esc(plan.priority)}. ${esc(plan.priority_reason)}</div>`
+            : "";
+          const incidents = plan.active_incidents || [];
+          const incidentInfo = plan.active_incident_count > 0
+            ? `
+              <div class="workflow-condition-warning">
+                Ten problem mo&#380;e by&#263; ju&#380; znany: us&#322;uga ma aktywny incydent.
+                ${plan.auto_link_incident_id
+                  ? `Po utworzeniu zg&#322;oszenie zostanie automatycznie podpi&#281;te do incydentu #${Number(plan.auto_link_incident_id)}.`
+                  : "Po utworzeniu operator zobaczy incydenty us&#322;ugi i wybierze w&#322;a&#347;ciwe powi&#261;zanie."}
+                ${incidents.length ? `<div class="attachment-upload-hint" style="margin-top:6px">${incidents.map(i => `#${Number(i.id)} ${esc(i.severity || "")}: ${esc(i.title || "")}`).join("<br>")}</div>` : ""}
+              </div>
+            `
             : "";
           return `
             <div class="ticket-context-mini" style="margin-top:10px">
@@ -3237,6 +3252,7 @@ data:
                 ${plan.owner_name ? `W&#322;a&#347;ciciel us&#322;ugi zostanie dodany jako obserwator: ${esc(plan.owner_name)}.` : "Brak wskazanego w&#322;a&#347;ciciela us&#322;ugi."}
               </div>
               ${priorityInfo}
+              ${incidentInfo}
               ${signals}
             </div>
           `;
