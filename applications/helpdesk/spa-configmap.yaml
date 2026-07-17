@@ -66,6 +66,14 @@ data:
       .ticket-recommendation-success { border-left-color: rgba(34,197,94,.8); background: rgba(34,197,94,.08); }
       .ticket-recommendation-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
       .ticket-recommendation-actions button { margin-top: 0; }
+      .service-form-panel { margin-top: 12px; border-left: 4px solid rgba(56,189,248,.72); }
+      .service-form-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin-top: 12px; }
+      .service-form-field label { margin-top: 0; }
+      .service-form-field small { display: block; margin-top: 5px; color: var(--muted); line-height: 1.35; }
+      .service-form-answer-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin-top: 12px; }
+      .service-form-answer { border: 1px solid rgba(148,163,184,.18); border-radius: 14px; padding: 10px 12px; background: rgba(31,41,55,.38); }
+      .service-form-answer .label { display: block; color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 5px; }
+      .service-form-answer .value { white-space: pre-wrap; line-height: 1.45; }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
       .stat .num { font-size: 32px; font-weight: 800; }
@@ -1182,6 +1190,195 @@ data:
           if (!serviceId) return null;
           return (meta.services || []).find(service => Number(service.id) === serviceId) || null;
         }
+        function serviceFormSearchText(service) {
+          return [
+            service?.service_key,
+            service?.name,
+            service?.category,
+            service?.subcategory,
+            service?.description,
+          ].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+        }
+        function serviceFormDefinition(service) {
+          if (!service) return null;
+          const text = serviceFormSearchText(service);
+          const matches = (...phrases) => phrases.some(phrase => text.includes(phrase));
+          const baseFields = [
+            { key: "since", label: "Od kiedy występuje problem?", type: "text", required: true, placeholder: "Np. od dziś rano, od 2 dni, po aktualizacji" },
+            { key: "error_message", label: "Komunikat błędu lub objaw", type: "textarea", required: false, placeholder: "Wklej komunikat błędu albo opisz dokładny objaw" },
+          ];
+          if (matches("email", "poczta", "outlook", "webmail", "mail")) {
+            return {
+              title: "Formularz usługi: poczta e-mail",
+              intro: "Te odpowiedzi pomagają operatorowi szybko rozróżnić problem z klientem poczty, webmailem, kontem lub wysyłką wiadomości.",
+              fields: [
+                { key: "mail_client", label: "Gdzie występuje problem?", type: "select", required: true, options: ["Outlook", "Webmail", "Telefon", "Skrzynka współdzielona", "Inne"] },
+                { key: "mail_action", label: "Czego dotyczy problem?", type: "select", required: true, options: ["Nie mogę wysłać maila", "Nie odbieram maili", "Nie mogę się zalogować", "Załączniki nie działają", "Inne"] },
+                { key: "scope", label: "Kogo dotyczy problem?", type: "select", required: true, options: ["Tylko mnie", "Kilku osób", "Całego działu", "Nie wiem"] },
+                ...baseFields,
+              ],
+            };
+          }
+          if (matches("vpn", "praca zdalna", "zdalna")) {
+            return {
+              title: "Formularz usługi: VPN i praca zdalna",
+              intro: "Przy VPN najważniejsze są: miejsce pracy, urządzenie, MFA oraz moment wystąpienia błędu.",
+              fields: [
+                { key: "location", label: "Skąd próbujesz się połączyć?", type: "text", required: true, placeholder: "Np. dom, hotel, sieć komórkowa" },
+                { key: "device", label: "Urządzenie", type: "text", required: true, placeholder: "Np. laptop służbowy Lenovo, Windows 11" },
+                { key: "mfa", label: "Czy MFA działa?", type: "select", required: true, options: ["Tak", "Nie", "Nie dostaję powiadomienia", "Nie wiem"] },
+                ...baseFields,
+              ],
+            };
+          }
+          if (matches("wifi", "wi-fi", "sieć", "siec", "zasięg", "zasieg")) {
+            return {
+              title: "Formularz usługi: Wi-Fi",
+              intro: "Dla problemów z Wi-Fi lokalizacja i objaw są ważniejsze niż ogólny opis.",
+              fields: [
+                { key: "location", label: "Gdzie występuje problem?", type: "text", required: true, placeholder: "Np. sala 203, magazyn, recepcja" },
+                { key: "device", label: "Urządzenie", type: "text", required: false, placeholder: "Np. laptop, telefon, model jeśli znasz" },
+                { key: "wifi_symptom", label: "Objaw", type: "select", required: true, options: ["Słaby zasięg", "Brak połączenia", "Rozłącza", "Wolne działanie", "Nie wiem"] },
+                ...baseFields,
+              ],
+            };
+          }
+          if (matches("druk", "skaner", "print", "scan")) {
+            return {
+              title: "Formularz usługi: drukowanie i skanowanie",
+              intro: "Operator szybciej pomoże, jeśli zna nazwę urządzenia, lokalizację i rodzaj problemu.",
+              fields: [
+                { key: "printer", label: "Drukarka lub skaner", type: "text", required: true, placeholder: "Np. HP-KSIEGOWOSC-01 albo lokalizacja urządzenia" },
+                { key: "print_issue", label: "Rodzaj problemu", type: "select", required: true, options: ["Brak wydruku", "Zacięty papier", "Brak tonera", "Nie widzę drukarki", "Skanowanie nie działa", "Inne"] },
+                { key: "location", label: "Lokalizacja", type: "text", required: false, placeholder: "Np. księgowość, piętro 2" },
+                ...baseFields,
+              ],
+            };
+          }
+          if (matches("konto", "haslo", "hasło", "mfa", "account")) {
+            return {
+              title: "Formularz usługi: konto, hasło i MFA",
+              intro: "Tu ważne jest, czy chodzi o blokadę, reset hasła, MFA czy zmianę danych konta.",
+              fields: [
+                { key: "account_issue", label: "Czego dotyczy sprawa?", type: "select", required: true, options: ["Reset hasła", "Blokada konta", "MFA", "Zmiana danych", "Inne"] },
+                { key: "affected_account", label: "Konto, którego dotyczy sprawa", type: "text", required: true, placeholder: "Np. Twój login albo e-mail konta" },
+                { key: "business_impact", label: "Wpływ na pracę", type: "select", required: true, options: ["Nie mogę pracować", "Mam obejście", "Dotyczy kilku osób", "Niski wpływ"] },
+                ...baseFields,
+              ],
+            };
+          }
+          if (matches("dostep", "dostęp", "system", "uprawnien", "uprawnień", "aplikac")) {
+            return {
+              title: "Formularz usługi: dostęp do systemu",
+              intro: "W zgłoszeniach dostępowych najważniejsze są: system, typ dostępu, uzasadnienie i termin.",
+              fields: [
+                { key: "system_name", label: "System lub aplikacja", type: "text", required: true, placeholder: "Np. ERP, CRM, SharePoint" },
+                { key: "access_type", label: "Typ dostępu", type: "select", required: true, options: ["Nowy dostęp", "Zmiana uprawnień", "Odebranie dostępu", "Przedłużenie dostępu"] },
+                { key: "approver", label: "Osoba akceptująca", type: "text", required: false, placeholder: "Np. przełożony lub właściciel systemu" },
+                { key: "needed_by", label: "Na kiedy potrzebne?", type: "text", required: false, placeholder: "Np. dziś, do końca tygodnia, data projektu" },
+                { key: "justification", label: "Uzasadnienie biznesowe", type: "textarea", required: true, placeholder: "Napisz, do czego potrzebujesz dostępu" },
+              ],
+            };
+          }
+          return {
+            title: "Formularz usługi IT",
+            intro: "Uzupełnij kilka szczegółów, żeby operator nie musiał dopytywać o podstawowe informacje.",
+            fields: [
+              { key: "affected_area", label: "Czego dokładnie dotyczy problem?", type: "text", required: true, placeholder: "Np. aplikacja, urządzenie, funkcja" },
+              { key: "business_impact", label: "Wpływ na pracę", type: "select", required: true, options: ["Nie mogę pracować", "Utrudnia pracę", "Mam obejście", "Informacyjnie"] },
+              ...baseFields,
+            ],
+          };
+        }
+        function serviceFormFieldHtml(field) {
+          const required = field.required ? "required" : "";
+          const requiredLabel = field.required ? " *" : "";
+          const commonAttrs = `name="service_form_${esc(field.key)}" data-service-form-key="${esc(field.key)}" data-service-form-label="${esc(field.label)}" ${required}`;
+          const control = field.type === "select"
+            ? `<select ${commonAttrs}><option value="">Wybierz...</option>${(field.options || []).map(option => `<option value="${esc(option)}">${esc(option)}</option>`).join("")}</select>`
+            : field.type === "textarea"
+              ? `<textarea ${commonAttrs} placeholder="${esc(field.placeholder || "")}"></textarea>`
+              : `<input ${commonAttrs} placeholder="${esc(field.placeholder || "")}">`;
+          return `
+            <div class="service-form-field">
+              <label>${esc(field.label)}${requiredLabel}</label>
+              ${control}
+              ${field.hint ? `<small>${esc(field.hint)}</small>` : ""}
+            </div>
+          `;
+        }
+        function serviceSpecificFormHtml(service) {
+          const definition = serviceFormDefinition(service);
+          if (!definition) return "";
+          return `
+            <div class="panel-soft service-form-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>${esc(definition.title)}</strong>
+                  <div class="attachment-upload-hint" style="margin-top:4px">${esc(definition.intro)}</div>
+                </div>
+                <span class="chip">${Number((definition.fields || []).filter(field => field.required).length)} wymagane</span>
+              </div>
+              <div class="service-form-fields">
+                ${(definition.fields || []).map(serviceFormFieldHtml).join("")}
+              </div>
+            </div>
+          `;
+        }
+        function renderServiceSpecificForm(service) {
+          const panel = document.getElementById("newTicketServiceForm");
+          if (!panel) return;
+          if (!service) {
+            panel.classList.add("hidden");
+            panel.innerHTML = "";
+            return;
+          }
+          panel.innerHTML = serviceSpecificFormHtml(service);
+          panel.classList.remove("hidden");
+        }
+        function collectServiceFormAnswers(form) {
+          const fields = Array.from(form.querySelectorAll("[data-service-form-key]"));
+          const answers = fields
+            .map(field => ({
+              key: field.dataset.serviceFormKey || field.name || "",
+              label: field.dataset.serviceFormLabel || field.name || "",
+              value: String(field.value || "").trim(),
+            }))
+            .filter(answer => answer.key && answer.value);
+          const service = selectedService({ services: window.__lastTicketMetaServices || [] });
+          const definition = serviceFormDefinition(service);
+          return {
+            template: definition?.title || "",
+            service_key: service?.service_key || "",
+            answers,
+          };
+        }
+        function ticketServiceFormAnswersPanel(ticket) {
+          const formData = ticket?.service_form || {};
+          const answers = Array.isArray(formData.answers) ? formData.answers.filter(answer => answer && answer.value) : [];
+          if (!answers.length) return "";
+          return `
+            <section class="panel-soft service-form-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Informacje z formularza usługowego</strong>
+                  <div class="attachment-upload-hint" style="margin-top:4px">
+                    ${esc(formData.template || ticket?.service?.name || "Usługa IT")}
+                  </div>
+                </div>
+                <span class="chip">${answers.length} odpowiedzi</span>
+              </div>
+              <div class="service-form-answer-grid">
+                ${answers.map(answer => `
+                  <div class="service-form-answer">
+                    <span class="label">${esc(answer.label || answer.key)}</span>
+                    <div class="value">${esc(answer.value)}</div>
+                  </div>
+                `).join("")}
+              </div>
+            </section>
+          `;
+        }
         function renderNewTicketServiceHint(service) {
           const panel = document.getElementById("newTicketServiceHint");
           if (!panel) return;
@@ -1197,8 +1394,10 @@ data:
           panel.classList.remove("hidden");
         }
         function applySelectedServiceToNewTicket(meta) {
+          window.__lastTicketMetaServices = meta.services || [];
           const service = selectedService(meta);
           renderNewTicketServiceHint(service);
+          renderServiceSpecificForm(service);
           if (!service) return;
           const plan = serviceRoutingPlan(service);
           const categorySelect = document.getElementById("new-ticket-category");
@@ -8908,6 +9107,7 @@ data:
           if (!me) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
+          window.__lastTicketMetaServices = meta.services || [];
           appEl.innerHTML = `
             <section class="card">
               <h2>Nowe zgłoszenie</h2>
@@ -8928,6 +9128,7 @@ data:
                   `).join("")}
                 </select>
                 <div id="newTicketServiceHint" class="hidden"></div>
+                <div id="newTicketServiceForm" class="hidden"></div>
                 <div class="grid">
                   <div><label>Zgłaszający</label><input value="${esc(me.name)}" disabled></div>
                   <div><label>E-mail</label><input value="${esc(me.email)}" disabled></div>
@@ -8976,6 +9177,7 @@ data:
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
+            renderServiceSpecificForm(null);
             updateSubcategorySelect(meta);
             scheduleNewTicketKnowledgeSuggestions();
           });
@@ -8983,12 +9185,14 @@ data:
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
+            renderServiceSpecificForm(null);
             scheduleNewTicketKnowledgeSuggestions();
           });
           document.querySelector('#ticketForm select[name="priority"]').addEventListener("change", () => {
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
+            renderServiceSpecificForm(null);
           });
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }
@@ -9063,7 +9267,8 @@ data:
             service_id: formData.get("service_id") || "",
             category: formData.get("category") || "",
             subcategory: formData.get("subcategory") || "Inne",
-            priority: formData.get("priority") || "Normalny"
+            priority: formData.get("priority") || "Normalny",
+            service_form: collectServiceFormAnswers(form)
           };
           suppressNextLiveRefresh = true;
           const res = await api("/api/tickets", { method: "POST", body: JSON.stringify(payload) });
@@ -9396,6 +9601,7 @@ data:
                 </div>`).join("")}</div>`
             : `<p class="muted">Brak załączników.</p>`;
           const userTicketStatusPanel = !canWorkTickets(me) ? userPortalTicketStatusPanel(t, data) : "";
+          const serviceFormAnswersPanel = ticketServiceFormAnswersPanel(t);
           appEl.innerHTML = `
             <section class="card ticket-summary-card">
               <div class="ticket-top-actions">
@@ -9429,6 +9635,7 @@ data:
               </div>
               <h3>Opis</h3>
               <div class="ticket-description">${esc(t.description)}</div>
+              ${serviceFormAnswersPanel}
               ${isClosed ? `<div class="readonly-box"><strong>Zgłoszenie zamknięte — tylko do odczytu.</strong><br><span>Nie można zmieniać statusu, przypisania, komentarzy, załączników, obserwatorów ani powiązań.</span></div>` : ""}
             </section>
             ${userTicketStatusPanel}
