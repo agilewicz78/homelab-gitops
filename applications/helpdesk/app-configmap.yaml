@@ -1968,6 +1968,35 @@ data:
         if criticality in ("high", "critical"):
             signals.append("usluga jest krytyczna dla biznesu")
         owner = service.get("owner_name") or service.get("owner_email") or ""
+        active_incidents = []
+        service_id = service.get("id")
+        if cur and service_id:
+            cur.execute("""
+                SELECT i.id, i.title, i.severity, i.status, i.updated_at
+                FROM incidents i
+                JOIN incident_tickets it ON it.incident_id = i.id
+                JOIN tickets t ON t.id = it.ticket_id
+                WHERE t.service_id = %s
+                  AND i.status <> 'resolved'
+                GROUP BY i.id
+                ORDER BY
+                  CASE i.severity WHEN 'SEV1' THEN 1 WHEN 'SEV2' THEN 2 WHEN 'SEV3' THEN 3 ELSE 4 END,
+                  i.updated_at DESC
+                LIMIT 3
+            """, (service_id,))
+            active_incidents = [{
+                "id": row[0],
+                "title": row[1],
+                "severity": row[2],
+                "status": row[3],
+                "updated_at": str(row[4]) if row[4] else "",
+            } for row in cur.fetchall()]
+        active_incident_count = int(service.get("active_incident_count") or len(active_incidents))
+        auto_link_incident_id = (
+            active_incidents[0]["id"]
+            if active_incident_count == 1 and len(active_incidents) == 1
+            else None
+        )
         return {
             "category": category,
             "subcategory": subcategory,
@@ -1995,6 +2024,9 @@ data:
                 f"workflow: {workflow_name}"
             ),
             "signals": signals,
+            "active_incidents": active_incidents,
+            "active_incident_count": active_incident_count,
+            "auto_link_incident_id": auto_link_incident_id,
         }
 
     def sla_due_for_priority(priority):
@@ -2420,6 +2452,40 @@ data:
             VALUES (%s, %s, %s)
             ON CONFLICT (ticket_id, user_email) DO NOTHING
         """, (ticket_id, user_email, added_by_email))
+
+    def add_incident_link_public_comment(cur, ticket_id, incident_id, incident_title, incident_severity, user):
+        cur.execute("""
+            SELECT message, created_at
+            FROM incident_updates
+            WHERE incident_id = %s
+              AND COALESCE(is_public, FALSE) = TRUE
+            ORDER BY id DESC
+            LIMIT 1
+        """, (incident_id,))
+        latest_public_update = cur.fetchone()
+        public_comment = (
+            f"Twoje zgloszenie zostalo powiazane z incydentem "
+            f"{incident_severity} #{incident_id}: {incident_title}. "
+            "Dalsze publiczne aktualizacje operatora beda automatycznie "
+            "dodawane do tego zgloszenia."
+        )
+        if latest_public_update:
+            public_comment += (
+                f"\n\nOstatnia publiczna aktualizacja "
+                f"({latest_public_update[1]}): {latest_public_update[0]}"
+            )
+        cur.execute("""
+            INSERT INTO comments (
+              ticket_id, author, author_email, content, visibility
+            )
+            VALUES (%s, %s, %s, %s, %s)
+        """, (
+            ticket_id,
+            f"Incident Command Center - {user['name'] if user else 'System'}",
+            user.get("email") if user else None,
+            public_comment,
+            "public",
+        ))
     def workflow_operator_entries(cur, workflow_id):
         cur.execute("""
             SELECT
@@ -10497,6 +10563,60 @@ data:
         if service_owner_email:
             add_ticket_watcher(cur, ticket_id, service_owner_email, None)
             service_owner_watcher = service_owner_email
+        auto_linked_incident_id = None
+        if service_plan and service_plan.get("auto_link_incident_id"):
+            candidate_incident_id = int(service_plan["auto_link_incident_id"])
+            incident = next(
+                (
+                    item
+                    for item in service_plan.get("active_incidents", [])
+                    if int(item.get("id") or 0) == candidate_incident_id
+                ),
+                {},
+            )
+            cur.execute("""
+                INSERT INTO incident_tickets (incident_id, ticket_id, linked_by_email)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (incident_id, ticket_id) DO NOTHING
+            """, (candidate_incident_id, ticket_id, None))
+            if cur.rowcount:
+                auto_linked_incident_id = candidate_incident_id
+                incident_title = incident.get("title") or service_name or "Incydent uslugi"
+                incident_severity = incident.get("severity") or "SEV2"
+                add_incident_link_public_comment(
+                    cur,
+                    ticket_id,
+                    auto_linked_incident_id,
+                    incident_title,
+                    incident_severity,
+                    None,
+                )
+                cur.execute("""
+                    INSERT INTO incident_updates (
+                      incident_id, update_type, message, is_public,
+                      created_by_email, created_by_name
+                    )
+                    VALUES (%s, 'ticket_linked', %s, FALSE, %s, %s)
+                """, (
+                    auto_linked_incident_id,
+                    f"Automatycznie powiazano nowe zgloszenie #{ticket_id}: {title}",
+                    None,
+                    "System",
+                ))
+                add_ticket_event(
+                    cur,
+                    ticket_id,
+                    None,
+                    "incident_auto_linked",
+                    f"Zgloszenie automatycznie powiazano z aktywnym incydentem uslugi #{auto_linked_incident_id}: {incident_title}",
+                )
+                create_ticket_notifications(
+                    cur,
+                    ticket_id,
+                    "incident_linked",
+                    f"Zgloszenie #{ticket_id} automatycznie powiazano z incydentem #{auto_linked_incident_id}: {incident_title}",
+                    actor_email=None,
+                )
         add_ticket_event(cur, ticket_id, user, "ticket_created", f"Utworzono zgłoszenie: {title}")
         if service_plan:
             add_ticket_event(
@@ -10518,6 +10638,7 @@ data:
             "service_name": service_name,
             "service_owner_watcher": service_owner_watcher,
             "service_routing_plan": service_plan or {},
+            "auto_linked_incident_id": auto_linked_incident_id,
             "workflow_key": workflow_key,
             "workflow_name": workflow_name,
             "workflow_watchers": workflow_watchers,

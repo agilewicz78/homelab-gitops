@@ -572,13 +572,20 @@ def main() -> None:
     assert "def seed_service_catalog(cur)" in text
     assert "def fetch_service_catalog_rows(cur" in text
     assert "def service_ticket_plan(cur, service)" in text
+    assert "def add_incident_link_public_comment" in text
     assert 'payload["routing_plan"] = service_ticket_plan(cur, payload)' in text
     assert 'minimum_priority = SERVICE_STATUS_MIN_PRIORITIES.get(status, "")' in text
     assert "PRIORITIES.index(priority) < PRIORITIES.index(minimum_priority)" in text
     assert '"base_priority": base_priority' in text
     assert '"priority_escalated": priority_escalated' in text
     assert '"priority_reason": (' in text
+    assert '"active_incidents": active_incidents' in text
+    assert "active_incident_count == 1 and len(active_incidents) == 1" in text
+    assert '"auto_link_incident_id": auto_link_incident_id' in text
     assert 'priority = service_plan["priority"]' in text
+    assert 'service_plan.get("auto_link_incident_id")' in text
+    assert '"incident_auto_linked"' in text
+    assert '"auto_linked_incident_id": auto_linked_incident_id' in text
     assert '"service_routing_applied"' in text
     assert '"service_routing_plan": service_plan or {}' in text
     assert '"service_owner_watcher": service_owner_watcher' in text
@@ -603,6 +610,9 @@ def main() -> None:
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
     assert "priority_escalated: Boolean(plan.priority_escalated)" in text
     assert "Priorytet zosta&#322; podniesiony" in text
+    assert "active_incidents: Array.isArray(plan.active_incidents)" in text
+    assert "auto_link_incident_id: Number(plan.auto_link_incident_id || 0)" in text
+    assert "Ten problem mo&#380;e by&#263; ju&#380; znany" in text
     assert "function serviceContextRecommendation" in text
     assert "function createServiceIncident" in text
     assert "function serviceIncidentActionButton" in text
@@ -644,7 +654,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-status-priority-v1" in deployment_text
+    assert "2026-07-17-service-incident-link-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
