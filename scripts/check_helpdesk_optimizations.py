@@ -5,6 +5,7 @@ from pathlib import Path
 
 
 APP_CONFIG = Path("applications/helpdesk/app-configmap.yaml")
+SPA_CONFIG = Path("applications/helpdesk/spa-configmap.yaml")
 DEPLOYMENT = Path("applications/helpdesk/helpdesk-deployment.yaml")
 APP_MARKER = "  app.py: |\n"
 
@@ -15,10 +16,28 @@ def section(text: str, start: str, end: str) -> str:
     return text[start_index:end_index]
 
 
+def has_fragment(text: str, fragment: str) -> bool:
+    if fragment in text:
+        return True
+    if "{{" in fragment or "}}" in fragment:
+        return fragment.replace("{{", "{").replace("}}", "}") in text
+    return False
+
+
 def main() -> None:
-    text = APP_CONFIG.read_text(encoding="utf-8")
+    app_text = APP_CONFIG.read_text(encoding="utf-8")
+    spa_text = SPA_CONFIG.read_text(encoding="utf-8")
+    text = app_text + "\n" + spa_text
     deployment_text = DEPLOYMENT.read_text(encoding="utf-8")
-    _, app_block = text.split(APP_MARKER, 1)
+    assert APP_CONFIG.stat().st_size < 1_048_576
+    assert SPA_CONFIG.stat().st_size < 1_048_576
+    assert "name: helpdesk-spa" in spa_text
+    assert "spa.html: |" in spa_text
+    assert "SPA_HTML_PATH" in app_text
+    assert "def load_spa_html()" in app_text
+    assert "name: helpdesk-spa" in deployment_text
+    assert "projected:" in deployment_text
+    _, app_block = app_text.split(APP_MARKER, 1)
     app_lines = app_block.splitlines(keepends=True)
     invalid_lines = [
         line_number
@@ -289,12 +308,15 @@ def main() -> None:
     assert "LEFT JOIN incident_tasks task ON task.incident_id = i.id" in text
     assert 'name="is_public" checked' in text
     assert "Opublikuj w powiązanych zgłoszeniach" in text
-    assert "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}" in text
+    assert has_fragment(
+        text,
+        "Zaktualizowano ${{publicCommentCount}} z ${{reportedTicketCount}}",
+    )
     assert "To zgłoszenie jest częścią incydentu." in text
     assert "const incidentRelations = (data.incidents || []).length" in text
     assert "const directTicketRelations = (data.linked_tickets || []).length" in text
     assert "const relationCount = (data.incidents || []).length + (data.linked_tickets || []).length" in text
-    assert "incident-relation ${{incidentSeverityClass(i.severity)}}" in text
+    assert has_fragment(text, "incident-relation ${{incidentSeverityClass(i.severity)}}")
     assert "function incidentTicketCountLabel(count)" in text
     assert "incidentTicketCountLabel(i.affected_ticket_count)" in text
     assert "Ze względów prywatności widzisz liczbę zgłoszeń objętych incydentem" in text
@@ -599,7 +621,7 @@ def main() -> None:
     assert "Sprawdź status usługi IT" in text
     assert "Ta usługa ma aktualnie status" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-16-service-quality-v1" in deployment_text
+    assert "2026-07-17-split-spa-configmap-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
