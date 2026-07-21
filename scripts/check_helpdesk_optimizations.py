@@ -565,9 +565,18 @@ def main() -> None:
     assert "function renderAppNavigation" in text
     assert "function moduleCard" in text
     assert "function moduleAction" in text
+    assert "function configurationFlowItem" in text
+    assert "function configurationStepCard" in text
     assert "async function renderAdministration" in text
     assert "module-nav" in text
+    assert "config-center-grid" in text
+    assert "config-center-flow" in text
     assert "Centrum administracji" in text
+    assert "Centrum konfiguracji" in text
+    assert "Mapa konfiguracji zgłoszenia" in text
+    assert "Kategorie, usługi i formularze" in text
+    assert "SLA i kontrola jakości" in text
+    assert "Dostęp i bezpieczeństwo" in text
     assert "Widoki są pogrupowane według pracy użytkownika, operatora i administracji." in text
     assert "Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń." in text
     assert "SERVICE_STATUSES" in text
@@ -744,7 +753,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-21-user-portal-shell-v1" in deployment_text
+    assert "2026-07-21-admin-config-center-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
