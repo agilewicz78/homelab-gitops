@@ -566,7 +566,9 @@ def main() -> None:
     assert '"degraded": "Wysoki"' in text
     assert "DEFAULT_SERVICE_CATALOG" in text
     assert "DEFAULT_SERVICE_FORM_SCHEMAS" in text
+    assert "DEFAULT_CATEGORY_FORM_TEMPLATES" in text
     assert "CREATE TABLE IF NOT EXISTS service_catalog" in text
+    assert "CREATE TABLE IF NOT EXISTS category_form_templates" in text
     assert "form_schema JSONB DEFAULT" in text
     assert "CREATE TABLE IF NOT EXISTS service_reviews" in text
     assert "idx_service_reviews_service_reviewed" in text
@@ -578,7 +580,9 @@ def main() -> None:
     assert "service_catalog.view" in text
     assert "service_catalog.manage" in text
     assert "def seed_service_catalog(cur)" in text
+    assert "def seed_category_form_templates(cur)" in text
     assert "def fetch_service_catalog_rows(cur" in text
+    assert "def fetch_category_form_templates(cur" in text
     assert "def service_ticket_plan(cur, service)" in text
     assert "def add_incident_link_public_comment" in text
     assert 'payload["routing_plan"] = service_ticket_plan(cur, payload)' in text
@@ -609,8 +613,14 @@ def main() -> None:
     assert '@app.get("/api/admin/services")' in text
     assert '@app.post("/api/admin/services")' in text
     assert '@app.put("/api/admin/services/<int:service_id>")' in text
+    assert '@app.get("/api/admin/form-templates")' in text
+    assert '@app.post("/api/admin/form-templates")' in text
+    assert '@app.put("/api/admin/form-templates/<int:template_id>")' in text
+    assert '"form_templates": form_templates' in text
     assert "async function renderAdminServices" in text
     assert "async function renderAdminServiceForm" in text
+    assert "async function renderAdminFormTemplates" in text
+    assert "async function renderAdminFormTemplateForm" in text
     assert "function serviceCatalogMetrics" in text
     assert "function serviceContextMetric" in text
     assert "function serviceQualityPanel" in text
@@ -627,10 +637,15 @@ def main() -> None:
     assert "function serviceUserIncidentList" in text
     assert "function serviceUserHelpCard" in text
     assert "function normalizeServiceFormSchema" in text
+    assert "function configuredServiceFormDefinition" in text
     assert "function serviceFormDefinition" in text
+    assert "function categoryFormTemplateDefinition" in text
+    assert "function ticketFormDefinitionForSelection" in text
     assert "function defaultServiceFormDefinition" in text
     assert "function serviceSpecificFormHtml" in text
+    assert "function serviceFormDefinitionHtml" in text
     assert "function renderServiceSpecificForm" in text
+    assert "function renderNewTicketDynamicForm" in text
     assert "function collectServiceFormAnswers" in text
     assert "function ticketServiceFormAnswersPanel" in text
     assert "function adminServiceFormBuilderPanel" in text
@@ -702,6 +717,8 @@ def main() -> None:
     assert '"service_form": normalize_service_form_payload' in text
     assert '"form_schema": normalize_service_form_schema' in text
     assert "Formularz usługowy dla tej usługi" in text
+    assert "Szablony formularzy zgłoszeń" in text
+    assert "Szablon pytań dla kategorii" in text
     assert "Przywróć domyślne" in text
     assert "Informacje z formularza usługowego" in text
     assert "Formularz usługi: poczta e-mail" in text
@@ -716,7 +733,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-21-service-form-schema-v1" in deployment_text
+    assert "2026-07-21-category-form-templates-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
