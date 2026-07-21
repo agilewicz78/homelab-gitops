@@ -251,6 +251,16 @@ data:
             ],
         },
     }
+    DEFAULT_CATEGORY_FORM_TEMPLATES = [
+        {"category": "Poczta e-mail", "subcategory": "*", "schema_key": "email"},
+        {"category": "VPN i praca zdalna", "subcategory": "*", "schema_key": "vpn"},
+        {"category": "Sieć i Wi-Fi", "subcategory": "*", "schema_key": "wifi"},
+        {"category": "Drukarki i skanery", "subcategory": "*", "schema_key": "printing"},
+        {"category": "Konta i hasła", "subcategory": "*", "schema_key": "accounts"},
+        {"category": "Dostępy do systemów", "subcategory": "*", "schema_key": "business-access"},
+        {"category": "Microsoft 365 / Office", "subcategory": "*", "schema_key": "default"},
+        {"category": "Komputer i laptop", "subcategory": "*", "schema_key": "default"},
+    ]
     DEFAULT_SERVICE_CATALOG = [
         {
             "service_key": "email",
@@ -585,6 +595,41 @@ data:
                 service["default_priority"],
                 json.dumps(default_form_schema, ensure_ascii=False),
                 service["user_visible"],
+            ))
+
+    # Zakłada domyślne szablony pytań dla kategorii i podkategorii zgłoszeń.
+    def seed_category_form_templates(cur):
+        for template in DEFAULT_CATEGORY_FORM_TEMPLATES:
+            form_schema = DEFAULT_SERVICE_FORM_SCHEMAS.get(
+                template["schema_key"],
+                DEFAULT_SERVICE_FORM_SCHEMAS["default"],
+            )
+            cur.execute("""
+                INSERT INTO category_form_templates (
+                    category, subcategory, form_schema, is_active, created_at, updated_at
+                )
+                VALUES (%s, %s, %s::jsonb, TRUE, NOW(), NOW())
+                ON CONFLICT (category, subcategory) DO UPDATE
+                SET
+                    form_schema = CASE
+                        WHEN category_form_templates.form_schema IS NULL
+                          OR category_form_templates.form_schema = '{}'::jsonb
+                        THEN EXCLUDED.form_schema
+                        ELSE category_form_templates.form_schema
+                    END,
+                    is_active = CASE
+                        WHEN category_form_templates.form_schema IS NULL
+                          OR category_form_templates.form_schema = '{}'::jsonb
+                        THEN TRUE
+                        ELSE category_form_templates.is_active
+                    END,
+                    updated_at = NOW()
+                WHERE category_form_templates.form_schema IS NULL
+                   OR category_form_templates.form_schema = '{}'::jsonb
+            """, (
+                template["category"],
+                template["subcategory"],
+                json.dumps(form_schema, ensure_ascii=False),
             ))
 
     # Pobiera statusy workflow bezpośrednio z bazy danych.
@@ -1191,6 +1236,25 @@ data:
                 cur.execute("UPDATE service_catalog SET user_visible = TRUE WHERE user_visible IS NULL")
                 cur.execute("UPDATE service_catalog SET is_active = TRUE WHERE is_active IS NULL")
                 cur.execute("""
+                    CREATE TABLE IF NOT EXISTS category_form_templates (
+                        id SERIAL PRIMARY KEY,
+                        category TEXT NOT NULL,
+                        subcategory TEXT NOT NULL DEFAULT '*',
+                        form_schema JSONB DEFAULT '{}'::jsonb,
+                        is_active BOOLEAN DEFAULT TRUE,
+                        created_at TIMESTAMP DEFAULT NOW(),
+                        updated_at TIMESTAMP DEFAULT NOW(),
+                        UNIQUE(category, subcategory)
+                    );
+                """)
+                cur.execute("ALTER TABLE category_form_templates ADD COLUMN IF NOT EXISTS subcategory TEXT DEFAULT '*'")
+                cur.execute("ALTER TABLE category_form_templates ADD COLUMN IF NOT EXISTS form_schema JSONB DEFAULT '{}'::jsonb")
+                cur.execute("ALTER TABLE category_form_templates ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
+                cur.execute("ALTER TABLE category_form_templates ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
+                cur.execute("ALTER TABLE category_form_templates ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()")
+                cur.execute("UPDATE category_form_templates SET subcategory = '*' WHERE subcategory IS NULL OR trim(subcategory) = ''")
+                cur.execute("UPDATE category_form_templates SET is_active = TRUE WHERE is_active IS NULL")
+                cur.execute("""
                     CREATE TABLE IF NOT EXISTS service_reviews (
                         id SERIAL PRIMARY KEY,
                         service_id INTEGER NOT NULL REFERENCES service_catalog(id) ON DELETE CASCADE,
@@ -1765,6 +1829,7 @@ data:
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_active ON service_catalog (is_active, name)",
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_category ON service_catalog (category, subcategory)",
                     "CREATE INDEX IF NOT EXISTS idx_service_catalog_status ON service_catalog (status, updated_at DESC)",
+                    "CREATE INDEX IF NOT EXISTS idx_category_form_templates_lookup ON category_form_templates (category, subcategory, is_active)",
                     "CREATE INDEX IF NOT EXISTS idx_service_reviews_service_reviewed ON service_reviews (service_id, reviewed_at DESC, id DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_notifications_user_created ON notifications (user_email, created_at DESC)",
                     "CREATE INDEX IF NOT EXISTS idx_workflow_rule_executions_created ON workflow_rule_executions (created_at DESC)",
@@ -1833,6 +1898,7 @@ data:
                         WHERE email = %s AND (roles IS NULL OR array_length(roles, 1) IS NULL)
                     """, (role, role, role, role, email))
                 seed_service_catalog(cur)
+                seed_category_form_templates(cur)
                 cur.execute("SELECT COUNT(*) FROM tickets")
                 count = cur.fetchone()[0]
                 if count == 0:
@@ -2112,6 +2178,32 @@ data:
               lower(sc.name)
         """)
         return [service_row_payload(row, cur) for row in cur.fetchall()]
+
+    def category_form_template_row_payload(row):
+        return {
+            "id": row[0],
+            "category": row[1],
+            "subcategory": row[2] or "*",
+            "form_schema": normalize_service_form_schema(row[3]),
+            "is_active": bool(row[4]),
+            "updated_at": str(row[5]) if row[5] else "",
+        }
+
+    def fetch_category_form_templates(cur, include_inactive=False):
+        where_sql = "" if include_inactive else "WHERE COALESCE(is_active, TRUE) = TRUE"
+        cur.execute(f"""
+            SELECT
+              id,
+              category,
+              COALESCE(subcategory, '*'),
+              COALESCE(form_schema, '{{}}'::jsonb),
+              COALESCE(is_active, TRUE),
+              updated_at
+            FROM category_form_templates
+            {where_sql}
+            ORDER BY category, CASE WHEN COALESCE(subcategory, '*') = '*' THEN 0 ELSE 1 END, subcategory
+        """)
+        return [category_form_template_row_payload(row) for row in cur.fetchall()]
 
     SIMILARITY_STOP_WORDS = {
         "aby", "ale", "bez", "blad", "brak", "byc", "czy", "dla", "dziala",
@@ -6457,6 +6549,7 @@ data:
             for r in cur.fetchall()
         ]
         services = fetch_service_catalog_rows(cur, include_inactive=False, user_visible_only=True)
+        form_templates = fetch_category_form_templates(cur, include_inactive=False)
         cur.close()
         conn.close()
         return jsonify({
@@ -6468,6 +6561,7 @@ data:
             "service_statuses": [{"value": key, "label": SERVICE_STATUS_LABELS.get(key, key)} for key in SERVICE_STATUSES],
             "service_criticalities": [{"value": key, "label": SERVICE_CRITICALITY_LABELS.get(key, key)} for key in SERVICE_CRITICALITIES],
             "services": services,
+            "form_templates": form_templates,
             "roles": VALID_ROLES,
             "operators": operators,
         })
@@ -7365,6 +7459,127 @@ data:
             "user_visible": user_visible,
             "is_active": is_active,
         }, None
+
+    def category_form_template_payload_from_request(payload):
+        category = clean(payload.get("category"))
+        subcategory = clean(payload.get("subcategory")) or "*"
+        form_schema = normalize_service_form_schema(payload.get("form_schema"))
+        is_active = bool(payload.get("is_active", True))
+        if category not in CATEGORIES:
+            return None, "Nieprawidłowa kategoria szablonu."
+        if subcategory != "*" and subcategory not in SUBCATEGORIES.get(category, ["Inne"]):
+            return None, "Nieprawidłowa podkategoria szablonu."
+        return {
+            "category": category,
+            "subcategory": subcategory,
+            "form_schema": form_schema,
+            "is_active": is_active,
+        }, None
+
+    @app.get("/api/admin/form-templates")
+    @api_login_required
+    def api_admin_form_templates(user):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania szablonami formularzy.", "service_catalog.manage")
+        conn = get_conn()
+        cur = conn.cursor()
+        templates = fetch_category_form_templates(cur, include_inactive=True)
+        cur.close()
+        conn.close()
+        return jsonify({
+            "templates": templates,
+            "categories": CATEGORIES,
+            "subcategories": SUBCATEGORIES,
+        })
+
+    @app.post("/api/admin/form-templates")
+    @api_login_required
+    def api_admin_save_form_template(user):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania szablonami formularzy.", "service_catalog.manage")
+        payload, error = category_form_template_payload_from_request(request.get_json(silent=True) or {})
+        if error:
+            return jsonify({"error": error}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO category_form_templates (
+                category, subcategory, form_schema, is_active, created_at, updated_at
+            )
+            VALUES (%s, %s, %s::jsonb, %s, NOW(), NOW())
+            ON CONFLICT (category, subcategory) DO UPDATE
+            SET form_schema = EXCLUDED.form_schema,
+                is_active = EXCLUDED.is_active,
+                updated_at = NOW()
+            RETURNING id
+        """, (
+            payload["category"],
+            payload["subcategory"],
+            json.dumps(payload["form_schema"], ensure_ascii=False),
+            payload["is_active"],
+        ))
+        template_id = cur.fetchone()[0]
+        log_audit(cur, user, "category_form_template_saved", "category_form_template", template_id, payload)
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"Zapisano szablon pytań: {payload['category']} / {payload['subcategory']}",
+            "category_form_template_saved",
+            None,
+            staff_only=True,
+        )
+        return jsonify({"id": template_id, "status": "ok"})
+
+    @app.put("/api/admin/form-templates/<int:template_id>")
+    @api_login_required
+    def api_admin_update_form_template(user, template_id):
+        if not can_manage_service_catalog_backend(user):
+            return api_forbidden("Brak uprawnienia do zarządzania szablonami formularzy.", "service_catalog.manage")
+        payload, error = category_form_template_payload_from_request(request.get_json(silent=True) or {})
+        if error:
+            return jsonify({"error": error}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                UPDATE category_form_templates
+                SET category = %s,
+                    subcategory = %s,
+                    form_schema = %s::jsonb,
+                    is_active = %s,
+                    updated_at = NOW()
+                WHERE id = %s
+                RETURNING id
+            """, (
+                payload["category"],
+                payload["subcategory"],
+                json.dumps(payload["form_schema"], ensure_ascii=False),
+                payload["is_active"],
+                template_id,
+            ))
+            row = cur.fetchone()
+            if not row:
+                conn.rollback()
+                cur.close()
+                conn.close()
+                return jsonify({"error": "Szablon nie istnieje."}), 404
+            log_audit(cur, user, "category_form_template_updated", "category_form_template", template_id, payload)
+            conn.commit()
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            cur.close()
+            conn.close()
+            return jsonify({"error": "Szablon dla tej kategorii i podkategorii już istnieje."}), 400
+        cur.close()
+        conn.close()
+        publish_event(
+            f"Zaktualizowano szablon pytań: {payload['category']} / {payload['subcategory']}",
+            "category_form_template_updated",
+            None,
+            staff_only=True,
+        )
+        return jsonify({"status": "ok"})
 
     @app.get("/api/admin/services")
     @api_login_required

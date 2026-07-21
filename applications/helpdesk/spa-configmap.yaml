@@ -754,6 +754,7 @@ data:
         let knowledgeSuggestionTimer = null;
         let knowledgeSuggestionRequest = 0;
         let adminServiceCatalogCache = null;
+        let adminFormTemplateCache = null;
         let adminServiceFormFieldsState = [];
         let pendingNewTicketServiceId = null;
         let lastServiceReviewContext = null;
@@ -1234,12 +1235,51 @@ data:
             fields,
           };
         }
-        function serviceFormDefinition(service) {
-          const configured = normalizeServiceFormSchema(
+        function configuredServiceFormDefinition(service) {
+          return normalizeServiceFormSchema(
             service?.form_schema,
             service?.name ? `Formularz usługi: ${service.name}` : "Formularz usługi IT",
           );
+        }
+        function serviceFormDefinition(service) {
+          const configured = configuredServiceFormDefinition(service);
           return configured || defaultServiceFormDefinition(service);
+        }
+        function categoryFormTemplateDefinition(meta, category, subcategory) {
+          const templates = Array.isArray(meta?.form_templates) ? meta.form_templates : [];
+          const normalizedCategory = String(category || "").trim();
+          const normalizedSubcategory = String(subcategory || "Inne").trim() || "Inne";
+          if (!normalizedCategory) return null;
+          const activeTemplates = templates.filter(template => template && template.is_active !== false && template.category === normalizedCategory);
+          const exact = activeTemplates.find(template => String(template.subcategory || "*") === normalizedSubcategory);
+          const wildcard = activeTemplates.find(template => String(template.subcategory || "*") === "*");
+          const template = exact || wildcard;
+          if (!template) return null;
+          return normalizeServiceFormSchema(
+            template.form_schema,
+            `Formularz: ${normalizedCategory}${normalizedSubcategory ? ` / ${normalizedSubcategory}` : ""}`,
+          );
+        }
+        function ticketFormDefinitionForSelection(meta) {
+          const service = selectedService(meta);
+          if (service) {
+            const configured = configuredServiceFormDefinition(service);
+            if (configured) return configured;
+            const plan = serviceRoutingPlan(service);
+            const template = categoryFormTemplateDefinition(
+              meta,
+              plan.category || service.category,
+              plan.subcategory || service.subcategory || "Inne",
+            );
+            return template || defaultServiceFormDefinition(service);
+          }
+          const categorySelect = document.getElementById("new-ticket-category");
+          const subcategorySelect = document.getElementById("new-ticket-subcategory");
+          return categoryFormTemplateDefinition(
+            meta,
+            categorySelect?.value || "",
+            subcategorySelect?.value || "Inne",
+          );
         }
         function defaultServiceFormDefinition(service) {
           if (!service) return null;
@@ -1349,8 +1389,7 @@ data:
             </div>
           `;
         }
-        function serviceSpecificFormHtml(service) {
-          const definition = serviceFormDefinition(service);
+        function serviceFormDefinitionHtml(definition) {
           if (!definition || !definition.fields.length) return "";
           return `
             <div class="panel-soft service-form-panel">
@@ -1367,16 +1406,23 @@ data:
             </div>
           `;
         }
-        function renderServiceSpecificForm(service) {
+        function serviceSpecificFormHtml(service) {
+          return serviceFormDefinitionHtml(serviceFormDefinition(service));
+        }
+        function renderServiceSpecificForm(service, definition = null) {
           const panel = document.getElementById("newTicketServiceForm");
           if (!panel) return;
-          if (!service) {
+          const html = serviceFormDefinitionHtml(definition || serviceFormDefinition(service));
+          if (!html) {
             panel.classList.add("hidden");
             panel.innerHTML = "";
             return;
           }
-          panel.innerHTML = serviceSpecificFormHtml(service);
+          panel.innerHTML = html;
           panel.classList.remove("hidden");
+        }
+        function renderNewTicketDynamicForm(meta) {
+          renderServiceSpecificForm(selectedService(meta), ticketFormDefinitionForSelection(meta));
         }
         function collectServiceFormAnswers(form) {
           const fields = Array.from(form.querySelectorAll("[data-service-form-key]"));
@@ -1387,8 +1433,9 @@ data:
               value: String(field.value || "").trim(),
             }))
             .filter(answer => answer.key && answer.value);
-          const service = selectedService({ services: window.__lastTicketMetaServices || [] });
-          const definition = serviceFormDefinition(service);
+          const meta = window.__lastTicketMeta || { services: window.__lastTicketMetaServices || [] };
+          const service = selectedService(meta);
+          const definition = ticketFormDefinitionForSelection(meta) || serviceFormDefinition(service);
           return {
             template: definition?.title || "",
             service_key: service?.service_key || "",
@@ -1439,8 +1486,10 @@ data:
           window.__lastTicketMetaServices = meta.services || [];
           const service = selectedService(meta);
           renderNewTicketServiceHint(service);
-          renderServiceSpecificForm(service);
-          if (!service) return;
+          if (!service) {
+            renderNewTicketDynamicForm(meta);
+            return;
+          }
           const plan = serviceRoutingPlan(service);
           const categorySelect = document.getElementById("new-ticket-category");
           const subcategorySelect = document.getElementById("new-ticket-subcategory");
@@ -1455,6 +1504,7 @@ data:
           if (prioritySelect && plan.priority) {
             prioritySelect.value = plan.priority;
           }
+          renderNewTicketDynamicForm(meta);
         }
         function setWsStatus(text, connected) {
           wsStatus.textContent = text;
@@ -3355,7 +3405,8 @@ data:
               canManageWorkflow(me) ? moduleAction("Workflow", "renderAdminWorkflows();return false;") : ""
             ]),
             moduleCard("admin-services", "Katalog usług IT", "Usługi biznesowe i techniczne powiązane z kategoriami, SLA, incydentami i zgłoszeniami.", [
-              canManageServiceCatalog(me) ? moduleAction("Usługi IT", "renderAdminServices();return false;") : ""
+              canManageServiceCatalog(me) ? moduleAction("Usługi IT", "renderAdminServices();return false;") : "",
+              canManageServiceCatalog(me) ? moduleAction("Szablony formularzy", "renderAdminFormTemplates();return false;") : ""
             ]),
             moduleCard("admin-sla", "SLA", "Terminy reakcji, kalendarz SLA i zgłoszenia wymagające uwagi.", [
               canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;") : ""
@@ -3612,6 +3663,19 @@ data:
           ).join("");
         }
 
+        function updateAdminFormTemplateSubcategories(selected = "*") {
+          const categorySelect = document.getElementById("adminFormTemplateCategory");
+          const subcategorySelect = document.getElementById("adminFormTemplateSubcategory");
+          if (!categorySelect || !subcategorySelect || !adminFormTemplateCache) return;
+          const categoryValues = adminFormTemplateCache.subcategories?.[categorySelect.value] || ["Inne"];
+          const values = ["*", ...categoryValues.filter(value => value !== "*")];
+          const effective = values.includes(selected) ? selected : "*";
+          subcategorySelect.innerHTML = values.map(value => {
+            const label = value === "*" ? "Cała kategoria" : value;
+            return `<option value="${esc(value)}" ${value === effective ? "selected" : ""}>${esc(label)}</option>`;
+          }).join("");
+        }
+
         function adminServiceDraftFromForm(fallback = {}) {
           const form = document.getElementById("adminServiceForm");
           if (!form) return fallback || {};
@@ -3633,17 +3697,20 @@ data:
           ) || defaultServiceFormDefinition(service);
         }
 
-        function adminServiceFormBuilderPanel(schema) {
+        function adminServiceFormBuilderPanel(schema, options = {}) {
+          const heading = options.heading || "Formularz usługowy dla tej usługi";
+          const description = options.description || "Te pytania pojawią się użytkownikowi po wyborze tej usługi w nowym zgłoszeniu.";
+          const resetLabel = options.resetLabel || "Przywróć domyślne";
           return `
             <div class="panel-soft service-form-panel">
               <div class="ticket-section-title">
                 <div>
-                  <strong>Formularz usługowy dla tej usługi</strong>
-                  <div class="attachment-upload-hint" style="margin-top:4px">Te pytania pojawią się użytkownikowi po wyborze tej usługi w nowym zgłoszeniu.</div>
+                  <strong>${esc(heading)}</strong>
+                  <div class="attachment-upload-hint" style="margin-top:4px">${esc(description)}</div>
                 </div>
                 <div class="actions">
                   <button type="button" class="btn-secondary btn-small" onclick="addAdminServiceFormField()">Dodaj pytanie</button>
-                  <button type="button" class="btn-secondary btn-small" onclick="resetAdminServiceFormSchema()">Przywróć domyślne</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="resetAdminServiceFormSchema()">${esc(resetLabel)}</button>
                 </div>
               </div>
               <div class="grid" style="margin-top:10px">
@@ -3758,6 +3825,24 @@ data:
         }
 
         function resetAdminServiceFormSchema() {
+          const templateForm = document.getElementById("adminFormTemplateForm");
+          if (templateForm) {
+            const category = String(document.getElementById("adminFormTemplateCategory")?.value || "");
+            const subcategory = String(document.getElementById("adminFormTemplateSubcategory")?.value || "*");
+            const schema = defaultServiceFormDefinition({
+              service_key: `${category} ${subcategory}`,
+              name: `${category} ${subcategory === "*" ? "" : subcategory}`.trim(),
+              category,
+              subcategory: subcategory === "*" ? "Inne" : subcategory,
+              description: category,
+            });
+            renderAdminServiceFormFields(schema?.fields || []);
+            const title = document.getElementById("adminServiceFormSchemaTitle");
+            const intro = document.getElementById("adminServiceFormSchemaIntro");
+            if (title) title.value = schema?.title || `Formularz: ${category}`;
+            if (intro) intro.value = schema?.intro || "";
+            return;
+          }
           const service = adminServiceDraftFromForm({});
           const schema = defaultServiceFormDefinition(service);
           renderAdminServiceFormFields(schema?.fields || []);
@@ -4354,6 +4439,179 @@ data:
             </section>
           `;
           appEl.innerHTML = renderWorkspaceView(me, "services", content);
+        }
+
+        async function loadAdminFormTemplateCache(force = false) {
+          if (adminFormTemplateCache && !force) return adminFormTemplateCache;
+          const res = await api("/api/admin/form-templates");
+          const data = res ? await res.json().catch(() => ({})) : {};
+          if (!res || !res.ok) {
+            throw new Error(data.error || "Nie udało się pobrać szablonów formularzy.");
+          }
+          adminFormTemplateCache = data;
+          return data;
+        }
+
+        function defaultCategoryFormTemplateSchema(category, subcategory = "*") {
+          return defaultServiceFormDefinition({
+            service_key: `${category} ${subcategory}`,
+            name: `${category} ${subcategory === "*" ? "" : subcategory}`.trim(),
+            category,
+            subcategory: subcategory === "*" ? "Inne" : subcategory,
+            description: category,
+          });
+        }
+
+        function formTemplateSummary(template) {
+          const schema = normalizeServiceFormSchema(template?.form_schema, "Formularz zgłoszenia") || { fields: [] };
+          const scope = String(template?.subcategory || "*") === "*" ? "cała kategoria" : template.subcategory;
+          return {
+            scope,
+            fieldCount: Number((schema.fields || []).length),
+            requiredCount: Number((schema.fields || []).filter(field => field.required).length),
+            title: schema.title || "Formularz zgłoszenia",
+          };
+        }
+
+        async function renderAdminFormTemplates() {
+          currentView = { name: "admin-form-templates", ticketId: null };
+          const me = await loadMe();
+          if (!me || !canManageServiceCatalog(me)) {
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Szablony formularzy wymagają uprawnienia service_catalog.manage.</p></section>`;
+            return;
+          }
+          let data;
+          try {
+            data = await loadAdminFormTemplateCache(true);
+          } catch (err) {
+            appEl.innerHTML = `<section class="card"><h2>Szablony formularzy zgłoszeń</h2><p class="error">${esc(err.message)}</p></section>`;
+            return;
+          }
+          const rows = (data.templates || []).map(template => {
+            const summary = formTemplateSummary(template);
+            return `
+              <tr>
+                <td>
+                  <strong>${esc(template.category)}</strong><br>
+                  <span class="muted">${esc(summary.scope)}</span>
+                </td>
+                <td>${esc(summary.title)}</td>
+                <td>${summary.fieldCount} pytań<br><span class="muted">${summary.requiredCount} wymagane</span></td>
+                <td>${template.is_active === false ? `<span class="status-badge status-closed">Nieaktywny</span>` : `<span class="status-badge status-new">Aktywny</span>`}</td>
+                <td>${esc(template.updated_at || "-")}</td>
+                <td><button class="btn-secondary btn-small" onclick="renderAdminFormTemplateForm(${Number(template.id)})">Edytuj</button></td>
+              </tr>
+            `;
+          }).join("");
+          const content = `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h2>Szablony formularzy zgłoszeń</h2>
+                  <p class="muted">To pytania zależne od kategorii i podkategorii. Działają jako fallback, gdy użytkownik nie wybierze konkretnej usługi albo usługa nie ma własnego formularza.</p>
+                </div>
+                <div class="actions">
+                  <button onclick="renderAdminFormTemplateForm()">Dodaj szablon</button>
+                  <button class="btn-secondary" onclick="renderAdministration()">← Administracja</button>
+                </div>
+              </div>
+            </section>
+            <section class="card">
+              <table>
+                <thead><tr><th>Kategoria</th><th>Formularz</th><th>Pytania</th><th>Status</th><th>Aktualizacja</th><th>Akcje</th></tr></thead>
+                <tbody>${rows || `<tr><td colspan="6" class="muted">Brak szablonów formularzy.</td></tr>`}</tbody>
+              </table>
+            </section>
+          `;
+          appEl.innerHTML = renderWorkspaceView(me, "administration", content);
+        }
+
+        async function renderAdminFormTemplateForm(templateId = null) {
+          const me = await loadMe();
+          if (!me || !canManageServiceCatalog(me)) return;
+          let data;
+          try {
+            data = await loadAdminFormTemplateCache();
+          } catch (err) {
+            appEl.innerHTML = `<section class="card"><h2>Szablony formularzy zgłoszeń</h2><p class="error">${esc(err.message)}</p></section>`;
+            return;
+          }
+          const templates = data.templates || [];
+          const editing = Number(templateId || 0) > 0;
+          const template = editing
+            ? templates.find(item => Number(item.id) === Number(templateId))
+            : {
+                category: (data.categories || [])[0] || "Inne",
+                subcategory: "*",
+                form_schema: null,
+                is_active: true,
+              };
+          if (!template) {
+            alert("Nie znaleziono szablonu.");
+            await renderAdminFormTemplates();
+            return;
+          }
+          const schema = normalizeServiceFormSchema(
+            template.form_schema,
+            `Formularz: ${template.category} / ${template.subcategory || "*"}`,
+          ) || defaultCategoryFormTemplateSchema(template.category, template.subcategory || "*");
+          const content = `
+            <section class="card">
+              <button class="btn-secondary" onclick="renderAdminFormTemplates()">← Szablony formularzy</button>
+              <h2>${editing ? "Edytuj szablon formularza" : "Dodaj szablon formularza"}</h2>
+              <p class="muted">Szablon może dotyczyć całej kategorii albo jednej podkategorii. Formularz usługi, jeśli istnieje, ma pierwszeństwo przed tym szablonem.</p>
+              <form id="adminFormTemplateForm">
+                <div class="grid">
+                  <div>
+                    <label>Kategoria</label>
+                    <select id="adminFormTemplateCategory" name="category">${adminServiceOptionList(data.categories || [], template.category)}</select>
+                  </div>
+                  <div>
+                    <label>Zakres podkategorii</label>
+                    <select id="adminFormTemplateSubcategory" name="subcategory"></select>
+                  </div>
+                </div>
+                ${adminServiceFormBuilderPanel(schema, {
+                  heading: "Szablon pytań dla kategorii",
+                  description: "Te pytania pojawią się w nowym zgłoszeniu po wyborze pasującej kategorii i podkategorii.",
+                  resetLabel: "Przywróć podpowiedzi",
+                })}
+                <div class="panel-soft" style="margin-top:12px">
+                  <label><input type="checkbox" name="is_active" ${template.is_active !== false ? "checked" : ""}> Aktywny szablon</label>
+                </div>
+                <div class="actions" style="margin-top:12px">
+                  <button type="submit">Zapisz szablon</button>
+                  <button type="button" class="btn-secondary" onclick="renderAdminFormTemplates()">Anuluj</button>
+                </div>
+              </form>
+            </section>
+          `;
+          appEl.innerHTML = renderWorkspaceView(me, "administration", content);
+          updateAdminFormTemplateSubcategories(template.subcategory || "*");
+          renderAdminServiceFormFields(schema?.fields || []);
+          document.getElementById("adminFormTemplateCategory").addEventListener("change", () => {
+            updateAdminFormTemplateSubcategories("*");
+            resetAdminServiceFormSchema();
+          });
+          document.getElementById("adminFormTemplateSubcategory").addEventListener("change", resetAdminServiceFormSchema);
+          document.getElementById("adminFormTemplateForm").addEventListener("submit", async (e) => {
+            e.preventDefault();
+            const formData = new FormData(e.target);
+            const payload = Object.fromEntries(formData.entries());
+            payload.is_active = formData.has("is_active");
+            payload.form_schema = collectAdminServiceFormSchema();
+            const endpoint = editing ? `/api/admin/form-templates/${Number(template.id)}` : "/api/admin/form-templates";
+            const method = editing ? "PUT" : "POST";
+            const res = await api(endpoint, { method, body: JSON.stringify(payload) });
+            const saveData = res ? await res.json().catch(() => ({})) : {};
+            if (!res || !res.ok) {
+              alert(saveData.error || "Nie udało się zapisać szablonu.");
+              return;
+            }
+            adminFormTemplateCache = null;
+            showToast("Zapisano szablon formularza", `${payload.category} / ${payload.subcategory}`);
+            await renderAdminFormTemplates();
+          });
         }
     
         async function renderAdminServiceForm(serviceId = null) {
@@ -9326,6 +9584,7 @@ data:
           if (!me) return;
           const metaRes = await api("/api/meta");
           const meta = await metaRes.json();
+          window.__lastTicketMeta = meta;
           window.__lastTicketMetaServices = meta.services || [];
           appEl.innerHTML = `
             <section class="card">
@@ -9378,6 +9637,7 @@ data:
               </form>
             </section>`;
           updateSubcategorySelect(meta);
+          renderNewTicketDynamicForm(meta);
           if (pendingNewTicketServiceId) {
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) {
@@ -9396,22 +9656,22 @@ data:
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
-            renderServiceSpecificForm(null);
             updateSubcategorySelect(meta);
+            renderNewTicketDynamicForm(meta);
             scheduleNewTicketKnowledgeSuggestions();
           });
           document.getElementById("new-ticket-subcategory").addEventListener("change", () => {
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
-            renderServiceSpecificForm(null);
+            renderNewTicketDynamicForm(meta);
             scheduleNewTicketKnowledgeSuggestions();
           });
           document.querySelector('#ticketForm select[name="priority"]').addEventListener("change", () => {
             const serviceSelect = document.getElementById("new-ticket-service");
             if (serviceSelect) serviceSelect.value = "";
             renderNewTicketServiceHint(null);
-            renderServiceSpecificForm(null);
+            renderNewTicketDynamicForm(meta);
           });
           document.getElementById("ticketForm").addEventListener("submit", createTicket);
         }
