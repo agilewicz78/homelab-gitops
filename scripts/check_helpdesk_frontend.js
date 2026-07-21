@@ -481,6 +481,9 @@ const requiredResponsiveLayout = [
   ".operator-command-row button",
   ".workflow-wizard-steps { grid-template-columns: 1fr; }",
   ".user-case-grid { grid-template-columns: 1fr; }",
+  ".user-portal-shell",
+  ".user-portal-nav",
+  ".user-portal-nav,",
 ];
 for (const fragment of requiredResponsiveLayout) {
   if (!hasFragment(fragment)) {
@@ -490,6 +493,10 @@ for (const fragment of requiredResponsiveLayout) {
 
 const requiredUserPortal = [
   "renderUserPortal",
+  "renderUserPortalShell",
+  "renderUserPortalNav",
+  "userPortalNavButton",
+  "scrollToUserPortalSection",
   "userPortalMetric",
   "userPortalTicketCard",
   "userPortalTicketAction",
@@ -506,6 +513,10 @@ const requiredUserPortal = [
   "in_progress_tickets",
   "/resolution-feedback",
   "Moje sprawy",
+  "Start / moje sprawy",
+  "Incydenty i awarie",
+  "Status usług IT",
+  "Historia zgłoszeń",
   "Nowe i w obsłudze",
   "Powiązane z incydentem",
   "Ostatnio rozwiązane",
