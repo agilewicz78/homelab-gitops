@@ -517,6 +517,10 @@ def main() -> None:
     assert "in_progress_tickets" in text
     assert text.count("t.updated_at DESC,\n                  t.created_at DESC,\n                  t.id DESC") >= 2
     assert "function renderUserPortal" in text
+    assert "function renderUserPortalShell" in text
+    assert "function renderUserPortalNav" in text
+    assert "function userPortalNavButton" in text
+    assert "function scrollToUserPortalSection" in text
     assert "function userPortalTicketAction" in text
     assert "function userPortalCasesBoard" in text
     assert "function userPortalCaseLane" in text
@@ -740,7 +744,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-21-user-portal-cases-v1" in deployment_text
+    assert "2026-07-21-user-portal-shell-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
