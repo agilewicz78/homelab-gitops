@@ -10283,7 +10283,9 @@ data:
         cur.execute(f"""
             SELECT
               COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql}) AS open_tickets,
+              COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status = 'Nowe') AS new_tickets,
               COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status = 'Oczekuje na użytkownika') AS waiting_for_user,
+              COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status NOT IN ('Nowe', 'Oczekuje na użytkownika')) AS in_progress_tickets,
               COUNT(DISTINCT t.id) FILTER (WHERE {open_ticket_sql} AND t.status <> 'Oczekuje na użytkownika') AS waiting_for_support,
               COUNT(DISTINCT t.id) FILTER (WHERE i.id IS NOT NULL) AS active_incident_tickets,
               COUNT(DISTINCT t.id) FILTER (WHERE t.status IN ('Rozwiązane', 'Zamknięte')) AS closed_tickets
@@ -10295,6 +10297,12 @@ data:
         summary_row = cur.fetchone()
 
         active_tickets = user_ticket_rows(f"AND {open_ticket_sql}", [], 6)
+        new_tickets = user_ticket_rows("AND t.status = %s", ["Nowe"], 5)
+        in_progress_tickets = user_ticket_rows(
+            "AND t.status NOT IN (%s, %s)",
+            ["Nowe", "Oczekuje na użytkownika"],
+            5,
+        )
         waiting_for_user = user_ticket_rows("AND t.status = %s", ["Oczekuje na użytkownika"], 5)
         recent_closed = user_ticket_rows("AND t.status IN ('Rozwiązane', 'Zamknięte')", [], 4)
 
@@ -10398,14 +10406,18 @@ data:
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "summary": {
                 "open_tickets": summary_row[0] or 0,
-                "waiting_for_user": summary_row[1] or 0,
-                "waiting_for_support": summary_row[2] or 0,
-                "active_incident_tickets": summary_row[3] or 0,
-                "closed_tickets": summary_row[4] or 0,
+                "new_tickets": summary_row[1] or 0,
+                "waiting_for_user": summary_row[2] or 0,
+                "in_progress_tickets": summary_row[3] or 0,
+                "waiting_for_support": summary_row[4] or 0,
+                "active_incident_tickets": summary_row[5] or 0,
+                "closed_tickets": summary_row[6] or 0,
                 "unread_notifications": unread_notifications,
             },
             "sections": {
                 "active_tickets": active_tickets,
+                "new_tickets": new_tickets,
+                "in_progress_tickets": in_progress_tickets,
                 "waiting_for_user": waiting_for_user,
                 "recent_closed": recent_closed,
                 "incident_tickets": incident_tickets,
