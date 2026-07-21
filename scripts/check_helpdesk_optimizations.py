@@ -513,8 +513,15 @@ def main() -> None:
     assert "/api/user-portal" in text
     assert "def api_user_portal" in text
     assert "visible_ticket_sql" in text
+    assert "new_tickets" in text
+    assert "in_progress_tickets" in text
     assert text.count("t.updated_at DESC,\n                  t.created_at DESC,\n                  t.id DESC") >= 2
     assert "function renderUserPortal" in text
+    assert "function userPortalTicketAction" in text
+    assert "function userPortalCasesBoard" in text
+    assert "function userPortalCaseLane" in text
+    assert "function userPortalCasePill" in text
+    assert "function userPortalIncidentCaseLane" in text
     assert "function userPortalTicketStatusPanel" in text
     assert "function resolutionFeedbackPanel" in text
     assert "async function submitResolutionFeedback" in text
@@ -733,7 +740,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-21-category-form-templates-v1" in deployment_text
+    assert "2026-07-21-user-portal-cases-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
