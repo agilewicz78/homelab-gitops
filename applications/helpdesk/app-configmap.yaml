@@ -10702,6 +10702,300 @@ data:
             "notifications": notifications,
         })
 
+    @app.get("/api/operator-triage")
+    @api_login_required
+    @api_staff_required
+
+    # Kolejka triage: szybka pierwsza decyzja operatora dla nowych i nieprzypisanych zgłoszeń.
+    def api_operator_triage(user):
+        if not has_permission(user, "dashboard.operator"):
+            return api_forbidden("Brak uprawnienia do kolejki triage.", "dashboard.operator")
+        conn = get_conn()
+        cur = conn.cursor()
+        open_ticket_sql = "t.status NOT IN ('Rozwiązane', 'Zamknięte')"
+
+        cur.execute("""
+            SELECT first_name, last_name, email, role, roles
+            FROM users
+            WHERE roles IS NOT NULL
+              AND ('operator' = ANY(roles) OR 'admin' = ANY(roles))
+            ORDER BY lower(last_name), lower(first_name), lower(email)
+        """)
+        operators = [
+            {
+                "name": f"{row[0]} {row[1]}".strip(),
+                "email": row[2],
+                "role": role_label(list(row[4] or ["user"])),
+                "roles": list(row[4] or ["user"]),
+            }
+            for row in cur.fetchall()
+        ]
+
+        cur.execute("""
+            SELECT
+              i.id, i.title, i.summary, COALESCE(i.impact, ''),
+              i.severity, i.status, i.updated_at,
+              COUNT(DISTINCT it.ticket_id) AS ticket_count
+            FROM incidents i
+            LEFT JOIN incident_tickets it ON it.incident_id = i.id
+            WHERE i.status <> 'resolved'
+            GROUP BY i.id
+            ORDER BY
+              CASE i.severity WHEN 'SEV1' THEN 1 WHEN 'SEV2' THEN 2 WHEN 'SEV3' THEN 3 ELSE 4 END,
+              i.updated_at DESC
+            LIMIT 20
+        """)
+        active_incidents = [
+            {
+                "id": row[0],
+                "title": row[1],
+                "summary": row[2],
+                "impact": row[3],
+                "severity": row[4],
+                "status": row[5],
+                "updated_at": str(row[6]),
+                "ticket_count": int(row[7] or 0),
+            }
+            for row in cur.fetchall()
+        ]
+
+        cur.execute(f"""
+            WITH latest_public_comment AS (
+              SELECT DISTINCT ON (ticket_id)
+                ticket_id, author_email, created_at
+              FROM comments
+              WHERE COALESCE(visibility, 'public') = 'public'
+              ORDER BY ticket_id, created_at DESC, id DESC
+            )
+            SELECT
+              t.id, t.title, t.description, t.requester_name, t.requester_email,
+              t.department, t.category, COALESCE(t.subcategory, 'Inne') AS subcategory,
+              t.priority, t.status, t.created_at, t.updated_at, t.assigned_to_email,
+              COALESCE(NULLIF(trim(concat(u.first_name, ' ', u.last_name)), ''), t.assigned_to_email) AS assigned_to_name,
+              t.sla_due_at, t.first_response_due_at, t.first_response_at,
+              COALESCE(t.workflow_name, %s) AS workflow_name,
+              lp.author_email AS latest_public_author_email,
+              lp.created_at AS latest_public_comment_at,
+              t.service_id, sc.name AS service_name,
+              COALESCE(sc.status, 'operational') AS service_status,
+              (
+                SELECT COUNT(*)
+                FROM incident_tickets it
+                JOIN incidents i ON i.id = it.incident_id
+                WHERE it.ticket_id = t.id
+                  AND i.status <> 'resolved'
+              ) AS active_incident_count,
+              (
+                SELECT COUNT(*)
+                FROM ticket_links tl
+                WHERE tl.ticket_id = t.id OR tl.linked_ticket_id = t.id
+              ) AS linked_ticket_count
+            FROM tickets t
+            LEFT JOIN users u ON lower(u.email) = lower(t.assigned_to_email)
+            LEFT JOIN service_catalog sc ON sc.id = t.service_id
+            LEFT JOIN latest_public_comment lp ON lp.ticket_id = t.id
+            WHERE {open_ticket_sql}
+              AND (
+                t.status = 'Nowe'
+                OR t.first_response_at IS NULL
+                OR t.assigned_to_email IS NULL
+                OR t.assigned_to_email = ''
+              )
+            ORDER BY
+              CASE WHEN t.assigned_to_email IS NULL OR t.assigned_to_email = '' THEN 0 ELSE 1 END,
+              CASE WHEN t.status = 'Nowe' THEN 0 ELSE 1 END,
+              CASE t.priority WHEN 'Krytyczny' THEN 1 WHEN 'Wysoki' THEN 2 WHEN 'Normalny' THEN 3 WHEN 'Niski' THEN 4 ELSE 5 END,
+              COALESCE(t.first_response_due_at, t.created_at) ASC,
+              t.updated_at DESC,
+              t.id DESC
+            LIMIT 40
+        """, (WORKFLOWS["default"]["name"],))
+        triage_rows = cur.fetchall()
+        triage_ticket_ids = [row[0] for row in triage_rows]
+
+        linked_pairs = set()
+        if triage_ticket_ids:
+            cur.execute("""
+                SELECT ticket_id, linked_ticket_id
+                FROM ticket_links
+                WHERE ticket_id = ANY(%s) OR linked_ticket_id = ANY(%s)
+            """, (triage_ticket_ids, triage_ticket_ids))
+            linked_pairs = {
+                tuple(sorted((int(row[0]), int(row[1]))))
+                for row in cur.fetchall()
+            }
+
+        cur.execute("""
+            SELECT
+              id, title, description, category, COALESCE(subcategory, 'Inne'),
+              priority, status, updated_at, requester_name, requester_email
+            FROM tickets
+            WHERE status <> 'Zamknięte'
+              AND updated_at >= NOW() - INTERVAL '45 days'
+            ORDER BY updated_at DESC, id DESC
+            LIMIT 300
+        """)
+        candidate_rows = cur.fetchall()
+
+        def serialize_triage_ticket(row):
+            ticket_sla_state = sla_state(row[14], row[9])
+            ticket_first_response_state = first_response_state(row[15], row[16], row[9])
+            assigned = row[12] or ""
+            flags = []
+            if not assigned:
+                flags.append("Nieprzypisane")
+            if row[9] == "Nowe":
+                flags.append("Nowe")
+            if not row[16]:
+                flags.append("Brak pierwszej odpowiedzi")
+            if row[8] in ("Krytyczny", "Wysoki"):
+                flags.append(f"Priorytet: {row[8]}")
+            if ticket_sla_state == "overdue":
+                flags.append("SLA przekroczone")
+            elif ticket_sla_state == "warning":
+                flags.append("SLA blisko terminu")
+            if int(row[23] or 0) > 0:
+                flags.append("Już w incydencie")
+            if int(row[24] or 0) > 0:
+                flags.append("Ma powiązania")
+
+            recommended_action = "Oceń i wybierz kolejny krok"
+            if int(row[23] or 0) > 0:
+                recommended_action = "Sprawdź powiązany incydent"
+            elif not assigned:
+                recommended_action = "Przypisz właściciela"
+            elif not row[16]:
+                recommended_action = "Udziel pierwszej odpowiedzi"
+            elif ticket_sla_state in ("overdue", "warning") or row[8] in ("Krytyczny", "Wysoki"):
+                recommended_action = "Zweryfikuj priorytet i SLA"
+
+            return {
+                "id": row[0],
+                "title": row[1],
+                "requester_name": row[3],
+                "requester_email": row[4],
+                "department": row[5],
+                "category": row[6],
+                "subcategory": row[7] or "Inne",
+                "priority": row[8],
+                "status": row[9],
+                "created_at": str(row[10]),
+                "updated_at": str(row[11]),
+                "assigned_to_email": row[12] or "",
+                "assigned_to_name": row[13] or "",
+                "sla_due_at": str(row[14]) if row[14] else "",
+                "first_response_due_at": str(row[15]) if row[15] else "",
+                "first_response_at": str(row[16]) if row[16] else "",
+                "first_response_state": ticket_first_response_state,
+                "workflow_name": row[17] or WORKFLOWS["default"]["name"],
+                "latest_public_comment_at": str(row[19]) if row[19] else "",
+                "service": {
+                    "id": row[20],
+                    "name": row[21] or "",
+                    "status": row[22] or "operational",
+                    "status_label": SERVICE_STATUS_LABELS.get(row[22] or "operational", row[22] or "operational"),
+                } if row[20] else None,
+                "active_incident_count": int(row[23] or 0),
+                "linked_ticket_count": int(row[24] or 0),
+                "sla_state": ticket_sla_state,
+                "triage_flags": flags,
+                "recommended_action": recommended_action,
+                "duplicate_candidates": [],
+                "incident_candidates": [],
+            }
+
+        triage_sources = []
+        for row in triage_rows:
+            triage_sources.append({
+                "ticket": serialize_triage_ticket(row),
+                "tokens": similarity_tokens(row[1], row[2], row[6]),
+                "requester_email": row[4],
+                "category": row[6],
+                "subcategory": row[7],
+            })
+
+        for source in triage_sources:
+            ticket = source["ticket"]
+            ticket_id = int(ticket["id"])
+            duplicate_candidates = []
+            for candidate in candidate_rows:
+                candidate_id = int(candidate[0])
+                if candidate_id == ticket_id:
+                    continue
+                if tuple(sorted((ticket_id, candidate_id))) in linked_pairs:
+                    continue
+                if clean(candidate[9]).lower() == clean(source["requester_email"]).lower():
+                    continue
+                score, reasons = similarity_score(
+                    source["tokens"],
+                    similarity_tokens(candidate[1], candidate[2], candidate[3]),
+                    same_category=clean(candidate[3]).lower() == clean(source["category"]).lower(),
+                    same_subcategory=clean(candidate[4]).lower() == clean(source["subcategory"]).lower(),
+                )
+                if score < 40:
+                    continue
+                duplicate_candidates.append({
+                    "id": candidate_id,
+                    "title": candidate[1],
+                    "category": candidate[3] or "",
+                    "subcategory": candidate[4] or "",
+                    "priority": candidate[5],
+                    "status": candidate[6],
+                    "updated_at": str(candidate[7]),
+                    "requester_name": candidate[8] or "",
+                    "requester_email": candidate[9] or "",
+                    "score": score,
+                    "reasons": reasons,
+                })
+            duplicate_candidates.sort(
+                key=lambda item: (item["score"], item["updated_at"]),
+                reverse=True,
+            )
+            ticket["duplicate_candidates"] = duplicate_candidates[:3]
+            if ticket["duplicate_candidates"] and ticket["recommended_action"] == "Oceń i wybierz kolejny krok":
+                ticket["recommended_action"] = "Sprawdź możliwy duplikat"
+
+            incident_candidates = []
+            for incident in active_incidents:
+                score, reasons = similarity_score(
+                    source["tokens"],
+                    similarity_tokens(incident["title"], incident["summary"], incident["impact"]),
+                )
+                if score < 35:
+                    continue
+                incident_candidates.append({
+                    "id": incident["id"],
+                    "title": incident["title"],
+                    "severity": incident["severity"],
+                    "status": incident["status"],
+                    "ticket_count": incident["ticket_count"],
+                    "score": score,
+                    "reasons": reasons,
+                })
+            incident_candidates.sort(key=lambda item: (item["score"], item["ticket_count"]), reverse=True)
+            ticket["incident_candidates"] = incident_candidates[:3]
+
+        tickets = [item["ticket"] for item in triage_sources]
+        duplicate_suggestion_count = sum(1 for ticket in tickets if ticket["duplicate_candidates"])
+        cur.close()
+        conn.close()
+        return jsonify({
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "summary": {
+                "total": len(tickets),
+                "unassigned": sum(1 for ticket in tickets if not ticket["assigned_to_email"]),
+                "new": sum(1 for ticket in tickets if ticket["status"] == "Nowe"),
+                "no_response": sum(1 for ticket in tickets if not ticket["first_response_at"]),
+                "urgent": sum(1 for ticket in tickets if ticket["sla_state"] in ("overdue", "warning") or ticket["priority"] in ("Krytyczny", "Wysoki")),
+                "duplicate_suggestions": duplicate_suggestion_count,
+            },
+            "tickets": tickets,
+            "operators": operators,
+            "priorities": PRIORITIES,
+            "statuses": all_statuses(),
+            "incidents": active_incidents,
+        })
+
     @app.get("/api/dashboard")
     @api_login_required
 
@@ -13558,6 +13852,70 @@ data:
         conn.close()
         publish_event(f"{user['name']} przypisał zgłoszenie #{ticket_id} do: {assigned_to_name}", "assignment_changed", ticket_id)
         return jsonify({"status": "ok"})
+
+    @app.post("/api/tickets/<int:ticket_id>/priority")
+    @api_login_required
+
+    # Ręczna zmiana priorytetu, używana m.in. przez kolejkę triage operatora.
+    def api_update_ticket_priority(user, ticket_id):
+        if not is_staff(user):
+            return jsonify({"error": "forbidden"}), 403
+        payload = request.get_json(silent=True) or {}
+        priority = clean(payload.get("priority"))
+        if priority not in PRIORITIES:
+            return jsonify({"error": "Nieprawidłowy priorytet zgłoszenia."}), 400
+        conn = get_conn()
+        cur = conn.cursor()
+        ok, old_value, error_code = ensure_ticket_mutable(cur, ticket_id)
+        if not ok:
+            cur.close()
+            conn.close()
+            return old_value, error_code
+        cur.execute("SELECT priority, title FROM tickets WHERE id = %s", (ticket_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close()
+            conn.close()
+            return jsonify({"error": "not found"}), 404
+        old_priority, title = row
+        if old_priority == priority:
+            cur.close()
+            conn.close()
+            return jsonify({"status": "ok", "changed": False, "priority": priority})
+        cur.execute("""
+            UPDATE tickets
+            SET priority = %s, updated_at = NOW()
+            WHERE id = %s
+        """, (priority, ticket_id))
+        add_ticket_event(
+            cur,
+            ticket_id,
+            user,
+            "priority_changed",
+            f"Priorytet zmieniony z {old_priority or 'Brak'} na {priority}"
+        )
+        log_audit(cur, user, "ticket_priority_changed", "ticket", ticket_id, {
+            "old_priority": old_priority,
+            "new_priority": priority,
+            "title": title,
+        })
+        create_ticket_notifications(
+            cur,
+            ticket_id,
+            "priority_changed",
+            f"Priorytet zgłoszenia #{ticket_id} zmieniono z {old_priority or 'Brak'} na {priority}.",
+            actor_email=user["email"],
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+        publish_event(
+            f"{user['name']} zmienił priorytet zgłoszenia #{ticket_id} z {old_priority or 'Brak'} na {priority}",
+            "priority_changed",
+            ticket_id,
+        )
+        return jsonify({"status": "ok", "changed": True, "priority": priority})
+
     @app.post("/api/tickets/<int:ticket_id>/watchers")
     @api_login_required
 
@@ -13672,8 +14030,9 @@ data:
         if linked_ticket_id == ticket_id:
             return jsonify({"error": "Nie można powiązać zgłoszenia z samym sobą."}), 400
         relation_type = clean(payload.get("relation_type")) or "related"
-        if relation_type not in ("related",):
+        if relation_type not in ("related", "duplicate"):
             relation_type = "related"
+        relation_label = "duplikat" if relation_type == "duplicate" else "powiązanie"
         a_id = min(ticket_id, linked_ticket_id)
         b_id = max(ticket_id, linked_ticket_id)
         conn = get_conn()
@@ -13710,14 +14069,14 @@ data:
             ticket_id,
             user,
             "ticket_link_added",
-            f"Powiązano ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}"
+            f"Dodano {relation_label} ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}"
         )
         add_ticket_event(
             cur,
             linked_ticket_id,
             user,
             "ticket_link_added",
-            f"Powiązano ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}"
+            f"Dodano {relation_label} ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}"
         )
         log_audit(cur, user, "ticket_link_added", "ticket", ticket_id, {
             "linked_ticket_id": linked_ticket_id,
@@ -13729,21 +14088,21 @@ data:
             cur,
             ticket_id,
             "ticket_link_changed",
-            f"Zgłoszenie #{ticket_id}: {titles[ticket_id]} powiązano ze zgłoszeniem #{linked_ticket_id}: {titles[linked_ticket_id]}.",
+            f"Zgłoszenie #{ticket_id}: {titles[ticket_id]} oznaczono jako {relation_label} zgłoszenia #{linked_ticket_id}: {titles[linked_ticket_id]}.",
             actor_email=user["email"],
         )
         create_ticket_notifications(
             cur,
             linked_ticket_id,
             "ticket_link_changed",
-            f"Zgłoszenie #{linked_ticket_id}: {titles[linked_ticket_id]} powiązano ze zgłoszeniem #{ticket_id}: {titles[ticket_id]}.",
+            f"Zgłoszenie #{linked_ticket_id}: {titles[linked_ticket_id]} oznaczono jako {relation_label} zgłoszenia #{ticket_id}: {titles[ticket_id]}.",
             actor_email=user["email"],
         )
         conn.commit()
         cur.close()
         conn.close()
-        publish_event(f"{user['name']} powiązał zgłoszenie #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
-        publish_event(f"{user['name']} powiązał zgłoszenie #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
+        publish_event(f"{user['name']} dodał {relation_label} zgłoszenia #{ticket_id} ze zgłoszeniem #{linked_ticket_id}", "ticket_link_changed", ticket_id)
+        publish_event(f"{user['name']} dodał {relation_label} zgłoszenia #{linked_ticket_id} ze zgłoszeniem #{ticket_id}", "ticket_link_changed", linked_ticket_id)
         return jsonify({"status": "ok"}), 201
     @app.delete("/api/tickets/<int:ticket_id>/links/<int:linked_ticket_id>")
     @api_login_required
@@ -13774,7 +14133,7 @@ data:
             return jsonify({"error": "Nie można zmieniać powiązań zamkniętego zgłoszenia."}), 400
         cur.execute("""
             DELETE FROM ticket_links
-            WHERE ticket_id = %s AND linked_ticket_id = %s AND relation_type = 'related'
+            WHERE ticket_id = %s AND linked_ticket_id = %s AND relation_type IN ('related', 'duplicate')
         """, (a_id, b_id))
         if cur.rowcount == 0:
             cur.close()

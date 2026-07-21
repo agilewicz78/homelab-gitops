@@ -475,6 +475,38 @@ for (const fragment of requiredOperatorCenter) {
   }
 }
 
+const requiredOperatorTriage = [
+  "/api/operator-triage",
+  "/api/tickets/${{ticketId}}/priority",
+  "renderOperatorTriage",
+  "triageMetric",
+  "triageTicketCard",
+  "triageTicketSignals",
+  "triageSuggestionRows",
+  "triageOperatorOptions",
+  "triagePriorityOptions",
+  "triageIncidentOptions",
+  "triageDuplicateOptions",
+  "triageAssignTicket",
+  "triageSetPriority",
+  "triageLinkIncident",
+  "triageMarkTicketDuplicate",
+  "triageIncidentSummary",
+  "operator-triage",
+  "triage-layout",
+  "triage-ticket-card",
+  "Kolejka triage",
+  "Oznacz jako duplikat",
+  "relation_type: \"duplicate\"",
+  "ticketRelationTypeLabel",
+  "priority_changed",
+];
+for (const fragment of requiredOperatorTriage) {
+  if (!hasFragment(fragment)) {
+    throw new Error(`Missing operator triage fragment: ${fragment}`);
+  }
+}
+
 const requiredResponsiveLayout = [
   "@media (max-width: 1100px)",
   "@media (max-width: 980px)",
