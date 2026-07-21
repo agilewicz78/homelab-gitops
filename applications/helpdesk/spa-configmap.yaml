@@ -441,6 +441,24 @@ data:
       .operator-work-card .notification-list { max-height: 330px; }
       .operator-side-panel { display: grid; gap: 14px; }
       .operator-side-panel .card { margin: 0; }
+      .triage-layout { display: grid; grid-template-columns: minmax(0, 1fr) minmax(280px, 340px); gap: 14px; align-items: start; }
+      .triage-ticket-list { display: grid; gap: 12px; }
+      .triage-ticket-card { border: 1px solid var(--border); border-radius: 20px; padding: 14px; background: rgba(31,41,55,.56); }
+      .triage-ticket-card.priority { border-color: rgba(248,113,113,.48); background: rgba(127,29,29,.16); }
+      .triage-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+      .triage-card-title { font-size: 17px; font-weight: 900; line-height: 1.35; }
+      .triage-card-meta { margin-top: 6px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .triage-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .triage-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }
+      .triage-action-box { border: 1px solid rgba(148,163,184,.22); border-radius: 16px; padding: 11px; background: rgba(15,23,42,.42); }
+      .triage-action-box label { margin-top: 0; font-size: 12px; color: var(--muted); }
+      .triage-action-box select,
+      .triage-action-box input { margin-top: 6px; }
+      .triage-action-box .form-actions { margin-top: 8px; }
+      .triage-suggestions { display: grid; gap: 8px; margin-top: 12px; }
+      .triage-suggestion { display: flex; justify-content: space-between; gap: 10px; align-items: center; border: 1px solid rgba(56,189,248,.20); border-radius: 14px; padding: 10px; background: rgba(14,116,144,.09); }
+      .triage-side-panel { display: grid; gap: 14px; }
+      .triage-side-panel .card { margin: 0; }
       .dashboard-list { display: grid; gap: 9px; }
       .dashboard-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; border: 1px solid var(--border); background: rgba(31,41,55,.52); border-radius: 14px; padding: 11px 12px; cursor: pointer; }
       .dashboard-row:hover { border-color: rgba(56,189,248,.55); }
@@ -466,6 +484,7 @@ data:
         .user-portal-shell,
         .operator-cockpit-shell,
         .operator-board,
+        .triage-layout,
         .operator-queues,
         .ticket-layout,
         .resolution-time-grid { grid-template-columns: 1fr; }
@@ -502,6 +521,7 @@ data:
         .live-panel { width: 100%; min-width: 0; white-space: normal; }
         .grid,
         .filter-grid,
+        .triage-actions,
         .user-case-grid { grid-template-columns: 1fr; }
         .notification-card { grid-template-columns: 1fr; }
         .notification-item-actions { justify-content: flex-start; }
@@ -547,6 +567,7 @@ data:
         .user-portal-nav,
         .operator-sidebar { grid-template-columns: 1fr; }
         .operator-command-row button,
+        .triage-action-box button,
         .actions button,
         .form-actions button,
         .modal-actions button,
@@ -983,6 +1004,7 @@ data:
             incident_linked: "Powiązanie z incydentem",
             internal_note_added: "Notatka wewnętrzna",
             assignment_changed: "Przypisanie",
+            priority_changed: "Zmiana priorytetu",
             attachment_added: "Załącznik",
             ticket_link_changed: "Powiązanie zgłoszeń",
             sla_first_response_overdue: "SLA reakcji przekroczone",
@@ -1148,6 +1170,7 @@ data:
             moduleCard("user-work", "Moja praca", "Osobiste zgłoszenia, profil użytkownika i centrum operatora, jeżeli masz taką rolę.", [
               canViewUserPortal(me) ? moduleAction("Portal użytkownika", "renderUserPortal();return false;", active === "user-work") : "",
               canViewOperatorCenter(me) ? moduleAction("Centrum operatora", "renderOperatorCenter();return false;", active === "operator-work") : "",
+              canViewOperatorCenter(me) ? moduleAction("Kolejka triage", "renderOperatorTriage();return false;", active === "triage") : "",
               moduleAction("Mój profil", "renderProfile();return false;")
             ], active),
             moduleCard("tickets", "Zgłoszenia", "Lista ticketów, nowe zgłoszenie, filtry i widoki robocze.", [
@@ -1195,6 +1218,7 @@ data:
             <aside class="operator-sidebar">
               <div class="operator-sidebar-title">Helpdesk</div>
               ${sidebarItem("operator-center", "Centrum", "renderOperatorCenter();return false;", active, canViewOperatorCenter(me))}
+              ${sidebarItem("triage", "Triage", "renderOperatorTriage();return false;", active, canViewOperatorCenter(me))}
               ${sidebarItem("tickets", "Zgłoszenia", "renderHome();return false;", active, true)}
               ${sidebarItem("incidents", "Incydenty", "renderIncidents();return false;", active, canWorkTickets(me))}
               ${sidebarItem("services", "Usługi IT", "renderAdminServices();return false;", active, canWorkTickets(me) && canViewServiceCatalog(me))}
@@ -1248,6 +1272,9 @@ data:
             .replaceAll("Ł", "L")
             .replace(/[^a-zA-Z0-9]+/g, "-")
             .replace(/^-|-$/g, "");
+        }
+        function ticketRelationTypeLabel(type) {
+          return type === "duplicate" ? "Duplikat" : "Powiązane";
         }
         function subcategoriesForCategory(meta, category) {
           const all = meta?.subcategories || {};
@@ -1625,6 +1652,7 @@ data:
             "comment_added",
             "internal_note_added",
             "assignment_changed",
+            "priority_changed",
             "attachment_added",
             "watcher_changed",
             "ticket_link_changed",
@@ -1681,6 +1709,10 @@ data:
           if (currentView.name === "operator-center") {
             if (!shouldSuppress) showToast("Centrum operatora odświeżone", liveEvent.message || "");
             await renderOperatorCenter(true);
+          }
+          if (currentView.name === "operator-triage") {
+            if (!shouldSuppress) showToast("Kolejka triage odświeżona", liveEvent.message || "");
+            await renderOperatorTriage(true);
           }
           if (currentView.name === "dashboard") {
             await renderDashboard();
@@ -3102,6 +3134,7 @@ data:
               <div class="operator-command-row">
                 <input class="quick-search" placeholder="Szukaj: #2415, poczta, użytkownik, incydent, po SLA..." onkeydown="if(event.key === 'Enter') { saveTicketSearch(this.value.trim()); renderHome([]); }">
                 <button onclick="renderNewTicket()">Nowe zgłoszenie</button>
+                <button class="btn-secondary" onclick="renderOperatorTriage()">Kolejka triage</button>
                 <button class="btn-secondary" onclick="applyWorkView('queue')">Moja kolejka</button>
                 <button class="btn-secondary" onclick="applyWorkView('unassigned')">Nieprzypisane</button>
                 <button class="btn-secondary" onclick="applyWorkView('no_response')">Bez odpowiedzi</button>
@@ -3132,6 +3165,312 @@ data:
             </div>
           `;
           appEl.innerHTML = renderWorkspaceShell(me, "operator-center", cockpitContent);
+        }
+        function triageMetric(label, value, hint) {
+          return `
+            <div class="dashboard-card">
+              <div class="num">${Number(value || 0)}</div>
+              <div class="label">${esc(label)}</div>
+              ${hint ? `<div class="muted">${esc(hint)}</div>` : ""}
+            </div>
+          `;
+        }
+        function triageOperatorOptions(operators, selectedEmail = "") {
+          const selected = String(selectedEmail || "").toLowerCase();
+          return `<option value="">Nieprzypisane</option>` + (operators || []).map(op => {
+            const email = String(op.email || "");
+            const active = email.toLowerCase() === selected ? "selected" : "";
+            return `<option value="${esc(email)}" ${active}>${esc(op.name || email)} · ${esc(op.role || "operator")}</option>`;
+          }).join("");
+        }
+        function triagePriorityOptions(priorities, selectedPriority = "") {
+          return (priorities || []).map(priority =>
+            `<option value="${esc(priority)}" ${priority === selectedPriority ? "selected" : ""}>${esc(priority)}</option>`
+          ).join("");
+        }
+        function triageIncidentOptions(incidents, candidates = []) {
+          const candidateIds = new Set((candidates || []).map(item => Number(item.id)));
+          const candidateRows = (candidates || []).map(item =>
+            `<option value="${Number(item.id)}">#${Number(item.id)} · ${esc(item.severity || "")} · ${esc(item.title || "Incydent")} · sugerowany ${Number(item.score || 0)}%</option>`
+          );
+          const otherRows = (incidents || [])
+            .filter(item => !candidateIds.has(Number(item.id)))
+            .map(item => `<option value="${Number(item.id)}">#${Number(item.id)} · ${esc(item.severity || "")} · ${esc(item.title || "Incydent")}</option>`);
+          return [`<option value="">Wybierz aktywny incydent</option>`].concat(candidateRows, otherRows).join("");
+        }
+        function triageDuplicateOptions(candidates = []) {
+          const rows = (candidates || []).map(item =>
+            `<option value="${Number(item.id)}">#${Number(item.id)} · ${esc(item.title || "Zgłoszenie")} · ${Number(item.score || 0)}%</option>`
+          );
+          return [`<option value="">Wybierz podobne zgłoszenie</option>`].concat(rows).join("");
+        }
+        function triageTicketSignals(ticket) {
+          const flags = Array.isArray(ticket.triage_flags) ? ticket.triage_flags : [];
+          if (!flags.length) return "";
+          return `<div class="triage-flags">${flags.map(flag => `<span class="chip">${esc(flag)}</span>`).join("")}</div>`;
+        }
+        function triageSuggestionRows(ticket) {
+          const duplicateRows = (ticket.duplicate_candidates || []).map(item => `
+            <div class="triage-suggestion">
+              <div>
+                <strong>Możliwy duplikat #${Number(item.id)} · ${esc(item.title || "")}</strong>
+                <div class="attachment-upload-hint">
+                  ${esc(item.requester_name || "")} · ${esc(item.category || "-")} / ${esc(item.subcategory || "Inne")} · podobieństwo ${Number(item.score || 0)}%
+                </div>
+              </div>
+              <button class="btn-secondary btn-small" onclick="triageMarkTicketDuplicate(${Number(ticket.id)}, ${Number(item.id)})">Oznacz duplikat</button>
+            </div>
+          `).join("");
+          const incidentRows = (ticket.incident_candidates || []).map(item => `
+            <div class="triage-suggestion">
+              <div>
+                <strong>Możliwy incydent #${Number(item.id)} · ${esc(item.title || "")}</strong>
+                <div class="attachment-upload-hint">
+                  ${esc(item.severity || "")} · zgłoszeń: ${Number(item.ticket_count || 0)} · dopasowanie ${Number(item.score || 0)}%
+                </div>
+              </div>
+              <button class="btn-secondary btn-small" onclick="triageLinkIncident(${Number(ticket.id)}, ${Number(item.id)})">Podepnij</button>
+            </div>
+          `).join("");
+          if (!duplicateRows && !incidentRows) return "";
+          return `<div class="triage-suggestions">${duplicateRows}${incidentRows}</div>`;
+        }
+        function triageTicketCard(ticket, data, me) {
+          const urgent = ticket.sla_state === "overdue" || ticket.sla_state === "warning" || ["Krytyczny", "Wysoki"].includes(ticket.priority);
+          const currentUserEmail = String(me.email || "").toLowerCase();
+          const assignedToEmail = String(ticket.assigned_to_email || "").toLowerCase();
+          const service = ticket.service
+            ? `<br><span class="muted">Usługa: ${esc(ticket.service.name)} · ${esc(ticket.service.status_label || ticket.service.status)}</span>`
+            : "";
+          return `
+            <section class="triage-ticket-card ${urgent ? "priority" : ""}">
+              <div class="triage-card-head">
+                <div>
+                  <div class="triage-card-title">#${Number(ticket.id)} · ${esc(ticket.title || "Bez tytułu")}</div>
+                  <div class="triage-card-meta">
+                    ${esc(ticket.requester_name || "-")} · ${esc(ticket.department || "-")} · ${esc(ticket.category || "-")} / ${esc(ticket.subcategory || "Inne")}
+                    ${service}
+                  </div>
+                </div>
+                <div style="text-align:right">
+                  <span class="pill ${priorityClass(ticket.priority)}">${esc(ticket.priority || "-")}</span>
+                  <span class="pill ${statusClass(ticket.status)}">${esc(ticket.status || "-")}</span>
+                  <div class="attachment-upload-hint" style="margin-top:6px">${esc(ticket.created_at || "")}</div>
+                </div>
+              </div>
+              ${triageTicketSignals(ticket)}
+              <div class="panel-soft" style="margin-top:12px">
+                <strong>Rekomendowany krok: ${esc(ticket.recommended_action || "Oceń i wybierz kolejny krok")}</strong>
+                <div class="attachment-upload-hint">
+                  Operator: ${ticket.assigned_to_name ? esc(ticket.assigned_to_name) : "Nieprzypisane"} · SLA: ${slaLabel(ticket.sla_state)} · pierwsza odpowiedź: ${slaLabel(ticket.first_response_state)}
+                </div>
+              </div>
+              ${triageSuggestionRows(ticket)}
+              <div class="triage-actions">
+                <div class="triage-action-box">
+                  <label>Przypisz / wyślij do kolejki</label>
+                  <select id="triage-owner-${Number(ticket.id)}">${triageOperatorOptions(data.operators || [], ticket.assigned_to_email)}</select>
+                  <div class="form-actions">
+                    ${currentUserEmail && currentUserEmail !== assignedToEmail ? `<button type="button" class="btn-secondary btn-small" onclick="triageAssignTicket(${Number(ticket.id)}, '${esc(currentUserEmail)}')">Do mnie</button>` : ""}
+                    <button type="button" class="btn-secondary btn-small" onclick="triageAssignTicket(${Number(ticket.id)})">Zapisz</button>
+                  </div>
+                </div>
+                <div class="triage-action-box">
+                  <label>Ustaw priorytet</label>
+                  <select id="triage-priority-${Number(ticket.id)}">${triagePriorityOptions(data.priorities || [], ticket.priority)}</select>
+                  <div class="form-actions">
+                    <button type="button" class="btn-secondary btn-small" onclick="triageSetPriority(${Number(ticket.id)})">Zapisz priorytet</button>
+                    <button type="button" class="btn-secondary btn-small" onclick="triageSetPriority(${Number(ticket.id)}, 'Wysoki')">Wysoki</button>
+                  </div>
+                </div>
+                <div class="triage-action-box">
+                  <label>Połącz z incydentem</label>
+                  <select id="triage-incident-${Number(ticket.id)}">${triageIncidentOptions(data.incidents || [], ticket.incident_candidates || [])}</select>
+                  <div class="form-actions">
+                    <button type="button" class="btn-secondary btn-small" onclick="triageLinkIncident(${Number(ticket.id)})">Podepnij</button>
+                    <button type="button" class="btn-secondary btn-small" onclick="renderIncidents()">Incydenty</button>
+                  </div>
+                </div>
+                <div class="triage-action-box">
+                  <label>Oznacz jako duplikat</label>
+                  <select id="triage-duplicate-${Number(ticket.id)}">${triageDuplicateOptions(ticket.duplicate_candidates || [])}</select>
+                  <input id="triage-duplicate-id-${Number(ticket.id)}" type="number" min="1" placeholder="Albo wpisz ID zgłoszenia">
+                  <div class="form-actions">
+                    <button type="button" class="btn-secondary btn-small" onclick="triageMarkTicketDuplicate(${Number(ticket.id)})">Oznacz</button>
+                    <button type="button" class="btn-secondary btn-small" onclick="renderTicket(${Number(ticket.id)})">Otwórz</button>
+                  </div>
+                </div>
+              </div>
+            </section>
+          `;
+        }
+        async function triageAssignTicket(ticketId, email = null) {
+          const selectedEmail = email || document.getElementById(`triage-owner-${ticketId}`)?.value || "";
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${ticketId}/assign`, {
+            method: "POST",
+            body: JSON.stringify({ assigned_to_email: selectedEmail })
+          });
+          if (!res || !res.ok) {
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({})) : {};
+            alert(err.error || "Nie udało się przypisać zgłoszenia.");
+            return;
+          }
+          showToast(selectedEmail ? "Zmieniono przypisanie" : "Zgłoszenie wróciło do nieprzypisanych", `Zgłoszenie #${ticketId}`);
+          await renderOperatorTriage(true);
+        }
+        async function triageSetPriority(ticketId, priority = null) {
+          const selectedPriority = priority || document.getElementById(`triage-priority-${ticketId}`)?.value || "";
+          if (!selectedPriority) {
+            alert("Wybierz priorytet.");
+            return;
+          }
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${ticketId}/priority`, {
+            method: "POST",
+            body: JSON.stringify({ priority: selectedPriority })
+          });
+          if (!res || !res.ok) {
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({})) : {};
+            alert(err.error || "Nie udało się zmienić priorytetu.");
+            return;
+          }
+          showToast("Zmieniono priorytet", `Zgłoszenie #${ticketId}: ${selectedPriority}`);
+          await renderOperatorTriage(true);
+        }
+        async function triageLinkIncident(ticketId, incidentId = null) {
+          const selectedIncidentId = Number(incidentId || document.getElementById(`triage-incident-${ticketId}`)?.value || 0);
+          if (!selectedIncidentId) {
+            alert("Wybierz incydent.");
+            return;
+          }
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/incidents/${selectedIncidentId}/tickets`, {
+            method: "POST",
+            body: JSON.stringify({ ticket_id: ticketId })
+          });
+          if (!res || !res.ok) {
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({})) : {};
+            alert(err.error || "Nie udało się połączyć zgłoszenia z incydentem.");
+            return;
+          }
+          showToast("Powiązano z incydentem", `Zgłoszenie #${ticketId} → incydent #${selectedIncidentId}`);
+          await renderOperatorTriage(true);
+        }
+        async function triageMarkTicketDuplicate(ticketId, linkedTicketId = null) {
+          const selectedDuplicateId = Number(
+            linkedTicketId
+            || document.getElementById(`triage-duplicate-id-${ticketId}`)?.value
+            || document.getElementById(`triage-duplicate-${ticketId}`)?.value
+            || 0
+          );
+          if (!selectedDuplicateId) {
+            alert("Wybierz lub wpisz ID zgłoszenia, które jest głównym/podobnym zgłoszeniem.");
+            return;
+          }
+          if (Number(selectedDuplicateId) === Number(ticketId)) {
+            alert("Nie można oznaczyć zgłoszenia jako duplikatu samego siebie.");
+            return;
+          }
+          suppressNextLiveRefresh = true;
+          const res = await api(`/api/tickets/${ticketId}/links`, {
+            method: "POST",
+            body: JSON.stringify({ linked_ticket_id: selectedDuplicateId, relation_type: "duplicate" })
+          });
+          if (!res || !res.ok) {
+            suppressNextLiveRefresh = false;
+            const err = res ? await res.json().catch(() => ({})) : {};
+            alert(err.error || "Nie udało się oznaczyć duplikatu.");
+            return;
+          }
+          showToast("Oznaczono duplikat", `Zgłoszenie #${ticketId} powiązano z #${selectedDuplicateId}.`);
+          await renderOperatorTriage(true);
+        }
+        function triageIncidentSummary(incidents = []) {
+          const rows = incidents.length ? incidents.slice(0, 8).map(item => `
+            <button class="notification-card" onclick="renderIncident(${Number(item.id)}); return false;">
+              <div class="notification-open">
+                <div class="notification-ticket">${esc(item.severity || "SEV")} #${Number(item.id)} · ${esc(item.title || "Incydent")}</div>
+                <div class="notification-meta">${esc(incidentStatusLabel(item.status))} · zgłoszeń: ${Number(item.ticket_count || 0)} · ${esc(item.updated_at || "")}</div>
+              </div>
+            </button>
+          `).join("") : `<p class="muted">Brak aktywnych incydentów.</p>`;
+          return `
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Aktywne incydenty</h3>
+                  <p class="muted">Możesz podpinać zgłoszenia bez wychodzenia z triage.</p>
+                </div>
+                <button class="btn-secondary btn-small" onclick="renderIncidents()">Otwórz</button>
+              </div>
+              <div class="notification-list" style="margin-top:12px">${rows}</div>
+            </section>
+          `;
+        }
+        async function renderOperatorTriage(fromLive = false) {
+          currentView = { name: "operator-triage", ticketId: null };
+          const me = await loadMe();
+          if (!me) return;
+          if (!canViewOperatorCenter(me)) {
+            appEl.innerHTML = `<section class="card"><h2>Brak dostępu</h2><p class="muted">Kolejka triage wymaga uprawnienia dashboard.operator.</p></section>`;
+            return;
+          }
+          if (!fromLive) {
+            appEl.innerHTML = renderWorkspaceShell(me, "triage", `<section class="card"><h2>Kolejka triage</h2><p class="muted">Ładuję zgłoszenia wymagające pierwszej decyzji...</p></section>`);
+          }
+          const res = await api("/api/operator-triage");
+          if (!res) return;
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            appEl.innerHTML = renderWorkspaceShell(me, "triage", `<section class="card"><h2>Nie udało się pobrać kolejki triage</h2><p class="error">${esc(data.error || "Nieznany błąd")}</p></section>`);
+            return;
+          }
+          const summary = data.summary || {};
+          const tickets = data.tickets || [];
+          const cards = tickets.length
+            ? tickets.map(ticket => triageTicketCard(ticket, data, me)).join("")
+            : `<section class="card"><h3>Brak zgłoszeń do triage</h3><p class="muted">Nie ma nowych, nieprzypisanych albo bez pierwszej odpowiedzi zgłoszeń wymagających szybkiej decyzji.</p></section>`;
+          const content = `
+            <section class="operator-hero">
+              <h2>Kolejka triage</h2>
+              <p>Pierwsza decyzja operatora w jednym miejscu: przypisz zgłoszenie, ustaw priorytet, podepnij do incydentu, oznacz duplikat albo otwórz pełną kartę sprawy.</p>
+              <div class="operator-command-row">
+                <button onclick="renderOperatorTriage()">Odśwież</button>
+                <button class="btn-secondary" onclick="applyWorkView('unassigned')">Lista nieprzypisanych</button>
+                <button class="btn-secondary" onclick="applyWorkView('no_response')">Bez odpowiedzi</button>
+                <button class="btn-secondary" onclick="renderOperatorCenter()">Centrum operatora</button>
+              </div>
+              <div class="attachment-upload-hint" style="margin-top:10px">Ostatnie odświeżenie: ${esc(data.generated_at || "")}</div>
+            </section>
+            <section class="operator-summary-strip">
+              ${triageMetric("Do triage", summary.total, "Zgłoszenia wymagające pierwszej decyzji.")}
+              ${triageMetric("Nieprzypisane", summary.unassigned, "Czekają na właściciela.")}
+              ${triageMetric("Nowe", summary.new, "Jeszcze na początku obsługi.")}
+              ${triageMetric("Bez odpowiedzi", summary.no_response, "Nie mają pierwszej reakcji operatora.")}
+              ${triageMetric("Możliwe duplikaty", summary.duplicate_suggestions, "System znalazł podobne sprawy od innych osób.")}
+            </section>
+            <div class="triage-layout">
+              <section class="triage-ticket-list">${cards}</section>
+              <aside class="triage-side-panel">
+                <section class="card">
+                  <h3>Jak czytać triage</h3>
+                  <p class="muted">To nie zastępuje pełnej karty zgłoszenia. To szybka bramka decyzyjna: kto obsługuje, jak pilne, czy to część większego problemu i czy to duplikat.</p>
+                  <div class="incident-meta">
+                    <span class="chip">1. właściciel</span>
+                    <span class="chip">2. priorytet</span>
+                    <span class="chip">3. incydent</span>
+                    <span class="chip">4. duplikat</span>
+                  </div>
+                </section>
+                ${triageIncidentSummary(data.incidents || [])}
+              </aside>
+            </div>
+          `;
+          appEl.innerHTML = renderWorkspaceShell(me, "triage", content);
         }
         function dashboardPercent(count, total) {
           const c = Number(count || 0);
@@ -10123,6 +10462,7 @@ data:
                     <strong><a href="#" onclick="renderTicket(${l.id}); return false;">#${l.id} · ${esc(l.title)}</a></strong>
                     <div class="watcher-meta">
                       <span class="pill ${statusClass(l.status)}">${esc(l.status)}</span>
+                      <span class="pill">${esc(ticketRelationTypeLabel(l.relation_type))}</span>
                       ${l.assigned_to_name ? " · " + esc(l.assigned_to_name) : ""}
                       ${l.requester_name ? " · zgłaszający: " + esc(l.requester_name) : ""}
                     </div>

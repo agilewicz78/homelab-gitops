@@ -161,6 +161,19 @@ def main() -> None:
     missing_routes = [route for route in required_incident_routes if route not in text]
     assert not missing_routes, f"Missing incident routes: {missing_routes}"
 
+    required_triage_routes = [
+        '@app.get("/api/operator-triage")',
+        '@app.post("/api/tickets/<int:ticket_id>/priority")',
+    ]
+    missing_routes = [route for route in required_triage_routes if route not in text]
+    assert not missing_routes, f"Missing operator triage routes: {missing_routes}"
+    assert "def api_operator_triage(user):" in text
+    assert "def api_update_ticket_priority(user, ticket_id):" in text
+    assert '"duplicate_candidates": []' in text
+    assert '"incident_candidates": []' in text
+    assert 'relation_type not in ("related", "duplicate")' in text
+    assert '"priority_changed"' in text
+
     required_knowledge_routes = [
         '@app.get("/api/knowledge-articles")',
         '@app.get("/api/knowledge-articles/<int:article_id>")',
@@ -753,7 +766,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-21-admin-config-center-v1" in deployment_text
+    assert "2026-07-21-operator-triage-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 
