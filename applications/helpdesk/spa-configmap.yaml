@@ -403,6 +403,19 @@ data:
       .module-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
       .module-actions button { margin-top: 0; padding: 8px 10px; font-size: 13px; }
       .module-actions .primary-action { background: linear-gradient(135deg, #0284c7, #22c55e); color: white; border-color: transparent; }
+      .config-center-flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 10px; margin-top: 14px; }
+      .config-flow-item { border: 1px solid rgba(56,189,248,.24); border-radius: 16px; padding: 12px; background: rgba(15,23,42,.50); }
+      .config-flow-item strong { display: block; color: #fff; margin-bottom: 5px; }
+      .config-center-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin: 14px 0 4px; }
+      .config-center-card { display: grid; gap: 12px; align-content: start; border: 1px solid var(--border); border-radius: 20px; padding: 16px; background: rgba(31,41,55,.58); }
+      .config-center-card.primary { border-color: rgba(56,189,248,.48); background: linear-gradient(135deg, rgba(2,132,199,.22), rgba(31,41,55,.68)); }
+      .config-step { width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 12px; background: rgba(56,189,248,.18); color: #e0f2fe; font-weight: 900; }
+      .config-card-header { display: flex; align-items: flex-start; gap: 10px; }
+      .config-card-header h3 { margin: 0; }
+      .config-card-header p { margin: 4px 0 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
+      .config-card-hints { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; color: var(--muted); font-size: 13px; }
+      .config-card-hints li { padding-left: 14px; position: relative; }
+      .config-card-hints li::before { content: ""; position: absolute; left: 0; top: .62em; width: 6px; height: 6px; border-radius: 999px; background: #38bdf8; }
       .operator-cockpit-shell { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
       .operator-sidebar { position: sticky; top: 14px; display: grid; gap: 10px; border: 1px solid var(--border); border-radius: 22px; padding: 14px; background: rgba(15,23,42,.76); box-shadow: 0 18px 40px rgba(0,0,0,.20); }
       .operator-sidebar-title { padding: 7px 8px 10px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .08em; text-transform: uppercase; }
@@ -1101,6 +1114,31 @@ data:
             <section class="module-card${activeClass}">
               <h3>${esc(title)}</h3>
               <p>${esc(description)}</p>
+              <div class="module-actions">${visibleActions.join("")}</div>
+            </section>
+          `;
+        }
+        function configurationFlowItem(title, description) {
+          return `
+            <div class="config-flow-item">
+              <strong>${esc(title)}</strong>
+              <div class="attachment-upload-hint">${esc(description)}</div>
+            </div>
+          `;
+        }
+        function configurationStepCard(step, title, description, actions, hints = [], primary = false) {
+          const visibleActions = (actions || []).filter(Boolean);
+          if (!visibleActions.length) return "";
+          return `
+            <section class="config-center-card ${primary ? "primary" : ""}">
+              <div class="config-card-header">
+                <span class="config-step">${esc(step)}</span>
+                <div>
+                  <h3>${esc(title)}</h3>
+                  <p>${esc(description)}</p>
+                </div>
+              </div>
+              ${hints.length ? `<ul class="config-card-hints">${hints.map(hint => `<li>${esc(hint)}</li>`).join("")}</ul>` : ""}
               <div class="module-actions">${visibleActions.join("")}</div>
             </section>
           `;
@@ -3560,36 +3598,67 @@ data:
             `;
             return;
           }
-          const adminCards = [
-            moduleCard("admin-users", "Użytkownicy i role", "Kontrola kont, ról i uprawnień systemowych.", [
-              canManageUsers(me) ? moduleAction("Użytkownicy", "renderAdminUsers();return false;") : "",
-              canViewPermissions(me) ? moduleAction("Uprawnienia", "renderAdminPermissions();return false;") : ""
-            ]),
-            moduleCard("admin-workflow", "Workflow i automatyzacje", "Procesy obsługi, reguły automatyzacji i centrum automatyzacji.", [
-              canManageWorkflow(me) ? moduleAction("Workflow", "renderAdminWorkflows();return false;") : ""
-            ]),
-            moduleCard("admin-services", "Katalog usług IT", "Usługi biznesowe i techniczne powiązane z kategoriami, SLA, incydentami i zgłoszeniami.", [
-              canManageServiceCatalog(me) ? moduleAction("Usługi IT", "renderAdminServices();return false;") : "",
+          const configurationFlow = [
+            configurationFlowItem("1. Kategorie i usługi", "Określają, czego dotyczy zgłoszenie i gdzie trafi."),
+            configurationFlowItem("2. Formularze i pytania", "Zbierają właściwe informacje od użytkownika już przy zgłoszeniu."),
+            configurationFlowItem("3. Workflow", "Dobiera statusy i sposób prowadzenia sprawy."),
+            configurationFlowItem("4. Automatyzacje", "Reagują na zdarzenia, komentarze i zmiany statusów."),
+            configurationFlowItem("5. SLA i audyt", "Pilnują terminów oraz pokazują, kto zmienił konfigurację.")
+          ].join("");
+          const configCards = [
+            configurationStepCard("1", "Kategorie, usługi i formularze", "Warstwa wejścia zgłoszenia: klasyfikacja, katalog usług IT oraz pytania dla użytkownika.", [
+              canManageServiceCatalog(me) ? moduleAction("Usługi IT", "renderAdminServices();return false;", true) : "",
               canManageServiceCatalog(me) ? moduleAction("Szablony formularzy", "renderAdminFormTemplates();return false;") : ""
+            ], [
+              "Usługi wskazują kategorię, podkategorię, priorytet i kontekst SLA.",
+              "Szablony formularzy działają dla kategorii i podkategorii, gdy użytkownik nie wybierze usługi.",
+              "To jest pierwszy etap porządkowania jakości zgłoszeń."
+            ], true),
+            configurationStepCard("2", "Workflow i automatyzacje", "Proces obsługi: statusy, reguły i akcje wykonywane automatycznie.", [
+              canManageWorkflow(me) ? moduleAction("Workflow", "renderAdminWorkflows();return false;", true) : ""
+            ], [
+              "Workflow wybiera ścieżkę obsługi po kategorii i podkategorii.",
+              "Automatyzacje zmieniają statusy, reagują na komentarze i porządkują pracę operatora.",
+              "Historia zmian workflow pokazuje, co i kiedy zostało zmienione."
             ]),
-            moduleCard("admin-sla", "SLA", "Terminy reakcji, kalendarz SLA i zgłoszenia wymagające uwagi.", [
-              canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;") : ""
-            ]),
-            moduleCard("admin-audit", "Audyt", "Historia zmian i kontrola tego, kto zmienił konfigurację systemu.", [
+            configurationStepCard("3", "SLA i kontrola jakości", "Terminy, ryzyka, audyt i odpowiedzialność za zmiany konfiguracji.", [
+              canViewSlaCalendar(me) ? moduleAction("Kalendarz SLA", "renderSlaCalendar();return false;", true) : "",
               canViewAudit(me) ? moduleAction("Audyt", "renderAudit();return false;") : ""
+            ], [
+              "SLA pokazuje sprawy po terminie i blisko terminu.",
+              "Audyt pozwala sprawdzić zmiany w konfiguracji oraz działania administracyjne.",
+              "To warstwa kontroli, a nie codziennej obsługi zgłoszeń."
+            ]),
+            configurationStepCard("4", "Dostęp i bezpieczeństwo", "Konta użytkowników, role i uprawnienia do modułów Helpdesku.", [
+              canManageUsers(me) ? moduleAction("Użytkownicy", "renderAdminUsers();return false;", true) : "",
+              canViewPermissions(me) ? moduleAction("Uprawnienia", "renderAdminPermissions();return false;") : ""
+            ], [
+              "Role decydują, kto widzi portal, centrum operatora i administrację.",
+              "Uprawnienia porządkują dostęp do usług, workflow, SLA, audytu i raportów.",
+              "Zmiany dostępu warto sprawdzać razem z audytem."
             ])
           ].filter(Boolean).join("");
           const administrationContent = `
             <section class="card">
               <div class="ticket-section-title">
                 <div>
-                  <h2>Administracja</h2>
+                  <h2>Centrum konfiguracji</h2>
+                  <p class="muted">Jedno miejsce, które porządkuje zależności między kategoriami, usługami, formularzami, workflow, automatyzacjami, SLA i dostępem użytkowników.</p>
                   <p class="muted">Konfiguracja systemu, workflow, automatyzacji, SLA i audytu jest oddzielona od codziennej obsługi zgłoszeń.</p>
                 </div>
                 <button class="btn-secondary" onclick="renderHome()">← Zgłoszenia</button>
               </div>
             </section>
-            <section class="module-nav">${adminCards}</section>
+            <section class="card">
+              <div class="ticket-section-title">
+                <div>
+                  <h3>Mapa konfiguracji zgłoszenia</h3>
+                  <p class="muted">Najlepiej konfigurować Helpdesk od lewej do prawej: najpierw klasyfikacja i formularze, potem workflow, automatyzacje, SLA oraz kontrola zmian.</p>
+                </div>
+              </div>
+              <div class="config-center-flow">${configurationFlow}</div>
+            </section>
+            <section class="config-center-grid">${configCards}</section>
           `;
           appEl.innerHTML = renderWorkspaceView(me, "administration", administrationContent);
         }
