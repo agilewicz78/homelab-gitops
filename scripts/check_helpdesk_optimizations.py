@@ -565,13 +565,16 @@ def main() -> None:
     assert '"outage": "Krytyczny"' in text
     assert '"degraded": "Wysoki"' in text
     assert "DEFAULT_SERVICE_CATALOG" in text
+    assert "DEFAULT_SERVICE_FORM_SCHEMAS" in text
     assert "CREATE TABLE IF NOT EXISTS service_catalog" in text
+    assert "form_schema JSONB DEFAULT" in text
     assert "CREATE TABLE IF NOT EXISTS service_reviews" in text
     assert "idx_service_reviews_service_reviewed" in text
     assert "ALTER TABLE tickets" in text and "service_id INTEGER REFERENCES service_catalog" in text
     assert "service_form_data JSONB DEFAULT" in text
     assert "def normalize_service_form_answers" in text
     assert "def normalize_service_form_payload" in text
+    assert "def normalize_service_form_schema" in text
     assert "service_catalog.view" in text
     assert "service_catalog.manage" in text
     assert "def seed_service_catalog(cur)" in text
@@ -623,11 +626,17 @@ def main() -> None:
     assert "function serviceUserGuidance" in text
     assert "function serviceUserIncidentList" in text
     assert "function serviceUserHelpCard" in text
+    assert "function normalizeServiceFormSchema" in text
     assert "function serviceFormDefinition" in text
+    assert "function defaultServiceFormDefinition" in text
     assert "function serviceSpecificFormHtml" in text
     assert "function renderServiceSpecificForm" in text
     assert "function collectServiceFormAnswers" in text
     assert "function ticketServiceFormAnswersPanel" in text
+    assert "function adminServiceFormBuilderPanel" in text
+    assert "function adminServiceFormSchemaForEditing" in text
+    assert "function renderAdminServiceFormFields" in text
+    assert "function collectAdminServiceFormSchema" in text
     assert "function serviceRoutingPlan" in text
     assert "function serviceRoutingPlanPanel" in text
     assert "Plan obs&#322;ugi z katalogu us&#322;ug" in text
@@ -688,8 +697,12 @@ def main() -> None:
     assert "newTicketServiceForm" in text
     assert "data-service-form-key" in text
     assert "service_form: collectServiceFormAnswers(form)" in text
+    assert "payload.form_schema = collectAdminServiceFormSchema()" in text
     assert '"service_form": service_form_payload' in text
     assert '"service_form": normalize_service_form_payload' in text
+    assert '"form_schema": normalize_service_form_schema' in text
+    assert "Formularz usługowy dla tej usługi" in text
+    assert "Przywróć domyślne" in text
     assert "Informacje z formularza usługowego" in text
     assert "Formularz usługi: poczta e-mail" in text
     assert "Formularz usługi: VPN i praca zdalna" in text
@@ -703,7 +716,7 @@ def main() -> None:
     assert '"status": row[31] or "operational"' not in text
     assert "Sprawdź status usługi IT" in text
     assert "Problem może być już znany helpdeskowi" in text
-    assert "2026-07-17-service-forms-v1" in deployment_text
+    assert "2026-07-21-service-form-schema-v1" in deployment_text
 
     print("Helpdesk database optimization checks passed")
 

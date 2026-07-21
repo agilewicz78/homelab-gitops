@@ -175,6 +175,82 @@ data:
         "high": "Wysoka",
         "critical": "Krytyczna",
     }
+    DEFAULT_SERVICE_FORM_BASE_FIELDS = [
+        {"key": "since", "label": "Od kiedy występuje problem?", "type": "text", "required": True, "placeholder": "Np. od dziś rano, od 2 dni, po aktualizacji"},
+        {"key": "error_message", "label": "Komunikat błędu lub objaw", "type": "textarea", "required": False, "placeholder": "Wklej komunikat błędu albo opisz dokładny objaw"},
+    ]
+    DEFAULT_SERVICE_FORM_SCHEMAS = {
+        "email": {
+            "title": "Formularz usługi: poczta e-mail",
+            "intro": "Te odpowiedzi pomagają operatorowi szybko rozróżnić problem z klientem poczty, webmailem, kontem lub wysyłką wiadomości.",
+            "fields": [
+                {"key": "mail_client", "label": "Gdzie występuje problem?", "type": "select", "required": True, "options": ["Outlook", "Webmail", "Telefon", "Skrzynka współdzielona", "Inne"]},
+                {"key": "mail_action", "label": "Czego dotyczy problem?", "type": "select", "required": True, "options": ["Nie mogę wysłać maila", "Nie odbieram maili", "Nie mogę się zalogować", "Załączniki nie działają", "Inne"]},
+                {"key": "scope", "label": "Kogo dotyczy problem?", "type": "select", "required": True, "options": ["Tylko mnie", "Kilku osób", "Całego działu", "Nie wiem"]},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+        "vpn": {
+            "title": "Formularz usługi: VPN i praca zdalna",
+            "intro": "Przy VPN najważniejsze są: miejsce pracy, urządzenie, MFA oraz moment wystąpienia błędu.",
+            "fields": [
+                {"key": "location", "label": "Skąd próbujesz się połączyć?", "type": "text", "required": True, "placeholder": "Np. dom, hotel, sieć komórkowa"},
+                {"key": "device", "label": "Urządzenie", "type": "text", "required": True, "placeholder": "Np. laptop służbowy Lenovo, Windows 11"},
+                {"key": "mfa", "label": "Czy MFA działa?", "type": "select", "required": True, "options": ["Tak", "Nie", "Nie dostaję powiadomienia", "Nie wiem"]},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+        "wifi": {
+            "title": "Formularz usługi: Wi-Fi",
+            "intro": "Dla problemów z Wi-Fi lokalizacja i objaw są ważniejsze niż ogólny opis.",
+            "fields": [
+                {"key": "location", "label": "Gdzie występuje problem?", "type": "text", "required": True, "placeholder": "Np. sala 203, magazyn, recepcja"},
+                {"key": "device", "label": "Urządzenie", "type": "text", "required": False, "placeholder": "Np. laptop, telefon, model jeśli znasz"},
+                {"key": "wifi_symptom", "label": "Objaw", "type": "select", "required": True, "options": ["Słaby zasięg", "Brak połączenia", "Rozłącza", "Wolne działanie", "Nie wiem"]},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+        "printing": {
+            "title": "Formularz usługi: drukowanie i skanowanie",
+            "intro": "Operator szybciej pomoże, jeśli zna nazwę urządzenia, lokalizację i rodzaj problemu.",
+            "fields": [
+                {"key": "printer", "label": "Drukarka lub skaner", "type": "text", "required": True, "placeholder": "Np. HP-KSIEGOWOSC-01 albo lokalizacja urządzenia"},
+                {"key": "print_issue", "label": "Rodzaj problemu", "type": "select", "required": True, "options": ["Brak wydruku", "Zacięty papier", "Brak tonera", "Nie widzę drukarki", "Skanowanie nie działa", "Inne"]},
+                {"key": "location", "label": "Lokalizacja", "type": "text", "required": False, "placeholder": "Np. księgowość, piętro 2"},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+        "accounts": {
+            "title": "Formularz usługi: konto, hasło i MFA",
+            "intro": "Tu ważne jest, czy chodzi o blokadę, reset hasła, MFA czy zmianę danych konta.",
+            "fields": [
+                {"key": "account_issue", "label": "Czego dotyczy sprawa?", "type": "select", "required": True, "options": ["Reset hasła", "Blokada konta", "MFA", "Zmiana danych", "Inne"]},
+                {"key": "affected_account", "label": "Konto, którego dotyczy sprawa", "type": "text", "required": True, "placeholder": "Np. Twój login albo e-mail konta"},
+                {"key": "business_impact", "label": "Wpływ na pracę", "type": "select", "required": True, "options": ["Nie mogę pracować", "Mam obejście", "Dotyczy kilku osób", "Niski wpływ"]},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+        "business-access": {
+            "title": "Formularz usługi: dostęp do systemu",
+            "intro": "W zgłoszeniach dostępowych najważniejsze są: system, typ dostępu, uzasadnienie i termin.",
+            "fields": [
+                {"key": "system_name", "label": "System lub aplikacja", "type": "text", "required": True, "placeholder": "Np. ERP, CRM, SharePoint"},
+                {"key": "access_type", "label": "Typ dostępu", "type": "select", "required": True, "options": ["Nowy dostęp", "Zmiana uprawnień", "Odebranie dostępu", "Przedłużenie dostępu"]},
+                {"key": "approver", "label": "Osoba akceptująca", "type": "text", "required": False, "placeholder": "Np. przełożony lub właściciel systemu"},
+                {"key": "needed_by", "label": "Na kiedy potrzebne?", "type": "text", "required": False, "placeholder": "Np. dziś, do końca tygodnia, data projektu"},
+                {"key": "justification", "label": "Uzasadnienie biznesowe", "type": "textarea", "required": True, "placeholder": "Napisz, do czego potrzebujesz dostępu"},
+            ],
+        },
+        "default": {
+            "title": "Formularz usługi IT",
+            "intro": "Uzupełnij kilka szczegółów, żeby operator nie musiał dopytywać o podstawowe informacje.",
+            "fields": [
+                {"key": "affected_area", "label": "Czego dokładnie dotyczy problem?", "type": "text", "required": True, "placeholder": "Np. aplikacja, urządzenie, funkcja"},
+                {"key": "business_impact", "label": "Wpływ na pracę", "type": "select", "required": True, "options": ["Nie mogę pracować", "Utrudnia pracę", "Mam obejście", "Informacyjnie"]},
+                *DEFAULT_SERVICE_FORM_BASE_FIELDS,
+            ],
+        },
+    }
     DEFAULT_SERVICE_CATALOG = [
         {
             "service_key": "email",
@@ -464,13 +540,17 @@ data:
     # Zakłada podstawowy katalog usług IT powiązany z obecnymi kategoriami.
     def seed_service_catalog(cur):
         for service in DEFAULT_SERVICE_CATALOG:
+            default_form_schema = DEFAULT_SERVICE_FORM_SCHEMAS.get(
+                service["service_key"],
+                DEFAULT_SERVICE_FORM_SCHEMAS["default"],
+            )
             cur.execute("""
                 INSERT INTO service_catalog (
                     service_key, name, description, category, subcategory,
-                    owner_email, status, criticality, default_priority, user_visible,
+                    owner_email, status, criticality, default_priority, form_schema, user_visible,
                     is_active, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, TRUE, NOW(), NOW())
                 ON CONFLICT (service_key) DO UPDATE
                 SET
                     name = EXCLUDED.name,
@@ -479,12 +559,20 @@ data:
                     subcategory = EXCLUDED.subcategory,
                     owner_email = EXCLUDED.owner_email,
                     default_priority = EXCLUDED.default_priority,
+                    form_schema = CASE
+                        WHEN service_catalog.form_schema IS NULL
+                          OR service_catalog.form_schema = '{}'::jsonb
+                        THEN EXCLUDED.form_schema
+                        ELSE service_catalog.form_schema
+                    END,
                     user_visible = EXCLUDED.user_visible,
                     updated_at = NOW()
                 WHERE service_catalog.name = service_catalog.service_key
                    OR service_catalog.description IS NULL
                    OR service_catalog.description = ''
                    OR service_catalog.owner_email IS NULL
+                   OR service_catalog.form_schema IS NULL
+                   OR service_catalog.form_schema = '{}'::jsonb
             """, (
                 service["service_key"],
                 service["name"],
@@ -495,6 +583,7 @@ data:
                 service["status"],
                 service["criticality"],
                 service["default_priority"],
+                json.dumps(default_form_schema, ensure_ascii=False),
                 service["user_visible"],
             ))
 
@@ -1076,6 +1165,7 @@ data:
                         status TEXT NOT NULL DEFAULT 'operational',
                         criticality TEXT NOT NULL DEFAULT 'medium',
                         default_priority TEXT NOT NULL DEFAULT 'Normalny',
+                        form_schema JSONB DEFAULT '{}'::jsonb,
                         user_visible BOOLEAN DEFAULT TRUE,
                         is_active BOOLEAN DEFAULT TRUE,
                         created_at TIMESTAMP DEFAULT NOW(),
@@ -1089,6 +1179,7 @@ data:
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'operational'")
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS criticality TEXT DEFAULT 'medium'")
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS default_priority TEXT DEFAULT 'Normalny'")
+                cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS form_schema JSONB DEFAULT '{}'::jsonb")
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS user_visible BOOLEAN DEFAULT TRUE")
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE")
                 cur.execute("ALTER TABLE service_catalog ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT NOW()")
@@ -1846,6 +1937,68 @@ data:
             "answers": answers,
         }
 
+    def normalize_service_form_schema(raw_value):
+        if not raw_value:
+            return {}
+        if isinstance(raw_value, str):
+            try:
+                raw_value = json.loads(raw_value)
+            except Exception:
+                return {}
+        if not isinstance(raw_value, dict):
+            return {}
+        title = clean(raw_value.get("title"))[:160]
+        intro = clean(raw_value.get("intro"))[:500]
+        fields = []
+        seen_keys = set()
+        raw_fields = raw_value.get("fields")
+        for item in raw_fields or []:
+            if not isinstance(item, dict):
+                continue
+            key = re.sub(r"[^a-zA-Z0-9_]+", "_", clean(item.get("key")).lower()).strip("_")[:80]
+            label = clean(item.get("label"))[:160]
+            field_type = clean(item.get("type")).lower() or "text"
+            if field_type not in ("text", "textarea", "select"):
+                field_type = "text"
+            if not key or not label or key in seen_keys:
+                continue
+            field = {
+                "key": key,
+                "label": label,
+                "type": field_type,
+                "required": bool(item.get("required", False)),
+                "placeholder": clean(item.get("placeholder"))[:220],
+            }
+            if field_type == "select":
+                raw_options = item.get("options") or []
+                if isinstance(raw_options, str):
+                    raw_options = [part.strip() for part in re.split(r"[\n,;]+", raw_options)]
+                options = []
+                for option in raw_options:
+                    option = clean(option)[:120]
+                    if option and option not in options:
+                        options.append(option)
+                field["options"] = options[:20]
+                if not field["options"]:
+                    continue
+            fields.append(field)
+            seen_keys.add(key)
+            if len(fields) >= 20:
+                break
+        if not fields:
+            if isinstance(raw_fields, list):
+                return {
+                    "title": title or "Formularz usługi IT",
+                    "intro": intro,
+                    "fields": [],
+                }
+            return {}
+        return {
+            "title": title or "Formularz usługi IT",
+            "intro": intro,
+            "fields": fields,
+        }
+
     def normalize_service_key(value):
         normalized = re.sub(r"[^a-z0-9]+", "-", clean(value).lower()).strip("-")
         return normalized or f"service-{uuid.uuid4().hex[:8]}"
@@ -1876,6 +2029,7 @@ data:
             "last_review_note": row[20] or "",
             "last_review_health_state": row[21] or "",
             "last_review_health_score": int(row[22] or 0),
+            "form_schema": normalize_service_form_schema(row[23] if len(row) > 23 else {}),
         }
         review_signal_reasons = []
         if not payload["owner_email"]:
@@ -1934,7 +2088,8 @@ data:
               sr.reviewer_email,
               sr.note,
               sr.health_state,
-              sr.health_score
+              sr.health_score,
+              COALESCE(sc.form_schema, '{{}}'::jsonb)
             FROM service_catalog sc
             LEFT JOIN users u ON lower(u.email) = lower(sc.owner_email)
             LEFT JOIN LATERAL (
@@ -7181,6 +7336,7 @@ data:
         status = clean(payload.get("status")) or "operational"
         criticality = clean(payload.get("criticality")) or "medium"
         default_priority = clean(payload.get("default_priority")) or "Normalny"
+        form_schema = normalize_service_form_schema(payload.get("form_schema"))
         user_visible = bool(payload.get("user_visible", True))
         is_active = bool(payload.get("is_active", True))
         if not name:
@@ -7205,6 +7361,7 @@ data:
             "status": status,
             "criticality": criticality,
             "default_priority": default_priority,
+            "form_schema": form_schema,
             "user_visible": user_visible,
             "is_active": is_active,
         }, None
@@ -7249,14 +7406,15 @@ data:
                 INSERT INTO service_catalog (
                     service_key, name, description, category, subcategory,
                     owner_email, status, criticality, default_priority,
-                    user_visible, is_active, created_at, updated_at
+                    form_schema, user_visible, is_active, created_at, updated_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb, %s, %s, NOW(), NOW())
                 RETURNING id
             """, (
                 payload["service_key"], payload["name"], payload["description"],
                 payload["category"], payload["subcategory"], payload["owner_email"],
                 payload["status"], payload["criticality"], payload["default_priority"],
+                json.dumps(payload["form_schema"], ensure_ascii=False),
                 payload["user_visible"], payload["is_active"],
             ))
             service_id = cur.fetchone()[0]
@@ -7300,6 +7458,7 @@ data:
                     status = %s,
                     criticality = %s,
                     default_priority = %s,
+                    form_schema = %s::jsonb,
                     user_visible = %s,
                     is_active = %s,
                     updated_at = NOW()
@@ -7309,6 +7468,7 @@ data:
                 payload["service_key"], payload["name"], payload["description"],
                 payload["category"], payload["subcategory"], payload["owner_email"],
                 payload["status"], payload["criticality"], payload["default_priority"],
+                json.dumps(payload["form_schema"], ensure_ascii=False),
                 payload["user_visible"], payload["is_active"], service_id,
             ))
             row = cur.fetchone()
