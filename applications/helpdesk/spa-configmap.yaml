@@ -74,6 +74,10 @@ data:
       .service-form-answer { border: 1px solid rgba(148,163,184,.18); border-radius: 14px; padding: 10px 12px; background: rgba(31,41,55,.38); }
       .service-form-answer .label { display: block; color: var(--muted); font-size: 12px; font-weight: 900; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 5px; }
       .service-form-answer .value { white-space: pre-wrap; line-height: 1.45; }
+      .service-form-builder { display: grid; gap: 12px; margin-top: 12px; }
+      .service-form-builder-row { display: grid; gap: 10px; border: 1px solid rgba(56,189,248,.24); border-radius: 16px; padding: 12px; background: rgba(2,132,199,.07); }
+      .service-form-builder-row-header { display: flex; justify-content: space-between; gap: 10px; align-items: center; }
+      .service-form-builder-row .grid { align-items: end; }
       .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
       .stat { border: 1px solid var(--border); background: rgba(31,41,55,.72); border-radius: 18px; padding: 16px; }
       .stat .num { font-size: 32px; font-weight: 800; }
@@ -750,6 +754,7 @@ data:
         let knowledgeSuggestionTimer = null;
         let knowledgeSuggestionRequest = 0;
         let adminServiceCatalogCache = null;
+        let adminServiceFormFieldsState = [];
         let pendingNewTicketServiceId = null;
         let lastServiceReviewContext = null;
         function getSid() { return sessionStorage.getItem("helpdesk_sid") || ""; }
@@ -1199,7 +1204,44 @@ data:
             service?.description,
           ].join(" ").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
         }
+        function normalizeServiceFormSchema(schema, fallbackTitle = "Formularz usługi IT") {
+          if (!schema || typeof schema !== "object") return null;
+          const hasFieldConfig = Array.isArray(schema.fields);
+          if (!hasFieldConfig) return null;
+          const fields = Array.isArray(schema.fields)
+            ? schema.fields.map(field => {
+                const key = String(field?.key || "").trim();
+                const label = String(field?.label || "").trim();
+                const type = ["text", "textarea", "select"].includes(String(field?.type || "").trim()) ? String(field.type).trim() : "text";
+                const options = Array.isArray(field?.options)
+                  ? field.options.map(option => String(option || "").trim()).filter(Boolean)
+                  : [];
+                if (!key || !label) return null;
+                if (type === "select" && !options.length) return null;
+                return {
+                  key,
+                  label,
+                  type,
+                  required: Boolean(field?.required),
+                  placeholder: String(field?.placeholder || ""),
+                  options,
+                };
+              }).filter(Boolean).slice(0, 20)
+            : [];
+          return {
+            title: String(schema.title || fallbackTitle || "Formularz usługi IT"),
+            intro: String(schema.intro || ""),
+            fields,
+          };
+        }
         function serviceFormDefinition(service) {
+          const configured = normalizeServiceFormSchema(
+            service?.form_schema,
+            service?.name ? `Formularz usługi: ${service.name}` : "Formularz usługi IT",
+          );
+          return configured || defaultServiceFormDefinition(service);
+        }
+        function defaultServiceFormDefinition(service) {
           if (!service) return null;
           const text = serviceFormSearchText(service);
           const matches = (...phrases) => phrases.some(phrase => text.includes(phrase));
@@ -1309,7 +1351,7 @@ data:
         }
         function serviceSpecificFormHtml(service) {
           const definition = serviceFormDefinition(service);
-          if (!definition) return "";
+          if (!definition || !definition.fields.length) return "";
           return `
             <div class="panel-soft service-form-panel">
               <div class="ticket-section-title">
@@ -3569,7 +3611,180 @@ data:
             `<option value="${esc(value)}" ${value === effective ? "selected" : ""}>${esc(value)}</option>`
           ).join("");
         }
-    
+
+        function adminServiceDraftFromForm(fallback = {}) {
+          const form = document.getElementById("adminServiceForm");
+          if (!form) return fallback || {};
+          const formData = new FormData(form);
+          return {
+            ...fallback,
+            service_key: String(formData.get("service_key") || fallback.service_key || ""),
+            name: String(formData.get("name") || fallback.name || ""),
+            description: String(formData.get("description") || fallback.description || ""),
+            category: String(formData.get("category") || fallback.category || ""),
+            subcategory: String(formData.get("subcategory") || fallback.subcategory || "Inne"),
+          };
+        }
+
+        function adminServiceFormSchemaForEditing(service) {
+          return normalizeServiceFormSchema(
+            service?.form_schema,
+            service?.name ? `Formularz usługi: ${service.name}` : "Formularz usługi IT",
+          ) || defaultServiceFormDefinition(service);
+        }
+
+        function adminServiceFormBuilderPanel(schema) {
+          return `
+            <div class="panel-soft service-form-panel">
+              <div class="ticket-section-title">
+                <div>
+                  <strong>Formularz usługowy dla tej usługi</strong>
+                  <div class="attachment-upload-hint" style="margin-top:4px">Te pytania pojawią się użytkownikowi po wyborze tej usługi w nowym zgłoszeniu.</div>
+                </div>
+                <div class="actions">
+                  <button type="button" class="btn-secondary btn-small" onclick="addAdminServiceFormField()">Dodaj pytanie</button>
+                  <button type="button" class="btn-secondary btn-small" onclick="resetAdminServiceFormSchema()">Przywróć domyślne</button>
+                </div>
+              </div>
+              <div class="grid" style="margin-top:10px">
+                <div>
+                  <label>Tytuł formularza</label>
+                  <input id="adminServiceFormSchemaTitle" value="${esc(schema?.title || "Formularz usługi IT")}" placeholder="Np. Formularz usługi: poczta e-mail">
+                </div>
+                <div>
+                  <label>Krótki opis</label>
+                  <input id="adminServiceFormSchemaIntro" value="${esc(schema?.intro || "")}" placeholder="Dlaczego pytamy o te informacje?">
+                </div>
+              </div>
+              <div id="adminServiceFormFields" class="service-form-builder"></div>
+              <p class="muted">Dla pola typu „Lista wyboru” wpisz opcje w osobnych liniach. Pola bez etykiety albo bez opcji listy wyboru zostaną pominięte przy zapisie.</p>
+            </div>
+          `;
+        }
+
+        function adminServiceFormFieldRow(field = {}, idx = 0) {
+          const type = ["text", "textarea", "select"].includes(field.type) ? field.type : "text";
+          const options = Array.isArray(field.options) ? field.options.join("\n") : "";
+          return `
+            <div class="service-form-builder-row" data-service-form-builder-row="${idx}">
+              <div class="service-form-builder-row-header">
+                <strong>Pytanie ${idx + 1}</strong>
+                <button type="button" class="btn-secondary btn-small" onclick="removeAdminServiceFormField(${idx})">Usuń</button>
+              </div>
+              <div class="grid">
+                <div>
+                  <label>Klucz techniczny</label>
+                  <input data-service-form-builder-key value="${esc(field.key || "")}" placeholder="np. mail_client">
+                </div>
+                <div>
+                  <label>Etykieta pytania</label>
+                  <input data-service-form-builder-label value="${esc(field.label || "")}" placeholder="Np. Gdzie występuje problem?">
+                </div>
+              </div>
+              <div class="grid">
+                <div>
+                  <label>Typ pola</label>
+                  <select data-service-form-builder-type>
+                    <option value="text" ${type === "text" ? "selected" : ""}>Krótki tekst</option>
+                    <option value="textarea" ${type === "textarea" ? "selected" : ""}>Dłuższa odpowiedź</option>
+                    <option value="select" ${type === "select" ? "selected" : ""}>Lista wyboru</option>
+                  </select>
+                </div>
+                <div>
+                  <label>Placeholder / podpowiedź w polu</label>
+                  <input data-service-form-builder-placeholder value="${esc(field.placeholder || "")}" placeholder="Np. opisz komunikat błędu">
+                </div>
+              </div>
+              <label><input type="checkbox" data-service-form-builder-required ${field.required ? "checked" : ""}> Wymagane przed wysłaniem zgłoszenia</label>
+              <label>Opcje listy wyboru</label>
+              <textarea data-service-form-builder-options placeholder="Jedna opcja w linii. Używane tylko dla typu Lista wyboru.">${esc(options)}</textarea>
+            </div>
+          `;
+        }
+
+        function renderAdminServiceFormFields(fields = []) {
+          adminServiceFormFieldsState = (fields || []).map(field => ({
+            key: field.key || "",
+            label: field.label || "",
+            type: ["text", "textarea", "select"].includes(field.type) ? field.type : "text",
+            required: Boolean(field.required),
+            placeholder: field.placeholder || "",
+            options: Array.isArray(field.options) ? field.options : [],
+          }));
+          const container = document.getElementById("adminServiceFormFields");
+          if (!container) return;
+          container.innerHTML = adminServiceFormFieldsState.length
+            ? adminServiceFormFieldsState.map(adminServiceFormFieldRow).join("")
+            : `<p class="muted">Brak pytań. Użytkownik zobaczy tylko standardowe pola zgłoszenia.</p>`;
+        }
+
+        function readAdminServiceFormFieldsFromDom() {
+          return Array.from(document.querySelectorAll("[data-service-form-builder-row]"))
+            .map(row => {
+              const type = row.querySelector("[data-service-form-builder-type]")?.value || "text";
+              const options = String(row.querySelector("[data-service-form-builder-options]")?.value || "")
+                .split(/\n|,/)
+                .map(option => option.trim())
+                .filter(Boolean);
+              return {
+                key: String(row.querySelector("[data-service-form-builder-key]")?.value || "").trim(),
+                label: String(row.querySelector("[data-service-form-builder-label]")?.value || "").trim(),
+                type,
+                required: Boolean(row.querySelector("[data-service-form-builder-required]")?.checked),
+                placeholder: String(row.querySelector("[data-service-form-builder-placeholder]")?.value || "").trim(),
+                options: type === "select" ? options : [],
+              };
+            })
+            .filter(field => field.key || field.label);
+        }
+
+        function addAdminServiceFormField() {
+          const fields = readAdminServiceFormFieldsFromDom();
+          fields.push({
+            key: `field_${fields.length + 1}`,
+            label: "Nowe pytanie",
+            type: "text",
+            required: false,
+            placeholder: "",
+            options: [],
+          });
+          renderAdminServiceFormFields(fields);
+        }
+
+        function removeAdminServiceFormField(idx) {
+          const fields = readAdminServiceFormFieldsFromDom();
+          fields.splice(Number(idx), 1);
+          renderAdminServiceFormFields(fields);
+        }
+
+        function resetAdminServiceFormSchema() {
+          const service = adminServiceDraftFromForm({});
+          const schema = defaultServiceFormDefinition(service);
+          renderAdminServiceFormFields(schema?.fields || []);
+          const title = document.getElementById("adminServiceFormSchemaTitle");
+          const intro = document.getElementById("adminServiceFormSchemaIntro");
+          if (title) title.value = schema?.title || "Formularz usługi IT";
+          if (intro) intro.value = schema?.intro || "";
+        }
+
+        function collectAdminServiceFormSchema() {
+          const title = String(document.getElementById("adminServiceFormSchemaTitle")?.value || "").trim();
+          const intro = String(document.getElementById("adminServiceFormSchemaIntro")?.value || "").trim();
+          const fields = readAdminServiceFormFieldsFromDom()
+            .map((field, idx) => {
+              const key = field.key
+                ? field.key.toLowerCase().replace(/[^a-z0-9_]+/g, "_").replace(/^_+|_+$/g, "")
+                : `field_${idx + 1}`;
+              return { ...field, key };
+            })
+            .filter(field => field.key && field.label && (field.type !== "select" || field.options.length));
+          return {
+            title: title || "Formularz usługi IT",
+            intro,
+            fields,
+          };
+        }
+
         function serviceCatalogMetrics(services = []) {
           const active = services.filter(service => service.is_active !== false);
           const unstable = active.filter(service => ["degraded", "outage", "maintenance"].includes(service.status));
@@ -4165,6 +4380,7 @@ data:
                 user_visible: true,
                 is_active: true,
               };
+          const serviceFormSchema = adminServiceFormSchemaForEditing(service);
           if (!service) {
             alert("Nie znaleziono usługi.");
             await renderAdminServices();
@@ -4188,6 +4404,7 @@ data:
                 </div>
                 <label>Opis dla użytkownika i operatora</label>
                 <textarea name="description" placeholder="Co obejmuje ta usługa?">${esc(service.description || "")}</textarea>
+                ${adminServiceFormBuilderPanel(serviceFormSchema)}
                 <div class="grid">
                   <div>
                     <label>Kategoria zgłoszenia</label>
@@ -4231,6 +4448,7 @@ data:
           `;
           appEl.innerHTML = renderWorkspaceView(me, "administration", content);
           updateAdminServiceSubcategories(service.subcategory || "Inne");
+          renderAdminServiceFormFields(serviceFormSchema?.fields || []);
           document.getElementById("adminServiceCategory").addEventListener("change", () => updateAdminServiceSubcategories("Inne"));
           document.getElementById("adminServiceForm").addEventListener("submit", async (e) => {
             e.preventDefault();
@@ -4238,6 +4456,7 @@ data:
             const payload = Object.fromEntries(formData.entries());
             payload.user_visible = formData.has("user_visible");
             payload.is_active = formData.has("is_active");
+            payload.form_schema = collectAdminServiceFormSchema();
             const endpoint = editing ? `/api/admin/services/${Number(service.id)}` : "/api/admin/services";
             const method = editing ? "PUT" : "POST";
             const res = await api(endpoint, { method, body: JSON.stringify(payload) });
